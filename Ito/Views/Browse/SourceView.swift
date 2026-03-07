@@ -9,6 +9,9 @@ struct SourceView: View {
     @State private var animes: [Anime] = []
     @State private var isLoaded = false
     @State private var errorMessage: String? = nil
+    
+    @State private var searchQuery: String = ""
+    @State private var searchTask: Task<Void, Never>? = nil
 
     var body: some View {
         Group {
@@ -140,8 +143,47 @@ struct SourceView: View {
         }
         .navigationTitle(plugin.url.deletingPathExtension().lastPathComponent.capitalized)
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchQuery, prompt: "Search source...")
+        .onChange(of: searchQuery) { newValue in
+            performSearch(query: newValue)
+        }
         .task {
             await loadPlugin()
+        }
+    }
+
+    private func performSearch(query: String) {
+        searchTask?.cancel()
+        
+        guard !query.isEmpty else {
+            // Re-load default popular listing if search is cleared
+            Task { await loadPlugin() }
+            return
+        }
+
+        searchTask = Task {
+            // Debounce
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled, let pluginRunner = self.runner else { return }
+
+            do {
+                if plugin.info?.type == .anime {
+                    let result = try await pluginRunner.getSearchAnimeList(query: query, page: 1, filters: [])
+                    await MainActor.run {
+                        self.animes = result.entries
+                    }
+                } else {
+                    let result = try await pluginRunner.getSearchMangaList(query: query, page: 1, filters: [])
+                    await MainActor.run {
+                        self.mangas = result.entries
+                    }
+                }
+            } catch {
+                print("Search failed: \(error)")
+                await MainActor.run {
+                    self.errorMessage = "Search error: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
