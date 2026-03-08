@@ -152,9 +152,12 @@ struct LibraryItemView: View {
             // Normally this requires a central PluginManager to fetch the URL, but we will mock fetching the local bundled URL
             // assuming the user dragged it in, or it's accessible.
             // For now, since BrowseView loads them from drag/drop, we might need a way to get the loaded URL by pluginId.
-            // We'll construct a dummy URL assuming the plugin exists in the app's documents directory.
-            let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let pluginURL = docsDir.appendingPathComponent("\(item.pluginId).ito")
+            // We'll construct a dummy URL assuming the plugin exists in the app's Application Support/Plugins directory.
+            
+            let fileManager = FileManager.default
+            guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
+            let pluginsDir = appSupportDir.appendingPathComponent("Plugins")
+            let pluginURL = pluginsDir.appendingPathComponent("\(item.pluginId).ito")
             
             if FileManager.default.fileExists(atPath: pluginURL.path) {
                 let pluginRunner = ItoRunner()

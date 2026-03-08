@@ -122,15 +122,29 @@ struct BrowseView: View {
         }
     }
 
+    private func getPluginsDirectory() -> URL? {
+        let fileManager = FileManager.default
+        guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        let pluginsDir = appSupportDir.appendingPathComponent("Plugins")
+        
+        if !fileManager.fileExists(atPath: pluginsDir.path) {
+            do {
+                try fileManager.createDirectory(at: pluginsDir, withIntermediateDirectories: true)
+            } catch {
+                print("Failed to create plugins directory: \(error)")
+                return nil
+            }
+        }
+        return pluginsDir
+    }
+
     private func loadInstalledPlugins() {
         let fileManager = FileManager.default
-        guard
-            let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
-        else { return }
+        guard let pluginsDir = getPluginsDirectory() else { return }
 
         do {
             let files = try fileManager.contentsOfDirectory(
-                at: documentsDir, includingPropertiesForKeys: nil)
+                at: pluginsDir, includingPropertiesForKeys: nil)
             let urls = files.filter { $0.pathExtension == "ito" }.sorted(by: {
                 $0.lastPathComponent < $1.lastPathComponent
             })
@@ -229,24 +243,32 @@ struct BrowseView: View {
             // The URL provided by loadFileRepresentation is temporary and deleted after the closure.
             // We must copy it to our own sandbox safely.
             let fileManager = FileManager.default
-            let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let destinationURL = documentsDir.appendingPathComponent(tempURL.lastPathComponent)
-            print("Copying from \(tempURL) to \(destinationURL)")
-
-            do {
-                if fileManager.fileExists(atPath: destinationURL.path) {
-                    print("Removing old file at \(destinationURL.path)")
-                    try fileManager.removeItem(at: destinationURL)
+            
+            // Use our shared helper or inline logic (since we can't access instance method easily in closure without self capture, 
+            // but we are in a closure capturing self implicitly or explicitly).
+            // Actually, we are in `provider.loadFileRepresentation` closure.
+            // We can capture `self` but let's just re-implement safely or use `self.getPluginsDirectory()` if available.
+            // Since `getPluginsDirectory` is private on `BrowseView`, we can access it via `self`.
+            
+            DispatchQueue.main.async {
+                guard let pluginsDir = self.getPluginsDirectory() else {
+                    self.errorMessage = "Failed to access plugins directory."
+                    return
                 }
-                try fileManager.copyItem(at: tempURL, to: destinationURL)
-                print("Successfully copied file.")
+                let destinationURL = pluginsDir.appendingPathComponent(tempURL.lastPathComponent)
+                print("Copying from \(tempURL) to \(destinationURL)")
 
-                DispatchQueue.main.async {
+                do {
+                    if fileManager.fileExists(atPath: destinationURL.path) {
+                        print("Removing old file at \(destinationURL.path)")
+                        try fileManager.removeItem(at: destinationURL)
+                    }
+                    try fileManager.copyItem(at: tempURL, to: destinationURL)
+                    print("Successfully copied file.")
+
                     self.loadInstalledPlugins()
-                }
-            } catch {
-                print("Copy failed: \(error.localizedDescription)")
-                DispatchQueue.main.async {
+                } catch {
+                    print("Copy failed: \(error.localizedDescription)")
                     self.errorMessage = "File copy error: \(error.localizedDescription)"
                 }
             }
@@ -262,8 +284,13 @@ struct BrowseView: View {
         defer { if secured { url.stopAccessingSecurityScopedResource() } }
 
         let fileManager = FileManager.default
-        let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let destinationURL = documentsDir.appendingPathComponent(url.lastPathComponent)
+        guard let pluginsDir = getPluginsDirectory() else {
+            await MainActor.run {
+                self.errorMessage = "Failed to access plugins directory."
+            }
+            return
+        }
+        let destinationURL = pluginsDir.appendingPathComponent(url.lastPathComponent)
 
         do {
             if fileManager.fileExists(atPath: destinationURL.path) {
