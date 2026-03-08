@@ -9,11 +9,15 @@ public class ReadProgressManager: ObservableObject {
 
     // keys: manga ID, values: set of chapter IDs
     @Published public private(set) var readChapters: [String: Set<String>] = [:]
+    
+    // keys: manga ID, values: set of read chapter numbers
+    @Published public private(set) var readChapterNumbers: [String: Set<Float>] = [:]
 
     // keys: manga ID, values: last read chapter ID
     @Published public private(set) var lastReadChapter: [String: String] = [:]
 
     private let readChaptersKey = "Ito.ReadChapters"
+    private let readChapterNumbersKey = "Ito.ReadChapterNumbers"
     private let lastReadChapterKey = "Ito.LastReadChapter"
 
     private init() {
@@ -26,6 +30,12 @@ public class ReadProgressManager: ObservableObject {
             let decoded = try? JSONDecoder().decode([String: Set<String>].self, from: data)
         {
             self.readChapters = decoded
+        }
+        
+        if let data = defaults.data(forKey: readChapterNumbersKey),
+            let decoded = try? JSONDecoder().decode([String: Set<Float>].self, from: data)
+        {
+            self.readChapterNumbers = decoded
         }
 
         if let data = defaults.data(forKey: lastReadChapterKey),
@@ -40,30 +50,47 @@ public class ReadProgressManager: ObservableObject {
         if let encoded = try? JSONEncoder().encode(readChapters) {
             defaults.set(encoded, forKey: readChaptersKey)
         }
+        if let encoded = try? JSONEncoder().encode(readChapterNumbers) {
+            defaults.set(encoded, forKey: readChapterNumbersKey)
+        }
         if let encoded = try? JSONEncoder().encode(lastReadChapter) {
             defaults.set(encoded, forKey: lastReadChapterKey)
         }
     }
 
     /// Mark a chapter as read
-    public func markAsRead(mangaId: String, chapterId: String) {
+    public func markAsRead(mangaId: String, chapterId: String, chapterNum: Float? = nil) {
         if readChapters[mangaId] == nil {
             readChapters[mangaId] = []
         }
         readChapters[mangaId]?.insert(chapterId)
+        
+        if let num = chapterNum {
+            if readChapterNumbers[mangaId] == nil {
+                readChapterNumbers[mangaId] = []
+            }
+            readChapterNumbers[mangaId]?.insert(num)
+        }
+        
         lastReadChapter[mangaId] = chapterId
 
         saveProgress()
     }
     
     /// Mark an episode as watched (reusing the same structure as chapters)
-    public func markAsWatched(animeId: String, episodeId: String) {
-        markAsRead(mangaId: animeId, chapterId: episodeId)
+    public func markAsWatched(animeId: String, episodeId: String, episodeNum: Float? = nil) {
+        markAsRead(mangaId: animeId, chapterId: episodeId, chapterNum: episodeNum)
     }
 
     /// Check if a chapter/episode is read/watched
-    public func isRead(mangaId: String, chapterId: String) -> Bool {
-        return readChapters[mangaId]?.contains(chapterId) ?? false
+    public func isRead(mangaId: String, chapterId: String, chapterNum: Float? = nil) -> Bool {
+        if readChapters[mangaId]?.contains(chapterId) ?? false {
+            return true
+        }
+        if let num = chapterNum, let nums = readChapterNumbers[mangaId], nums.contains(num) {
+            return true
+        }
+        return false
     }
 
     /// Get the last read chapter ID for a manga

@@ -214,7 +214,7 @@ struct MangaView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(chapters, id: \.key) { chapter in
                                 let isRead = progressManager.isRead(
-                                    mangaId: manga.key, chapterId: chapter.key)
+                                    mangaId: manga.key, chapterId: chapter.key, chapterNum: chapter.chapter)
 
                                 Button(action: {
                                     self.readingChapter = IdentifiableChapter(chapter)
@@ -235,12 +235,24 @@ struct MangaView: View {
                                                     .lineLimit(1)
                                             }
 
-                                            if let date = chapter.dateUpdated {
-                                                Text(
-                                                    "\(Date(timeIntervalSince1970: TimeInterval(date)).formatted(.dateTime.year().month().day()))"
-                                                )
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
+                                            HStack(spacing: 6) {
+                                                if let date = chapter.dateUpdated {
+                                                    Text(
+                                                        "\(Date(timeIntervalSince1970: TimeInterval(date)).formatted(.dateTime.year().month().day()))"
+                                                    )
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                                }
+                                                
+                                                if let scanlator = chapter.scanlator {
+                                                    Text("•")
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                    Text(scanlator)
+                                                        .font(.caption)
+                                                        .foregroundColor(.secondary)
+                                                        .lineLimit(1)
+                                                }
                                             }
                                         }
 
@@ -257,13 +269,6 @@ struct MangaView: View {
                                         } else if isRead {
                                             Image(systemName: "checkmark.circle")
                                                 .foregroundColor(.secondary)
-                                        } else if let scanlator = chapter.scanlator {
-                                            Text(scanlator)
-                                                .font(.caption2)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(Color.secondary.opacity(0.2))
-                                                .cornerRadius(4)
                                         }
                                     }
                                     .padding()

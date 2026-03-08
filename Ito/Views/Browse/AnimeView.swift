@@ -191,7 +191,7 @@ struct AnimeView: View {
                     if let episodes = anime.episodes, !episodes.isEmpty {
                         LazyVStack(spacing: 0) {
                             ForEach(episodes, id: \.key) { episode in
-                                let isWatched = progressManager.isRead(mangaId: anime.key, chapterId: episode.key)
+                                let isWatched = progressManager.isRead(mangaId: anime.key, chapterId: episode.key, chapterNum: episode.episode)
                                 
                                 Button(action: {
                                     self.watchingEpisode = IdentifiableEpisode(episode)

@@ -348,7 +348,7 @@ struct ReaderView: View {
             await MainActor.run {
                 self.pages = pageResult.sorted(by: { $0.index < $1.index })
                 self.isLoaded = true
-                self.progressManager.markAsRead(mangaId: manga.key, chapterId: currentChapter.key)
+                self.progressManager.markAsRead(mangaId: manga.key, chapterId: currentChapter.key, chapterNum: currentChapter.chapter)
                 
                 // Track progress
                 if TrackerManager.shared.isAnilistAuthenticated {
@@ -415,31 +415,61 @@ struct ReaderView: View {
     // MARK: - Helpers
 
     private var nextChapter: Manga.Chapter? {
-        // Chapters are usually sorted descending (Volume 2 then 1, Chapter 10 then 9).
-        // Therefore the "next" chapter to read chronologically is usually the one BEFORE the current one in the array.
         guard let chapters = manga.chapters,
-            let currentIndex = chapters.firstIndex(where: { $0.key == currentChapter.key })
-        else {
-            return nil
-        }
-        let nextIndex = currentIndex - 1
-        if nextIndex >= 0 {
-            return chapters[nextIndex]
+              let currentIndex = chapters.firstIndex(where: { $0.key == currentChapter.key })
+        else { return nil }
+        
+        let currentNum = currentChapter.chapter ?? -10000
+        
+        // Scan backwards for the next chapter (higher number)
+        var targetIndex = currentIndex - 1
+        while targetIndex >= 0 {
+            let candidate = chapters[targetIndex]
+            let candNum = candidate.chapter ?? -10000
+            
+            // Check for a distinct, higher chapter number
+            if candNum > currentNum + 0.0001 {
+                return bestSource(for: candNum, in: chapters)
+            }
+            targetIndex -= 1
         }
         return nil
     }
 
     private var previousChapter: Manga.Chapter? {
         guard let chapters = manga.chapters,
-            let currentIndex = chapters.firstIndex(where: { $0.key == currentChapter.key })
-        else {
-            return nil
-        }
-        let prevIndex = currentIndex + 1
-        if prevIndex < chapters.count {
-            return chapters[prevIndex]
+              let currentIndex = chapters.firstIndex(where: { $0.key == currentChapter.key })
+        else { return nil }
+        
+        let currentNum = currentChapter.chapter ?? -10000
+        
+        // Scan forwards for the previous chapter (lower number)
+        var targetIndex = currentIndex + 1
+        while targetIndex < chapters.count {
+            let candidate = chapters[targetIndex]
+            let candNum = candidate.chapter ?? -10000
+            
+            if candNum < currentNum - 0.0001 {
+                return bestSource(for: candNum, in: chapters)
+            }
+            targetIndex += 1
         }
         return nil
+    }
+    
+    private func bestSource(for chapterNum: Float32, in chapters: [Manga.Chapter]) -> Manga.Chapter? {
+        // Gather all sources for this chapter number
+        let sources = chapters.filter { abs(($0.chapter ?? -10000) - chapterNum) < 0.0001 }
+        
+        let currentScanlator = currentChapter.scanlator
+        
+        // 1. Try to find match with same scanlator (handles nil==nil)
+        if let match = sources.first(where: { $0.scanlator == currentScanlator }) {
+            return match
+        }
+        
+        // 2. Default to first available
+        return sources.first
     }
 
     private var safeAreaTop: CGFloat {

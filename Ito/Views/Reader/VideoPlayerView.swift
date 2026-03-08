@@ -425,7 +425,7 @@ struct VideoPlayerView: View {
                 
                 // Mark as watched locally immediately
                 Task { @MainActor in
-                    ReadProgressManager.shared.markAsWatched(animeId: anime.key, episodeId: episode.key)
+                    ReadProgressManager.shared.markAsWatched(animeId: anime.key, episodeId: episode.key, episodeNum: episode.episode)
                 }
                 
                 // Parse episode number
