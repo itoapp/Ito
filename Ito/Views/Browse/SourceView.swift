@@ -2,7 +2,7 @@ import SwiftUI
 import ito_runner
 
 struct SourceView: View {
-    let plugin: LoadedPlugin
+    let plugin: InstalledPlugin
 
     @State private var runner: ItoRunner?
     @State private var mangas: [Manga] = []
@@ -20,7 +20,7 @@ struct SourceView: View {
             } else if let error = errorMessage {
                 Text("Error: \(error)").foregroundColor(.red)
             } else {
-                if plugin.info?.type == .anime {
+                if plugin.info.type == .anime {
                     List(animes, id: \.key) { anime in
                         ZStack {
                             if let runner = self.runner {
@@ -167,7 +167,7 @@ struct SourceView: View {
             guard !Task.isCancelled, let pluginRunner = self.runner else { return }
 
             do {
-                if plugin.info?.type == .anime {
+                if plugin.info.type == .anime {
                     let result = try await pluginRunner.getSearchAnimeList(query: query, page: 1, filters: [])
                     await MainActor.run {
                         self.animes = result.entries
@@ -203,7 +203,7 @@ struct SourceView: View {
 
             let listing = Listing(id: "views", name: "Popular", kind: 0)
 
-            if plugin.info?.type == .anime {
+            if plugin.info.type == .anime {
                 let result = try await pluginRunner.getAnimeList(listing: listing, page: 1)
                 await MainActor.run {
                     self.animes = result.entries

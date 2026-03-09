@@ -8,28 +8,48 @@ extension UTType {
     }
 }
 
-struct LoadedPlugin: Hashable {
-    let url: URL
-    let info: PluginInfo?
-
-    // Hashable conformance based on URL since URLs are unique in the documents directory
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(url)
-    }
-
-    static func == (lhs: LoadedPlugin, rhs: LoadedPlugin) -> Bool {
-        return lhs.url == rhs.url
-    }
-}
-
 struct BrowseView: View {
-    @State private var installedPlugins: [LoadedPlugin] = []
+    @StateObject private var pluginManager = PluginManager.shared
+    @StateObject private var repoManager = RepoManager.shared
     @State private var errorMessage: String? = nil
+
+    private var sortedPlugins: [InstalledPlugin] {
+        pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }
+    }
+
+    struct UpdateItem: Identifiable {
+        var id: String { pkg.id }
+        let pkg: RepoPackage
+        let repoUrl: String
+    }
+
+    private var availableUpdates: [UpdateItem] {
+        var updates: [String: UpdateItem] = [:]
+        for repo in repoManager.repositories {
+            guard let packages = repo.index?.packages else { continue }
+            for pkg in packages {
+                if let installed = pluginManager.installedPlugins[pkg.id] {
+                    // Check if repo version is strictly higher than installed version
+                    if installed.info.version.compare(pkg.version, options: .numeric) == .orderedAscending {
+                        // If we already queued an update for this plugin ID from another repo, only replace if this version is even higher
+                        if let existing = updates[pkg.id] {
+                            if existing.pkg.version.compare(pkg.version, options: .numeric) == .orderedAscending {
+                                updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
+                            }
+                        } else {
+                            updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
+                        }
+                    }
+                }
+            }
+        }
+        return Array(updates.values).sorted { $0.pkg.name < $1.pkg.name }
+    }
 
     var body: some View {
         NavigationView {
             ZStack {
-                if installedPlugins.isEmpty {
+                if pluginManager.installedPlugins.isEmpty {
                     VStack(spacing: 20) {
                         Image(systemName: "square.and.arrow.down")
                             .font(.system(size: 60))
@@ -50,46 +70,60 @@ struct BrowseView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(installedPlugins, id: \.url) { plugin in
-                            NavigationLink(destination: SourceView(plugin: plugin)) {
-                                HStack {
-                                    Image(systemName: "puzzlepiece.extension.fill")
-                                        .foregroundColor(.blue)
-                                        .imageScale(.large)
-                                    VStack(alignment: .leading) {
-                                        Text(
-                                            plugin.url.deletingPathExtension().lastPathComponent
-                                                .capitalized
-                                        )
-                                        .font(.headline)
-                                        Text("Local Plugin")
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                    }
+                        let updates = availableUpdates
+                        if !updates.isEmpty {
+                            Section(header: Text("Updates")) {
+                                ForEach(updates) { updateItem in
+                                    HStack {
+                                        if let icon = updateItem.pkg.iconUrl, let url = URL(string: "\(updateItem.repoUrl)/\(icon)") {
+                                            AsyncImage(url: url) { image in
+                                                image.resizable()
+                                            } placeholder: {
+                                                Color.gray
+                                            }
+                                            .frame(width: 40, height: 40)
+                                            .cornerRadius(8)
+                                        } else {
+                                            Image(systemName: "puzzlepiece.extension.fill")
+                                                .foregroundColor(.blue)
+                                                .imageScale(.large)
+                                                .frame(width: 40, height: 40)
+                                        }
 
-                                    Spacer()
-
-                                    if let info = plugin.info {
-                                        Text(info.type == .anime ? "ANIME" : "MANGA")
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(
-                                                info.type == .anime
-                                                    ? Color.purple.opacity(0.2)
-                                                    : Color.orange.opacity(0.2)
-                                            )
-                                            .foregroundColor(
-                                                info.type == .anime ? .purple : .orange
-                                            )
-                                            .cornerRadius(4)
+                                        VStack(alignment: .leading) {
+                                            Text(updateItem.pkg.name)
+                                                .font(.headline)
+                                            Text("v\(updateItem.pkg.version) available")
+                                                .font(.subheadline)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Button("Update") {
+                                            Task {
+                                                do {
+                                                    try await repoManager.installPackage(updateItem.pkg, repositoryUrl: updateItem.repoUrl)
+                                                } catch {
+                                                    errorMessage = "Update failed: \(error.localizedDescription)"
+                                                }
+                                            }
+                                        }
+                                        .buttonStyle(.borderedProminent)
                                     }
                                 }
-                                .padding(.vertical, 4)
                             }
                         }
-                        .onDelete(perform: deletePlugin)
+
+                        Section(header: Text("Browse")) {
+                            ForEach(sortedPlugins, id: \.id) { plugin in
+                                NavigationLink(destination: SourceView(plugin: plugin)) {
+                                    PluginRowView(plugin: plugin)
+                                }
+                            }
+                            .onDelete(perform: deletePlugin)
+                        }
+                    }
+                    .refreshable {
+                        await repoManager.refreshAll()
                     }
                 }
 
@@ -115,10 +149,10 @@ struct BrowseView: View {
                 Task { await handleOpenURL(url) }
             }
             .navigationTitle("Browse")
+            .navigationBarItems(trailing: NavigationLink(destination: RepositoriesView()) {
+                Image(systemName: "globe")
+            })
             .navigationViewStyle(.stack)
-            .onAppear {
-                loadInstalledPlugins()
-            }
         }
     }
 
@@ -138,62 +172,28 @@ struct BrowseView: View {
         return pluginsDir
     }
 
-    private func loadInstalledPlugins() {
-        let fileManager = FileManager.default
-        guard let pluginsDir = getPluginsDirectory() else { return }
-
-        do {
-            let files = try fileManager.contentsOfDirectory(
-                at: pluginsDir, includingPropertiesForKeys: nil)
-            let urls = files.filter { $0.pathExtension == "ito" }.sorted(by: {
-                $0.lastPathComponent < $1.lastPathComponent
-            })
-
-            // For now, load ItoRunner just to extract the manifest, we'll discard it
-            self.installedPlugins = []
-            Task {
-                var loaded: [LoadedPlugin] = []
-                for url in urls {
-                    let runner = ItoRunner()
-                    do {
-                        let manifest = try await runner.loadBundle(from: url)
-                        loaded.append(LoadedPlugin(url: url, info: manifest?.info))
-                    } catch {
-                        print("Failed to inspect plugin \(url.lastPathComponent): \(error)")
-                        loaded.append(LoadedPlugin(url: url, info: nil))
-                    }
-                }
-
-                await MainActor.run {
-                    self.installedPlugins = loaded
-                }
-            }
-        } catch {
-            print("Error loading installed plugins: \(error)")
-        }
-    }
-
     private func deletePlugin(at offsets: IndexSet) {
         let fileManager = FileManager.default
+        
         offsets.forEach { index in
-            let plugin = installedPlugins[index]
+            let plugin = sortedPlugins[index]
             do {
                 try fileManager.removeItem(at: plugin.url)
             } catch {
                 print("Failed to delete plugin: \(error)")
             }
         }
-        loadInstalledPlugins()
+        
+        Task {
+            await pluginManager.reloadInstalledPlugins()
+        }
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         print("Received drop with \(providers.count) providers")
         guard let provider = providers.first else {
-            print("No providers found")
             return false
         }
-
-        print("Registered types on provider: \(provider.registeredTypeIdentifiers)")
 
         let itoType = UTType.ito.identifier
         let archiveType = UTType.archive.identifier
@@ -212,20 +212,11 @@ struct BrowseView: View {
         }
 
         guard let typeToLoad = loadedType else {
-            print(
-                "Provider does not conform to any accepted file type. Types: \(provider.registeredTypeIdentifiers)"
-            )
             return false
         }
 
-        print("Provider conforms to \(typeToLoad), loading file representation...")
-
         provider.loadFileRepresentation(forTypeIdentifier: typeToLoad) { url, error in
-            print(
-                "Loaded file representation. URL: \(String(describing: url)), Error: \(String(describing: error))"
-            )
             guard let tempURL = url else {
-                print("Failed to get tempURL")
                 DispatchQueue.main.async {
                     self.errorMessage = "Failed to load dropped file: \(String(describing: error))"
                 }
@@ -233,22 +224,13 @@ struct BrowseView: View {
             }
 
             guard tempURL.pathExtension.lowercased() == "ito" else {
-                print("Dropped file is not an .ito file. It is: \(tempURL.pathExtension)")
                 DispatchQueue.main.async {
                     self.errorMessage = "Please drop a valid .ito plugin file."
                 }
                 return
             }
 
-            // The URL provided by loadFileRepresentation is temporary and deleted after the closure.
-            // We must copy it to our own sandbox safely.
             let fileManager = FileManager.default
-            
-            // Use our shared helper or inline logic (since we can't access instance method easily in closure without self capture, 
-            // but we are in a closure capturing self implicitly or explicitly).
-            // Actually, we are in `provider.loadFileRepresentation` closure.
-            // We can capture `self` but let's just re-implement safely or use `self.getPluginsDirectory()` if available.
-            // Since `getPluginsDirectory` is private on `BrowseView`, we can access it via `self`.
             
             DispatchQueue.main.async {
                 guard let pluginsDir = self.getPluginsDirectory() else {
@@ -256,38 +238,31 @@ struct BrowseView: View {
                     return
                 }
                 let destinationURL = pluginsDir.appendingPathComponent(tempURL.lastPathComponent)
-                print("Copying from \(tempURL) to \(destinationURL)")
 
                 do {
                     if fileManager.fileExists(atPath: destinationURL.path) {
-                        print("Removing old file at \(destinationURL.path)")
                         try fileManager.removeItem(at: destinationURL)
                     }
                     try fileManager.copyItem(at: tempURL, to: destinationURL)
-                    print("Successfully copied file.")
-
-                    self.loadInstalledPlugins()
+                    
+                    Task {
+                        await pluginManager.reloadInstalledPlugins()
+                    }
                 } catch {
-                    print("Copy failed: \(error.localizedDescription)")
                     self.errorMessage = "File copy error: \(error.localizedDescription)"
                 }
             }
         }
-        print("Returning true from handleDrop")
         return true
     }
 
     private func handleOpenURL(_ url: URL) async {
-        print("Executing handleOpenURL for: \(url)")
-        // Gain access to the security-scoped URL picked by the system
         let secured = url.startAccessingSecurityScopedResource()
         defer { if secured { url.stopAccessingSecurityScopedResource() } }
 
         let fileManager = FileManager.default
         guard let pluginsDir = getPluginsDirectory() else {
-            await MainActor.run {
-                self.errorMessage = "Failed to access plugins directory."
-            }
+            await MainActor.run { self.errorMessage = "Failed to access plugins directory." }
             return
         }
         let destinationURL = pluginsDir.appendingPathComponent(url.lastPathComponent)
@@ -297,17 +272,58 @@ struct BrowseView: View {
                 try fileManager.removeItem(at: destinationURL)
             }
             try fileManager.copyItem(at: url, to: destinationURL)
-            print("Successfully natively copied OpenURL to sandbox.")
 
-            await MainActor.run {
-                self.loadInstalledPlugins()
-            }
+            await pluginManager.reloadInstalledPlugins()
         } catch {
-            print("Failed to copy OpenURL: \(error)")
-            await MainActor.run {
-                self.errorMessage = "URL Open error: \(error.localizedDescription)"
-            }
+            await MainActor.run { self.errorMessage = "URL Open error: \(error.localizedDescription)" }
         }
+    }
+}
+
+struct PluginRowView: View {
+    let plugin: InstalledPlugin
+
+    var body: some View {
+        HStack {
+            if let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40)
+                    .cornerRadius(8)
+            } else {
+                Image(systemName: "puzzlepiece.extension.fill")
+                    .foregroundColor(.blue)
+                    .imageScale(.large)
+                    .frame(width: 40, height: 40)
+            }
+            
+            VStack(alignment: .leading) {
+                Text(plugin.info.name)
+                    .font(.headline)
+                Text("v\(plugin.info.version) • \(plugin.info.author ?? "Unknown")")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Text(plugin.info.type == .anime ? "ANIME" : "MANGA")
+                .font(.caption2)
+                .fontWeight(.bold)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    plugin.info.type == .anime
+                        ? Color.purple.opacity(0.2)
+                        : Color.orange.opacity(0.2)
+                )
+                .foregroundColor(
+                    plugin.info.type == .anime ? .purple : .orange
+                )
+                .cornerRadius(4)
+        }
+        .padding(.vertical, 4)
     }
 }
 
