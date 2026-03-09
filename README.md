@@ -14,6 +14,13 @@ Ito is a free, ad-free iOS client for reading manga and watching anime. It is fr
 * **Progress Tracking:** Sync your library using **AniList** (more coming soon).
 * **WASM Plugins:** Dynamic, isolated content sourcing.
 
+## Showcase
+<p align="center">
+  <img src="assets/screenshots/details.png" alt="Details View" width="40%" />
+  &nbsp;&nbsp;
+  <img src="assets/screenshots/reader.png" alt="Reader View" width="40%" />
+</p>
+
 ## Development
 **Requirements:** Xcode 15+, iOS 15.4+, Swift Package Manager.
 
@@ -23,4 +30,4 @@ Ito is a free, ad-free iOS client for reading manga and watching anime. It is fr
 4. Select your target and build (Cmd + R).
 
 ## Contributing
-Contributions to the app are welcome via pull requests. 
+Contributions to the app are welcome via pull requests.
