@@ -1,11 +1,13 @@
 import SwiftUI
+import Nuke
+import NukeUI
 import ito_runner
 
 struct LibraryView: View {
     @StateObject private var libraryManager = LibraryManager.shared
     
     let columns = [
-        GridItem(.adaptive(minimum: 100, maximum: 120), spacing: 16)
+        GridItem(.adaptive(minimum: 120, maximum: 160), spacing: 16)
     ]
     
     var body: some View {
@@ -45,40 +47,13 @@ struct LibraryView: View {
 
 struct LibraryItemView: View {
     let item: LibraryItem
-    
-    @State private var runner: ItoRunner? = nil
-    @State private var isLoaded = false
-    @State private var errorMessage: String? = nil
-    
-    // Decoded instances
-    @State private var decodedAnime: Anime? = nil
-    @State private var decodedManga: Manga? = nil
+    @ObservedObject private var pluginManager = PluginManager.shared
     
     var body: some View {
-        Group {
-            if let runner = self.runner, isLoaded {
-                if item.isAnime, let anime = decodedAnime {
-                    NavigationLink(destination: AnimeView(runner: runner, anime: anime, pluginId: item.pluginId)) {
-                        cardContent
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                } else if !item.isAnime, let manga = decodedManga {
-                    NavigationLink(destination: MangaView(runner: runner, manga: manga, pluginId: item.pluginId)) {
-                        cardContent
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                } else {
-                    cardContent
-                }
-            } else {
-                cardContent
-                    .onTapGesture {
-                        if !isLoaded {
-                            print("LibraryItemView tapped but runner is not ready yet.")
-                        }
-                    }
-            }
+        NavigationLink(destination: DeferredPluginView(item: item)) {
+            cardContent
         }
+        .buttonStyle(PlainButtonStyle())
         .contextMenu {
             Button(role: .destructive, action: {
                 LibraryManager.shared.removeItem(withId: item.id)
@@ -86,35 +61,37 @@ struct LibraryItemView: View {
                 Label("Remove from Library", systemImage: "trash")
             }
         }
-        .onAppear {
-            if runner == nil {
-                Task {
-                    await initRunner()
-                }
-            }
-        }
+    }
+    
+    private var isPluginInstalled: Bool {
+        pluginManager.installedPlugins[item.pluginId] != nil
     }
     
     private var cardContent: some View {
         VStack(alignment: .leading) {
             ZStack(alignment: .topTrailing) {
                 if let coverURL = item.coverUrl, let url = URL(string: coverURL) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            Color.gray.opacity(0.3)
-                        case .success(let image):
+                    LazyImage(url: url) { state in
+                        if let image = state.image {
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
-                        case .failure:
+                        } else if state.error != nil {
                             Color.red.opacity(0.3)
-                        @unknown default:
-                            EmptyView()
+                        } else {
+                            ZStack {
+                                Color.gray.opacity(0.3)
+                                ProgressView()
+                            }
                         }
                     }
+                    .processors([.resize(width: 300)])
                 } else {
-                    Color.gray.opacity(0.3)
+                    ZStack {
+                        Color.gray.opacity(0.3)
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
                 // Type badge only
@@ -128,10 +105,13 @@ struct LibraryItemView: View {
                     .cornerRadius(4)
                     .padding(4)
                 
-                if !isLoaded && runner != nil {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color.black.opacity(0.4))
+                if !isPluginInstalled {
+                    ZStack {
+                        Color.black.opacity(0.6)
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                            .font(.largeTitle)
+                    }
                 }
             }
             .frame(height: 150)
@@ -143,11 +123,59 @@ struct LibraryItemView: View {
                 .fontWeight(.medium)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
-                .foregroundColor(.primary)
+                .foregroundColor(isPluginInstalled ? .primary : .secondary)
+        }
+    }
+}
+
+struct DeferredPluginView: View {
+    let item: LibraryItem
+    @State private var runner: ItoRunner? = nil
+    @State private var errorMessage: String? = nil
+    
+    // Decoded instances
+    @State private var decodedAnime: Anime? = nil
+    @State private var decodedManga: Manga? = nil
+
+    var body: some View {
+        Group {
+            if let error = errorMessage {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 40))
+                        .foregroundColor(.red)
+                    Text("Error loading plugin")
+                        .font(.headline)
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                }
+            } else if let runner = runner {
+                if item.isAnime, let anime = decodedAnime {
+                    AnimeView(runner: runner, anime: anime, pluginId: item.pluginId)
+                } else if !item.isAnime, let manga = decodedManga {
+                    MangaView(runner: runner, manga: manga, pluginId: item.pluginId)
+                } else {
+                    Text("Failed to decode saved item.")
+                }
+            } else {
+                ProgressView("Starting plugin...")
+            }
+        }
+        .onAppear {
+            print("▶️ [DEBUG-UI] DeferredPluginView.onAppear for item: \(item.title)")
+            Task {
+                await loadRunnerAndItem()
+            }
+        }
+        .onDisappear {
+            print("⏹️ [DEBUG-UI] DeferredPluginView.onDisappear for item: \(item.title)")
         }
     }
     
-    private func initRunner() async {
+    private func loadRunnerAndItem() async {
         do {
             if item.isAnime {
                 self.decodedAnime = try JSONDecoder().decode(Anime.self, from: item.rawPayload)
@@ -155,39 +183,14 @@ struct LibraryItemView: View {
                 self.decodedManga = try JSONDecoder().decode(Manga.self, from: item.rawPayload)
             }
             
-            // To properly launch the viewer, we need the plugin loaded.
-            // Normally this requires a central PluginManager to fetch the URL, but we will mock fetching the local bundled URL
-            // assuming the user dragged it in, or it's accessible.
-            // For now, since BrowseView loads them from drag/drop, we might need a way to get the loaded URL by pluginId.
-            // We'll construct a dummy URL assuming the plugin exists in the app's Application Support/Plugins directory.
-            
-            let fileManager = FileManager.default
-            guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-            let pluginsDir = appSupportDir.appendingPathComponent("Plugins")
-            let pluginURL = pluginsDir.appendingPathComponent("\(item.pluginId).ito")
-            
-            if FileManager.default.fileExists(atPath: pluginURL.path) {
-                let pluginRunner = ItoRunner()
-                await pluginRunner.setNetModule(AppNetModule())
-                await pluginRunner.setStdModule(DefaultStdModule())
-                await pluginRunner.setDefaultsModule(DefaultDefaultsModule(pluginId: item.pluginId))
-                await pluginRunner.setHtmlModule(DefaultHtmlModule())
-                await pluginRunner.setJsModule(DefaultJsModule())
-                
-                _ = try await pluginRunner.loadBundle(from: pluginURL)
-                
-                await MainActor.run {
-                    self.runner = pluginRunner
-                    self.isLoaded = true
-                }
-            } else {
-                print("Missing plugin file for \(item.pluginId)")
-                await MainActor.run {
-                    self.errorMessage = "Plugin not installed"
-                }
+            let pluginRunner = try await PluginManager.shared.getRunner(for: item.pluginId)
+            await MainActor.run {
+                self.runner = pluginRunner
             }
         } catch {
-            print("Failed to init library item: \(error)")
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 }

@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		3A7509552F57FFE40057955D /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3A7509542F57FFE40057955D /* ito-runner */; };
+		3AC825702F5FD9300054AD29 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC8256F2F5FD9300054AD29 /* Nuke */; };
+		3AC825722F5FD9300054AD29 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC825712F5FD9300054AD29 /* NukeUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,7 +71,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3AC825722F5FD9300054AD29 /* NukeUI in Frameworks */,
 				3A7509552F57FFE40057955D /* ito-runner in Frameworks */,
+				3AC825702F5FD9300054AD29 /* Nuke in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -131,6 +135,8 @@
 			name = Ito;
 			packageProductDependencies = (
 				3A7509542F57FFE40057955D /* ito-runner */,
+				3AC8256F2F5FD9300054AD29 /* Nuke */,
+				3AC825712F5FD9300054AD29 /* NukeUI */,
 			);
 			productName = Ito;
 			productReference = 3A43D87F2F57E4BD008E061E /* Ito.app */;
@@ -216,6 +222,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				3A7509532F57FFE40057955D /* XCLocalSwiftPackageReference "../../../ito-runner" */,
+				3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3A43D8802F57E4BD008E061E /* Products */;
@@ -614,10 +621,31 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kean/Nuke";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		3A7509542F57FFE40057955D /* ito-runner */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = "ito-runner";
+		};
+		3AC8256F2F5FD9300054AD29 /* Nuke */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = Nuke;
+		};
+		3AC825712F5FD9300054AD29 /* NukeUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = NukeUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

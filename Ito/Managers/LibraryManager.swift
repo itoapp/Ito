@@ -15,6 +15,15 @@ public struct LibraryItem: Codable, Identifiable, Hashable {
     
     // AniList Tracker Mapping
     public var anilistId: Int?
+    
+    public static func == (lhs: LibraryItem, rhs: LibraryItem) -> Bool {
+        return lhs.id == rhs.id && lhs.anilistId == rhs.anilistId
+    }
+    
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(anilistId)
+    }
 }
 
 public class LibraryManager: ObservableObject {

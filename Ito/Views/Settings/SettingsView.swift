@@ -14,7 +14,7 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text("Data")) {
-                    NavigationLink(destination: Text("Storage Settings View")) {
+                    NavigationLink(destination: StorageSettingsView()) {
                         Label("Storage", systemImage: "internaldrive")
                     }
                     NavigationLink(destination: Text("Network Settings View")) {

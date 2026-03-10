@@ -1,4 +1,6 @@
 import SwiftUI
+import Nuke
+import NukeUI
 import ito_runner
 
 struct IdentifiableChapter: Identifiable {
@@ -32,27 +34,25 @@ struct MangaView: View {
                 // Header: Cover + Info
                 HStack(alignment: .top, spacing: 16) {
                     if let coverURL = manga.cover, let url = URL(string: coverURL) {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .empty:
-                                Color.gray.opacity(0.3)
-                                    .frame(width: 100, height: 150)
-                                    .cornerRadius(8)
-                            case .success(let image):
+                        LazyImage(url: url) { state in
+                            if let image = state.image {
                                 image
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
                                     .frame(width: 100, height: 150)
                                     .cornerRadius(8)
                                     .clipped()
-                            case .failure:
+                            } else if state.error != nil {
                                 Color.red.opacity(0.3)
                                     .frame(width: 100, height: 150)
                                     .cornerRadius(8)
-                            @unknown default:
-                                EmptyView()
+                            } else {
+                                Color.gray.opacity(0.3)
+                                    .frame(width: 100, height: 150)
+                                    .cornerRadius(8)
                             }
                         }
+                        .processors([.resize(width: 200)])
                     }
 
                     VStack(alignment: .leading, spacing: 8) {

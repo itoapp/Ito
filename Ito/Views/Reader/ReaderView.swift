@@ -1,4 +1,6 @@
 import SwiftUI
+import NukeUI
+import Nuke
 import ito_runner
 
 struct ReaderView: View {
@@ -525,49 +527,41 @@ struct ReaderSettingsView: View {
     }
 }
 
-// Custom Async Image Loader to handle Headers / User-Agent if needed
+// Custom Async Image Loader using NukeUI to handle Headers / User-Agent
 struct MangaImage: View {
     let urlStr: String
     let headers: [String: String]?
 
-    @State private var uiImage: UIImage? = nil
-    @State private var isLoading = false
-    @State private var loadError: Error? = nil
-
     var body: some View {
-        Group {
-            if let image = uiImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-            } else if let error = loadError {
-                VStack {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(.red)
-                        .font(.largeTitle)
-                    Text(error.localizedDescription)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                }
-                .frame(maxWidth: .infinity, minHeight: 400, alignment: .center)
-                .padding(40)
-            } else {
-                ProgressView()
+        if let url = URL(string: urlStr) {
+            LazyImage(request: ImageRequest(urlRequest: createRequest(url: url))) { state in
+                if let image = state.image {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                } else if let error = state.error {
+                    VStack {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundColor(.red)
+                            .font(.largeTitle)
+                        Text(error.localizedDescription)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                            .padding()
+                    }
                     .frame(maxWidth: .infinity, minHeight: 400, alignment: .center)
                     .padding(40)
-                    .onAppear {
-                        loadImage()
-                    }
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 400, alignment: .center)
+                        .padding(40)
+                }
             }
         }
     }
 
-    private func loadImage() {
-        guard let url = URL(string: urlStr), !isLoading, uiImage == nil else { return }
-
-        isLoading = true
+    private func createRequest(url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         
         if let customHeaders = headers, !customHeaders.isEmpty {
@@ -581,31 +575,7 @@ struct MangaImage: View {
                 forHTTPHeaderField: "User-Agent")
             request.setValue(urlStr, forHTTPHeaderField: "Referer")
         }
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                self.isLoading = false
-                if let error = error {
-                    print("MangaImage failed to load \(urlStr): \(error)")
-                    self.loadError = error
-                    return
-                }
-
-                if let httpResponse = response as? HTTPURLResponse,
-                    !(200...299).contains(httpResponse.statusCode)
-                {
-                    let err = URLError(URLError.Code(rawValue: httpResponse.statusCode))
-                    print("MangaImage HTTP error \(httpResponse.statusCode) for \(urlStr)")
-                    self.loadError = err
-                    return
-                }
-
-                if let data = data, let img = UIImage(data: data) {
-                    self.uiImage = img
-                } else {
-                    self.loadError = URLError(.cannotDecodeRawData)
-                }
-            }
-        }.resume()
+        
+        return request
     }
 }

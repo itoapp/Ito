@@ -1,4 +1,6 @@
 import SwiftUI
+import Nuke
+import NukeUI
 import ito_runner
 
 struct SourceView: View {
@@ -33,27 +35,25 @@ struct SourceView: View {
 
                             HStack(alignment: .top, spacing: 12) {
                                 if let coverURL = anime.cover, let url = URL(string: coverURL) {
-                                    AsyncImage(url: url) { phase in
-                                        switch phase {
-                                        case .empty:
-                                            Color.gray.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                        case .success(let image):
+                                    LazyImage(url: url) { state in
+                                        if let image = state.image {
                                             image
                                                 .resizable()
                                                 .aspectRatio(contentMode: .fill)
                                                 .frame(width: 60, height: 90)
                                                 .cornerRadius(6)
                                                 .clipped()
-                                        case .failure:
+                                        } else if state.error != nil {
                                             Color.red.opacity(0.3)
                                                 .frame(width: 60, height: 90)
                                                 .cornerRadius(6)
-                                        @unknown default:
-                                            EmptyView()
+                                        } else {
+                                            Color.gray.opacity(0.3)
+                                                .frame(width: 60, height: 90)
+                                                .cornerRadius(6)
                                         }
                                     }
+                                    .processors([.resize(width: 200)])
                                 } else {
                                     Color.gray.opacity(0.3)
                                         .frame(width: 60, height: 90)
@@ -92,27 +92,25 @@ struct SourceView: View {
 
                             HStack(alignment: .top, spacing: 12) {
                                 if let coverURL = manga.cover, let url = URL(string: coverURL) {
-                                    AsyncImage(url: url) { phase in
-                                        switch phase {
-                                        case .empty:
-                                            Color.gray.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                        case .success(let image):
+                                    LazyImage(url: url) { state in
+                                        if let image = state.image {
                                             image
                                                 .resizable()
                                                 .aspectRatio(contentMode: .fill)
                                                 .frame(width: 60, height: 90)
                                                 .cornerRadius(6)
                                                 .clipped()
-                                        case .failure:
+                                        } else if state.error != nil {
                                             Color.red.opacity(0.3)
                                                 .frame(width: 60, height: 90)
                                                 .cornerRadius(6)
-                                        @unknown default:
-                                            EmptyView()
+                                        } else {
+                                            Color.gray.opacity(0.3)
+                                                .frame(width: 60, height: 90)
+                                                .cornerRadius(6)
                                         }
                                     }
+                                    .processors([.resize(width: 200)])
                                 } else {
                                     Color.gray.opacity(0.3)
                                         .frame(width: 60, height: 90)

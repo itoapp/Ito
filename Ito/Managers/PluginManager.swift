@@ -18,10 +18,37 @@ public class PluginManager: ObservableObject {
     // Value: The parsed manifest info for that plugin
     @Published public private(set) var installedPlugins: [String: InstalledPlugin] = [:]
     
+    // Cache for loaded WASM runners
+    private var runnerCache: [String: ItoRunner] = [:]
+    
     private init() {
         Task {
             await reloadInstalledPlugins()
         }
+    }
+    
+    /// Gets a cached ItoRunner for a plugin ID, or initializes a new one if not cached.
+    @MainActor
+    public func getRunner(for pluginId: String) async throws -> ItoRunner {
+        if let cached = runnerCache[pluginId] {
+            return cached
+        }
+        
+        guard let plugin = installedPlugins[pluginId] else {
+            throw URLError(.fileDoesNotExist) // Plugin not installed
+        }
+        
+        let runner = ItoRunner()
+        await runner.setNetModule(AppNetModule())
+        await runner.setStdModule(DefaultStdModule())
+        await runner.setDefaultsModule(DefaultDefaultsModule(pluginId: pluginId))
+        await runner.setHtmlModule(DefaultHtmlModule())
+        await runner.setJsModule(DefaultJsModule())
+        
+        _ = try await runner.loadBundle(from: plugin.url)
+        
+        runnerCache[pluginId] = runner
+        return runner
     }
     
     /// Scans the Application Support/Plugins directory and parses all manifests.

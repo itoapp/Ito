@@ -1,4 +1,5 @@
 import SwiftUI
+import NukeUI
 
 struct TrackerSearchSheet: View {
     let title: String
@@ -47,9 +48,9 @@ struct TrackerSearchSheet: View {
                 
                 List(searchResults) { media in
                     HStack {
-                        if let cover = media.coverImage {
-                            AsyncImage(url: URL(string: cover)) { phase in
-                                if let image = phase.image {
+                        if let cover = media.coverImage, let url = URL(string: cover) {
+                            LazyImage(url: url) { state in
+                                if let image = state.image {
                                     image.resizable().aspectRatio(contentMode: .fill)
                                 } else {
                                     Color.gray.opacity(0.3)
@@ -184,11 +185,13 @@ struct TrackerDetailsSheet: View {
                 } else {
                     Section(header: Text("Series Info")) {
                         HStack {
-                            if let cover = media.coverImage {
-                                AsyncImage(url: URL(string: cover)) { image in
-                                    image.resizable().aspectRatio(contentMode: .fill)
-                                } placeholder: {
-                                    Color.gray
+                            if let cover = media.coverImage, let url = URL(string: cover) {
+                                LazyImage(url: url) { state in
+                                    if let image = state.image {
+                                        image.resizable().aspectRatio(contentMode: .fill)
+                                    } else {
+                                        Color.gray
+                                    }
                                 }
                                 .frame(width: 60, height: 90)
                                 .cornerRadius(6)

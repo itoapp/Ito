@@ -1,5 +1,6 @@
 import SwiftUI
 import CryptoKit
+import NukeUI
 import ito_runner
 
 struct RepositoriesView: View {
@@ -115,10 +116,12 @@ struct RepoDetailView: View {
                     ForEach(filteredPackages, id: \.id) { pkg in
                         HStack {
                             if let icon = pkg.iconUrl, let url = URL(string: "\(repository.url)/\(icon)") {
-                                AsyncImage(url: url) { image in
-                                    image.resizable()
-                                } placeholder: {
-                                    Color.gray
+                                LazyImage(url: url) { state in
+                                    if let image = state.image {
+                                        image.resizable()
+                                    } else {
+                                        Color.gray
+                                    }
                                 }
                                 .frame(width: 40, height: 40)
                                 .cornerRadius(8)

@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import NukeUI
 import ito_runner
 
 extension UTType {
@@ -76,10 +77,12 @@ struct BrowseView: View {
                                 ForEach(updates) { updateItem in
                                     HStack {
                                         if let icon = updateItem.pkg.iconUrl, let url = URL(string: "\(updateItem.repoUrl)/\(icon)") {
-                                            AsyncImage(url: url) { image in
-                                                image.resizable()
-                                            } placeholder: {
-                                                Color.gray
+                                            LazyImage(url: url) { state in
+                                                if let image = state.image {
+                                                    image.resizable()
+                                                } else {
+                                                    Color.gray
+                                                }
                                             }
                                             .frame(width: 40, height: 40)
                                             .cornerRadius(8)
