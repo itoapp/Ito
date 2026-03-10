@@ -25,6 +25,7 @@ struct AnimeView: View {
     @State private var showTrackerSearch = false
     @State private var showTrackerEdit = false
     @State private var trackingMedia: AnilistMedia?
+    @State private var isDescriptionExpanded = false
 
     @ObservedObject var libraryManager = LibraryManager.shared
     @EnvironmentObject var progressManager: ReadProgressManager
@@ -170,9 +171,23 @@ struct AnimeView: View {
 
                 // Description
                 if let description = anime.description, !description.isEmpty {
-                    Text(description)
-                        .font(.body)
-                        .padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(description)
+                            .font(.body)
+                            .lineLimit(isDescriptionExpanded ? nil : 3)
+
+                        Text(isDescriptionExpanded ? "Tap to show less" : "Tap to show more")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.blue)
+                    }
+                    .padding(.horizontal)
+                    .contentShape(Rectangle()) // Makes the whole VStack tappable
+                    .onTapGesture {
+                        withAnimation {
+                            isDescriptionExpanded.toggle()
+                        }
+                    }
                 }
 
                 Divider()

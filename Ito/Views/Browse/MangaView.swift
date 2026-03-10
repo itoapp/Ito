@@ -24,6 +24,7 @@ struct MangaView: View {
     @State private var showTrackerSearch = false
     @State private var showTrackerEdit = false
     @State private var trackingMedia: AnilistMedia?
+    @State private var isDescriptionExpanded = false
 
     @EnvironmentObject var progressManager: ReadProgressManager
     @ObservedObject var libraryManager = LibraryManager.shared
@@ -174,9 +175,23 @@ struct MangaView: View {
 
                 // Description
                 if let description = manga.description, !description.isEmpty {
-                    Text(description)
-                        .font(.body)
-                        .padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(description)
+                            .font(.body)
+                            .lineLimit(isDescriptionExpanded ? nil : 3)
+
+                        Text(isDescriptionExpanded ? "Tap to show less" : "Tap to show more")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(.blue)
+                    }
+                    .padding(.horizontal)
+                    .contentShape(Rectangle()) // Makes the whole VStack tappable
+                    .onTapGesture {
+                        withAnimation {
+                            isDescriptionExpanded.toggle()
+                        }
+                    }
                 }
 
                 Divider()
