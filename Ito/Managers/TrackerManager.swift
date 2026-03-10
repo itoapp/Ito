@@ -8,8 +8,12 @@ public class TrackerManager: ObservableObject {
     @Published public private(set) var anilistToken: String?
     @Published public private(set) var anilistUsername: String?
 
+    // Independent mapping: Local Media Key (String) -> AniList ID (Int)
+    @Published public private(set) var trackerMappings: [String: Int] = [:]
+
     private let tokenKey = "anilist_access_token"
     private let usernameKey = "anilist_username"
+    private let mappingsKey = "Ito.TrackerMappings"
 
     // Replace this with your actual AniList Client ID
     private let clientId = "36931"
@@ -19,6 +23,37 @@ public class TrackerManager: ObservableObject {
     private init() {
         self.anilistToken = UserDefaults.standard.string(forKey: tokenKey)
         self.anilistUsername = UserDefaults.standard.string(forKey: usernameKey)
+
+        if let data = UserDefaults.standard.data(forKey: mappingsKey),
+           let decoded = try? JSONDecoder().decode([String: Int].self, from: data) {
+            self.trackerMappings = decoded
+        }
+    }
+
+    public func link(localId: String, anilistId: Int) {
+        trackerMappings[localId] = anilistId
+        if let encoded = try? JSONEncoder().encode(trackerMappings) {
+            UserDefaults.standard.set(encoded, forKey: mappingsKey)
+        }
+        // Also keep LibraryItem up-to-date for backward compatibility if it is saved
+        LibraryManager.shared.setAnilistId(for: localId, anilistId: anilistId)
+    }
+
+    public func unlink(localId: String) {
+        trackerMappings.removeValue(forKey: localId)
+        if let encoded = try? JSONEncoder().encode(trackerMappings) {
+            UserDefaults.standard.set(encoded, forKey: mappingsKey)
+        }
+        // Keep LibraryItem synchronized
+        LibraryManager.shared.removeAnilistId(for: localId)
+    }
+
+    public func getAnilistId(for localId: String) -> Int? {
+        if let mappedId = trackerMappings[localId] {
+            return mappedId
+        }
+        // Fallback to LibraryManager check
+        return LibraryManager.shared.getAnilistId(for: localId)
     }
 
     public var isAnilistAuthenticated: Bool {

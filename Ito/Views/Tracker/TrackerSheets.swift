@@ -14,10 +14,10 @@ struct TrackerSearchSheet: View {
     @State private var showDetailsSheet = false
 
     // We pass this callback so the parent view knows when tracking is finalized
-    var onTrack: (AnilistMedia) -> Void
+    var onTrack: (AnilistMedia, Int?) -> Void
     @Environment(\.dismiss) var dismiss
 
-    init(title: String, isAnime: Bool, onTrack: @escaping (AnilistMedia) -> Void) {
+    init(title: String, isAnime: Bool, onTrack: @escaping (AnilistMedia, Int?) -> Void) {
         self.title = title
         self.isAnime = isAnime
         self._searchQuery = State(initialValue: title)
@@ -115,8 +115,8 @@ struct TrackerSearchSheet: View {
             }
             .sheet(isPresented: $showDetailsSheet) {
                 if let media = selectedMedia {
-                    TrackerDetailsSheet(media: media, onSave: {
-                        onTrack(media)
+                    TrackerDetailsSheet(media: media, onSave: { progress in
+                        onTrack(media, progress)
                         showDetailsSheet = false
                         dismiss() // Dismiss the search sheet itself
                     })
@@ -154,7 +154,7 @@ struct TrackerSearchSheet: View {
 
 struct TrackerDetailsSheet: View {
     let media: AnilistMedia
-    var onSave: () -> Void
+    var onSave: (Int?) -> Void
     var onDelete: (() -> Void)?
 
     @State private var status: String = "PLANNING"
@@ -170,6 +170,9 @@ struct TrackerDetailsSheet: View {
     @State private var isNewEntry = true
 
     let statuses = ["CURRENT", "PLANNING", "COMPLETED", "DROPPED", "PAUSED", "REPEATING"]
+
+    @State private var showSyncAlert = false
+    @State private var maxLocalProgress: Int?
 
     @Environment(\.dismiss) var dismiss
 
@@ -260,10 +263,10 @@ struct TrackerDetailsSheet: View {
             }
             .navigationTitle("Update Entry")
             .navigationBarItems(
-                leading: Button("Cancel") { onSave() }, // Just close if canceled
+                leading: Button("Cancel") { onSave(nil) }, // Just close if canceled
                 trailing: Menu {
                     Button(action: {
-                        // TODO: Implement Sync Local History
+                        calculateLocalProgress()
                     }) {
                         Label("Sync Local History", systemImage: "arrow.triangle.2.circlepath")
                     }
@@ -295,10 +298,56 @@ struct TrackerDetailsSheet: View {
                     Image(systemName: "ellipsis.circle")
                 }
             )
+            .alert("Sync Local History", isPresented: $showSyncAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Sync", role: .destructive) {
+                    if let maxLoc = maxLocalProgress {
+                        self.progress = String(maxLoc)
+                    }
+                }
+            } message: {
+                if let maxLoc = maxLocalProgress {
+                    Text("We found local reading/watching history up to chapter/episode \(maxLoc). Do you want to update your AniList progress to match?")
+                } else {
+                    Text("No local reading or watching history was found for this series.")
+                }
+            }
             .task {
                 await fetchExistingEntry()
             }
         }
+    }
+
+    private func calculateLocalProgress() {
+        // Find if we have a mapping to this AniList ID
+        let matchingMappings = TrackerManager.shared.trackerMappings.filter { $0.value == media.id }
+
+        // Find the maximum progress across any mapped local items (or fallback to LibraryManager search)
+        var highest: Int?
+
+        for (localId, _) in matchingMappings {
+            if let readNumbers = ReadProgressManager.shared.readChapterNumbers[localId], let maxNum = readNumbers.max() {
+                if let current = highest {
+                    highest = max(current, Int(maxNum))
+                } else {
+                    highest = Int(maxNum)
+                }
+            }
+        }
+
+        // Backward compatibility: If no mapping found in TrackerManager, check LibraryManager directly
+        if highest == nil {
+            if let matchingItem = LibraryManager.shared.items.first(where: { $0.anilistId == media.id }) {
+                if let readNumbers = ReadProgressManager.shared.readChapterNumbers[matchingItem.id] {
+                    if let maxNum = readNumbers.max() {
+                        highest = Int(maxNum)
+                    }
+                }
+            }
+        }
+
+        self.maxLocalProgress = highest
+        self.showSyncAlert = true
     }
 
     private func fetchExistingEntry() async {
@@ -366,18 +415,18 @@ struct TrackerDetailsSheet: View {
         isSaving = true
         Task {
             // Here we would call TrackerManager.shared.updateMediaEntry(...)
-            // For now we assume success
+            var savedProgress: Int?
             if let progInt = Int(progress) {
                 try? await TrackerManager.shared.updateProgress(mediaId: media.id, progress: progInt)
+                savedProgress = progInt
             }
 
             await MainActor.run {
                 isSaving = false
-                onSave()
+                onSave(savedProgress)
             }
         }
-    }
-}
+    }}
 
 // Data Model for Search
 public struct AnilistMedia: Identifiable, Codable {

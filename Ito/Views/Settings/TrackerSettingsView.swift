@@ -48,6 +48,13 @@ struct TrackerSettingsView: View {
                         .foregroundColor(.red)
                 }
             }
+
+            Section(header: Text("Preferences"), footer: Text("When updating or tracking a series on AniList, automatically mark all previous chapters or episodes as read/watched in your local library.")) {
+                Toggle("Sync AniList to Local Library", isOn: Binding(
+                    get: { UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true },
+                    set: { UserDefaults.standard.set($0, forKey: "Ito.AutoSyncAnilistToLocal") }
+                ))
+            }
         }
         .navigationTitle("Trackers")
         .navigationBarTitleDisplayMode(.inline)

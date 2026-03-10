@@ -44,5 +44,6 @@ excluded:
   - Pods
   - Tests
   - DerivedData
+  - build
   
 reporter: "xcode"

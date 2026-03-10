@@ -90,6 +90,26 @@ public class ReadProgressManager: ObservableObject {
         return false
     }
 
+    /// Mark all chapters up to a given number as read (Useful for tracker syncing)
+    public func markReadUpTo(mangaId: String, maxChapterNum: Float) {
+        if readChapterNumbers[mangaId] == nil {
+            readChapterNumbers[mangaId] = []
+        }
+
+        // Add all integers up to the maxChapterNum. 
+        // Note: For decimals (e.g. 15.5) we won't try to guess, but this covers standard integers nicely.
+        let maxInt = Int(maxChapterNum)
+        if maxInt > 0 {
+            for i in 1...maxInt {
+                readChapterNumbers[mangaId]?.insert(Float(i))
+            }
+        }
+        // Also ensure the exact float is marked
+        readChapterNumbers[mangaId]?.insert(maxChapterNum)
+
+        saveProgress()
+    }
+
     /// Get the last read chapter ID for a manga
     public func getLastRead(mangaId: String) -> String? {
         return lastReadChapter[mangaId]

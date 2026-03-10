@@ -105,7 +105,7 @@ struct AnimeView: View {
                             // Tracker Sync Button
                             if TrackerManager.shared.isAnilistAuthenticated {
                                 Button(action: {
-                                    if let existingId = LibraryManager.shared.getAnilistId(for: anime.key) {
+                                    if let existingId = TrackerManager.shared.getAnilistId(for: anime.key) {
                                         // Construct a partial AnilistMedia object since we only need the ID to fetch details
                                         self.trackingMedia = AnilistMedia(id: existingId, title: anime.title, titleRomaji: nil, coverImage: anime.cover, format: "TV", episodes: nil, chapters: nil)
                                     } else {
@@ -113,14 +113,14 @@ struct AnimeView: View {
                                     }
                                 }) {
                                     HStack {
-                                        Image(systemName: LibraryManager.shared.getAnilistId(for: anime.key) != nil ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                                        Text(LibraryManager.shared.getAnilistId(for: anime.key) != nil ? "Tracking" : "Track")
+                                        Image(systemName: TrackerManager.shared.getAnilistId(for: anime.key) != nil ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+                                        Text(TrackerManager.shared.getAnilistId(for: anime.key) != nil ? "Tracking" : "Track")
                                     }
                                     .font(.subheadline)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 6)
-                                    .background(LibraryManager.shared.getAnilistId(for: anime.key) != nil ? Color.purple.opacity(0.2) : Color.green.opacity(0.2))
-                                    .foregroundColor(LibraryManager.shared.getAnilistId(for: anime.key) != nil ? .purple : .green)
+                                    .background(TrackerManager.shared.getAnilistId(for: anime.key) != nil ? Color.purple.opacity(0.2) : Color.green.opacity(0.2))
+                                    .foregroundColor(TrackerManager.shared.getAnilistId(for: anime.key) != nil ? .purple : .green)
                                     .cornerRadius(6)
                                 }
                             }
@@ -130,17 +130,24 @@ struct AnimeView: View {
                 }
                 .padding(.horizontal)
                 .sheet(isPresented: $showTrackerSearch) {
-                    TrackerSearchSheet(title: anime.title, isAnime: true) { media in
+                    TrackerSearchSheet(title: anime.title, isAnime: true) { media, progress in
                         print("Tracked: \(media.title) (ID: \(media.id))")
-                        LibraryManager.shared.setAnilistId(for: anime.key, anilistId: media.id)
+
+                        // Link the tracker ID even if not saved in Library
+                        TrackerManager.shared.link(localId: anime.key, anilistId: media.id)
+
+                        if let prog = progress, UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
+                            ReadProgressManager.shared.markReadUpTo(mangaId: anime.key, maxChapterNum: Float(prog))
+                        }
                     }
                 }
                 .sheet(item: $trackingMedia) { media in
-                    TrackerDetailsSheet(media: media, onSave: {
-                        // Refresh UI if needed
+                    TrackerDetailsSheet(media: media, onSave: { progress in
+                        if let prog = progress, UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
+                            ReadProgressManager.shared.markReadUpTo(mangaId: anime.key, maxChapterNum: Float(prog))
+                        }
                     }, onDelete: {
-                        // We use 0 to indicate removal for now, or we update LibraryManager to accept nil
-                        LibraryManager.shared.removeAnilistId(for: anime.key)
+                        TrackerManager.shared.unlink(localId: anime.key)
                     })
                 }
 
