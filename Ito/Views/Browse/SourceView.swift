@@ -7,9 +7,13 @@ struct SourceView: View {
     let plugin: InstalledPlugin
 
     @State private var runner: ItoRunner?
-    @State private var mangas: [Manga] = []
-    @State private var animes: [Anime] = []
-    @State private var novels: [Novel] = []
+    @State private var homeLayout: HomeLayout?
+    
+    // Fallback states for search
+    @State private var searchMangas: [Manga] = []
+    @State private var searchAnimes: [Anime] = []
+    @State private var searchNovels: [Novel] = []
+    
     @State private var isLoaded = false
     @State private var errorMessage: String?
 
@@ -23,175 +27,41 @@ struct SourceView: View {
             } else if let error = errorMessage {
                 Text("Error: \(error)").foregroundColor(.red)
             } else {
-                switch plugin.info.type {
-                case .anime:
-                    List(animes, id: \.key) { anime in
-                        ZStack {
-                            if let runner = self.runner {
-                                NavigationLink(destination: AnimeView(runner: runner, anime: anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent)) {
-                                    EmptyView()
-                                }
-                                .opacity(0)
-                            }
-
-                            HStack(alignment: .top, spacing: 12) {
-                                if let coverURL = anime.cover, let url = URL(string: coverURL) {
-                                    LazyImage(url: url) { state in
-                                        if let image = state.image {
-                                            image
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                                .clipped()
-                                        } else if state.error != nil {
-                                            Color.red.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
+                if let layout = homeLayout, searchQuery.isEmpty {
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            ForEach(layout.components.indices, id: \.self) { index in
+                                let component = layout.components[index]
+                                Section(header: 
+                                    HStack {
+                                        if let listing = component.value.listing, let runner = runner {
+                                            NavigationLink(destination: ListingView(plugin: plugin, runner: runner, listing: listing, title: component.title ?? listing.name)) {
+                                                HStack {
+                                                    Text(component.title ?? "")
+                                                        .font(.title2)
+                                                        .fontWeight(.bold)
+                                                        .foregroundColor(.primary)
+                                                    Image(systemName: "chevron.right")
+                                                        .foregroundColor(.secondary)
+                                                }
+                                            }
                                         } else {
-                                            Color.gray.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
+                                            Text(component.title ?? "")
+                                                .font(.title2)
+                                                .fontWeight(.bold)
                                         }
+                                        Spacer()
                                     }
-                                    .processors([.resize(width: 200)])
-                                } else {
-                                    Color.gray.opacity(0.3)
-                                        .frame(width: 60, height: 90)
-                                        .cornerRadius(6)
+                                    .padding(.horizontal)
+                                ) {
+                                    renderComponent(component.value)
                                 }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(anime.title)
-                                        .font(.headline)
-                                        .lineLimit(2)
-
-                                    if let studios = anime.studios, !studios.isEmpty {
-                                        Text(studios.joined(separator: ", "))
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-
-                                Spacer()
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical)
                     }
-                    .listStyle(.plain)
-                case .manga:
-                    List(mangas, id: \.key) { manga in
-                        ZStack {
-                            if let runner = self.runner {
-                                NavigationLink(destination: MangaView(runner: runner, manga: manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent)) {
-                                    EmptyView()
-                                }
-                                .opacity(0)
-                            }
-
-                            HStack(alignment: .top, spacing: 12) {
-                                if let coverURL = manga.cover, let url = URL(string: coverURL) {
-                                    LazyImage(url: url) { state in
-                                        if let image = state.image {
-                                            image
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                                .clipped()
-                                        } else if state.error != nil {
-                                            Color.red.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                        } else {
-                                            Color.gray.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                        }
-                                    }
-                                    .processors([.resize(width: 200)])
-                                } else {
-                                    Color.gray.opacity(0.3)
-                                        .frame(width: 60, height: 90)
-                                        .cornerRadius(6)
-                                }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(manga.title)
-                                        .font(.headline)
-                                        .lineLimit(2)
-
-                                    if let authors = manga.authors, !authors.isEmpty {
-                                        Text(authors.joined(separator: ", "))
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-
-                                Spacer()
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .listStyle(.plain)
-                case .novel:
-                    List(novels, id: \.key) { novel in
-                        ZStack {
-                            if let runner = self.runner {
-                                NavigationLink(destination: NovelView(runner: runner, novel: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent)) {
-                                    EmptyView()
-                                }
-                                .opacity(0)
-                            }
-
-                            HStack(alignment: .top, spacing: 12) {
-                                if let coverURL = novel.cover, let url = URL(string: coverURL) {
-                                    LazyImage(url: url) { state in
-                                        if let image = state.image {
-                                            image
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                                .clipped()
-                                        } else if state.error != nil {
-                                            Color.red.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                        } else {
-                                            Color.gray.opacity(0.3)
-                                                .frame(width: 60, height: 90)
-                                                .cornerRadius(6)
-                                        }
-                                    }
-                                    .processors([.resize(width: 200)])
-                                } else {
-                                    Color.gray.opacity(0.3)
-                                        .frame(width: 60, height: 90)
-                                        .cornerRadius(6)
-                                }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(novel.title)
-                                        .font(.headline)
-                                        .lineLimit(2)
-
-                                    if let authors = novel.authors, !authors.isEmpty {
-                                        Text(authors.joined(separator: ", "))
-                                            .font(.subheadline)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                }
-
-                                Spacer()
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .listStyle(.plain)
+                } else {
+                    renderSearchList()
                 }
             }
         }
@@ -203,6 +73,112 @@ struct SourceView: View {
         }
         .task {
             await loadPlugin()
+        }
+    }
+    
+    @ViewBuilder
+    private func renderComponent(_ value: HomeComponentValue) -> some View {
+        switch value {
+        case .scroller(let mangas, _):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(mangas, id: \.key) { manga in
+                        MangaCardView(manga: manga, plugin: plugin, runner: runner)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        case .mangaList(_, _, let mangas, _):
+            VStack {
+                ForEach(mangas, id: \.key) { manga in
+                    MangaRowView(manga: manga, plugin: plugin, runner: runner)
+                    Divider().padding(.leading, 72)
+                }
+            }
+        case .bigScroller(let mangas, _):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(mangas, id: \.key) { manga in
+                        MangaBigCardView(manga: manga, plugin: plugin, runner: runner)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        case .animeScroller(let animes, _):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(animes, id: \.key) { anime in
+                        AnimeCardView(anime: anime, plugin: plugin, runner: runner)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        case .animeList(_, _, let animes, _):
+            VStack {
+                ForEach(animes, id: \.key) { anime in
+                    AnimeRowView(anime: anime, plugin: plugin, runner: runner)
+                    Divider().padding(.leading, 72)
+                }
+            }
+        case .animeBigScroller(let animes, _):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(animes, id: \.key) { anime in
+                        AnimeBigCardView(anime: anime, plugin: plugin, runner: runner)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        case .novelScroller(let novels, _):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(novels, id: \.key) { novel in
+                        NovelCardView(novel: novel, plugin: plugin, runner: runner)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        case .novelList(_, _, let novels, _):
+            VStack {
+                ForEach(novels, id: \.key) { novel in
+                    NovelRowView(novel: novel, plugin: plugin, runner: runner)
+                    Divider().padding(.leading, 72)
+                }
+            }
+        case .novelBigScroller(let novels, _):
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(novels, id: \.key) { novel in
+                        NovelBigCardView(novel: novel, plugin: plugin, runner: runner)
+                    }
+                }
+                .padding(.horizontal)
+            }
+        default:
+            Text("Unsupported component type.")
+                .foregroundColor(.secondary)
+                .padding()
+        }
+    }
+    
+    @ViewBuilder
+    private func renderSearchList() -> some View {
+        switch plugin.info.type {
+        case .anime:
+            List(searchAnimes, id: \.key) { anime in
+                AnimeRowView(anime: anime, plugin: plugin, runner: runner)
+            }
+            .listStyle(.plain)
+        case .manga:
+            List(searchMangas, id: \.key) { manga in
+                MangaRowView(manga: manga, plugin: plugin, runner: runner)
+            }
+            .listStyle(.plain)
+        case .novel:
+            List(searchNovels, id: \.key) { novel in
+                NovelRowView(novel: novel, plugin: plugin, runner: runner)
+            }
+            .listStyle(.plain)
         }
     }
 
@@ -224,13 +200,13 @@ struct SourceView: View {
                 switch plugin.info.type {
                 case .anime:
                     let result = try await pluginRunner.getSearchAnimeList(query: query, page: 1, filters: [])
-                    await MainActor.run { self.animes = result.entries }
+                    await MainActor.run { self.searchAnimes = result.entries }
                 case .manga:
                     let result = try await pluginRunner.getSearchMangaList(query: query, page: 1, filters: [])
-                    await MainActor.run { self.mangas = result.entries }
+                    await MainActor.run { self.searchMangas = result.entries }
                 case .novel:
                     let result = try await pluginRunner.getSearchNovelList(query: query, page: 1, filters: [])
-                    await MainActor.run { self.novels = result.entries }
+                    await MainActor.run { self.searchNovels = result.entries }
                 }
             } catch {
                 print("Search failed: \(error)")
@@ -255,33 +231,33 @@ struct SourceView: View {
             _ = try await pluginRunner.loadBundle(from: plugin.url)
             self.runner = pluginRunner
 
-            let listing = Listing(id: "views", name: "Popular", kind: 0)
-
-            switch plugin.info.type {
-            case .anime:
-                let result = try await pluginRunner.getAnimeList(listing: listing, page: 1)
-                await MainActor.run {
-                    self.animes = result.entries
-                    self.isLoaded = true
-                }
-            case .manga:
-                let result = try await pluginRunner.getMangaList(listing: listing, page: 1)
-                await MainActor.run {
-                    self.mangas = result.entries
-                    self.isLoaded = true
-                }
-            case .novel:
-                let result = try await pluginRunner.getNovelList(listing: listing, page: 1)
-                await MainActor.run {
-                    self.novels = result.entries
-                    self.isLoaded = true
-                }
+            let layout = try await pluginRunner.getHome()
+            await MainActor.run {
+                self.homeLayout = layout
+                self.isLoaded = true
             }
         } catch {
             await MainActor.run {
                 self.errorMessage = error.localizedDescription
                 self.isLoaded = true
             }
+        }
+    }
+}
+
+extension HomeComponentValue {
+    var listing: Listing? {
+        switch self {
+        case .scroller(_, let listing): return listing
+        case .mangaList(_, _, _, let listing): return listing
+        case .mangaChapterList(_, _, let listing): return listing
+        case .animeScroller(_, let listing): return listing
+        case .animeList(_, _, _, let listing): return listing
+        case .animeEpisodeList(_, _, let listing): return listing
+        case .novelScroller(_, let listing): return listing
+        case .novelList(_, _, _, let listing): return listing
+        case .novelChapterList(_, _, let listing): return listing
+        default: return nil
         }
     }
 }

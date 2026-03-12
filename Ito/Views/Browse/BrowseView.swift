@@ -9,10 +9,16 @@ extension UTType {
     }
 }
 
+// MARK: - BrowseView
+
 struct BrowseView: View {
     @StateObject private var pluginManager = PluginManager.shared
     @StateObject private var repoManager = RepoManager.shared
+
     @State private var errorMessage: String?
+    @State private var showDeleteConfirmation = false
+    @State private var pendingDeleteOffsets: IndexSet?
+    @State private var isInstallingUpdate: String? // plugin id currently updating
 
     private var sortedPlugins: [InstalledPlugin] {
         pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }
@@ -30,9 +36,7 @@ struct BrowseView: View {
             guard let packages = repo.index?.packages else { continue }
             for pkg in packages {
                 if let installed = pluginManager.installedPlugins[pkg.id] {
-                    // Check if repo version is strictly higher than installed version
                     if installed.info.version.compare(pkg.version, options: .numeric) == .orderedAscending {
-                        // If we already queued an update for this plugin ID from another repo, only replace if this version is even higher
                         if let existing = updates[pkg.id] {
                             if existing.pkg.version.compare(pkg.version, options: .numeric) == .orderedAscending {
                                 updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
@@ -51,98 +55,13 @@ struct BrowseView: View {
         NavigationView {
             ZStack {
                 if pluginManager.installedPlugins.isEmpty {
-                    VStack(spacing: 20) {
-                        Image(systemName: "square.and.arrow.down")
-                            .font(.system(size: 60))
-                            .foregroundStyle(.secondary)
-
-                        Text("Drop hianime.ito Here")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-
-                        Text(
-                            "Drag the packaged .ito plugin directly from Finder onto this screen."
-                        )
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    emptyStateView
                 } else {
-                    List {
-                        let updates = availableUpdates
-                        if !updates.isEmpty {
-                            Section(header: Text("Updates")) {
-                                ForEach(updates) { updateItem in
-                                    HStack {
-                                        if let icon = updateItem.pkg.iconUrl, let url = URL(string: "\(updateItem.repoUrl)/\(icon)") {
-                                            LazyImage(url: url) { state in
-                                                if let image = state.image {
-                                                    image.resizable()
-                                                } else {
-                                                    Color.gray
-                                                }
-                                            }
-                                            .frame(width: 40, height: 40)
-                                            .cornerRadius(8)
-                                        } else {
-                                            Image(systemName: "puzzlepiece.extension.fill")
-                                                .foregroundColor(.blue)
-                                                .imageScale(.large)
-                                                .frame(width: 40, height: 40)
-                                        }
-
-                                        VStack(alignment: .leading) {
-                                            Text(updateItem.pkg.name)
-                                                .font(.headline)
-                                            Text("v\(updateItem.pkg.version) available")
-                                                .font(.subheadline)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        Spacer()
-                                        Button("Update") {
-                                            Task {
-                                                do {
-                                                    try await repoManager.installPackage(updateItem.pkg, repositoryUrl: updateItem.repoUrl)
-                                                } catch {
-                                                    errorMessage = "Update failed: \(error.localizedDescription)"
-                                                }
-                                            }
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                    }
-                                }
-                            }
-                        }
-
-                        Section(header: Text("Browse")) {
-                            ForEach(sortedPlugins, id: \.id) { plugin in
-                                NavigationLink(destination: SourceView(plugin: plugin)) {
-                                    PluginRowView(plugin: plugin)
-                                }
-                            }
-                            .onDelete(perform: deletePlugin)
-                        }
-                    }
-                    .refreshable {
-                        await repoManager.refreshAll()
-                    }
+                    pluginListView
                 }
 
-                if let error = errorMessage {
-                    VStack {
-                        Spacer()
-                        Text("Error: \(error)")
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.red.opacity(0.8))
-                            .cornerRadius(8)
-                            .padding(.bottom)
-                    }
-                }
+                errorToastView
             }
-            // Ensure the entire view grabs drop hit-tests
             .contentShape(Rectangle())
             .onDrop(of: [.item, .fileURL, .ito], isTargeted: nil) { providers in
                 handleDrop(providers: providers)
@@ -152,10 +71,184 @@ struct BrowseView: View {
                 Task { await handleOpenURL(url) }
             }
             .navigationTitle("Browse")
-            .navigationBarItems(trailing: NavigationLink(destination: RepositoriesView()) {
-                Image(systemName: "globe")
-            })
+            .navigationBarItems(trailing: repositoriesButton)
             .navigationViewStyle(.stack)
+        }
+        // Destructive delete confirmation
+        .confirmationDialog(
+            "Remove Plugin",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let offsets = pendingDeleteOffsets {
+                    performDelete(at: offsets)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteOffsets = nil
+            }
+        } message: {
+            Text("This plugin will be permanently removed from your device.")
+        }
+    }
+
+    // MARK: - Subviews
+
+    private var emptyStateView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 56, weight: .thin))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 4)
+
+            Text("No Plugins Installed")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Drop a .ito plugin file here, or browse repositories to find and install plugins.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+
+            NavigationLink(destination: RepositoriesView()) {
+                Label("Browse Repositories", systemImage: "globe")
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(Color.accentColor)
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var pluginListView: some View {
+        List {
+            let updates = availableUpdates
+
+            if !updates.isEmpty {
+                Section {
+                    ForEach(updates) { updateItem in
+                        UpdateRowView(
+                            updateItem: updateItem,
+                            isInstalling: isInstallingUpdate == updateItem.id
+                        ) {
+                            Task { await installUpdate(updateItem) }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Updates Available")
+                        Spacer()
+                        Text("\(updates.count)")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor)
+                            .foregroundColor(.white)
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+
+            Section {
+                ForEach(sortedPlugins, id: \.id) { plugin in
+                    NavigationLink(destination: SourceView(plugin: plugin)) {
+                        PluginRowView(plugin: plugin)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            if let index = sortedPlugins.firstIndex(where: { $0.id == plugin.id }) {
+                                pendingDeleteOffsets = IndexSet(integer: index)
+                                showDeleteConfirmation = true
+                            }
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
+                }
+            } header: {
+                HStack {
+                    Text("Installed")
+                    Spacer()
+                    Text("\(sortedPlugins.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .refreshable {
+            await repoManager.refreshAll()
+        }
+    }
+
+    @ViewBuilder
+    private var errorToastView: some View {
+        if let error = errorMessage {
+            VStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.white)
+                    Text(error)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            errorMessage = nil
+                        }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color.red.opacity(0.92))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var repositoriesButton: some View {
+        NavigationLink(destination: RepositoriesView()) {
+            Image(systemName: "globe")
+        }
+        .accessibilityLabel("Repositories")
+        .accessibilityHint("Manage plugin repositories")
+    }
+
+    // MARK: - Actions
+
+    private func installUpdate(_ updateItem: UpdateItem) async {
+        isInstallingUpdate = updateItem.id
+        defer { isInstallingUpdate = nil }
+        do {
+            try await repoManager.installPackage(updateItem.pkg, repositoryUrl: updateItem.repoUrl)
+        } catch {
+            await MainActor.run {
+                withAnimation {
+                    errorMessage = "Update failed: \(error.localizedDescription)"
+                }
+            }
+            // Auto-dismiss error after 4 seconds
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await MainActor.run {
+                withAnimation {
+                    if errorMessage?.hasPrefix("Update failed") == true {
+                        errorMessage = nil
+                    }
+                }
+            }
         }
     }
 
@@ -175,28 +268,29 @@ struct BrowseView: View {
         return pluginsDir
     }
 
-    private func deletePlugin(at offsets: IndexSet) {
-        let fileManager = FileManager.default
-
-        offsets.forEach { index in
-            let plugin = sortedPlugins[index]
-            do {
-                try fileManager.removeItem(at: plugin.url)
-            } catch {
-                print("Failed to delete plugin: \(error)")
-            }
-        }
-
+    private func performDelete(at offsets: IndexSet) {
         Task {
+            let toDelete = offsets.map { sortedPlugins[$0] }
+            let fileManager = FileManager.default
+
+            for plugin in toDelete {
+                do {
+                    try fileManager.removeItem(at: plugin.url)
+                } catch {
+                    await MainActor.run {
+                        withAnimation {
+                            errorMessage = "Failed to remove \(plugin.info.name): \(error.localizedDescription)"
+                        }
+                    }
+                }
+            }
             await pluginManager.reloadInstalledPlugins()
         }
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         print("Received drop with \(providers.count) providers")
-        guard let provider = providers.first else {
-            return false
-        }
+        guard let provider = providers.first else { return false }
 
         let itoType = UTType.ito.identifier
         let archiveType = UTType.archive.identifier
@@ -214,30 +308,27 @@ struct BrowseView: View {
             loadedType = fileURLType
         }
 
-        guard let typeToLoad = loadedType else {
-            return false
-        }
+        guard let typeToLoad = loadedType else { return false }
 
         provider.loadFileRepresentation(forTypeIdentifier: typeToLoad) { url, error in
             guard let tempURL = url else {
                 DispatchQueue.main.async {
-                    self.errorMessage = "Failed to load dropped file: \(String(describing: error))"
+                    withAnimation { self.errorMessage = "Failed to load dropped file: \(String(describing: error))" }
                 }
                 return
             }
 
             guard tempURL.pathExtension.lowercased() == "ito" else {
                 DispatchQueue.main.async {
-                    self.errorMessage = "Please drop a valid .ito plugin file."
+                    withAnimation { self.errorMessage = "Please drop a valid .ito plugin file." }
                 }
                 return
             }
 
             let fileManager = FileManager.default
-
             DispatchQueue.main.async {
                 guard let pluginsDir = self.getPluginsDirectory() else {
-                    self.errorMessage = "Failed to access plugins directory."
+                    withAnimation { self.errorMessage = "Failed to access plugins directory." }
                     return
                 }
                 let destinationURL = pluginsDir.appendingPathComponent(tempURL.lastPathComponent)
@@ -247,12 +338,9 @@ struct BrowseView: View {
                         try fileManager.removeItem(at: destinationURL)
                     }
                     try fileManager.copyItem(at: tempURL, to: destinationURL)
-
-                    Task {
-                        await pluginManager.reloadInstalledPlugins()
-                    }
+                    Task { await pluginManager.reloadInstalledPlugins() }
                 } catch {
-                    self.errorMessage = "File copy error: \(error.localizedDescription)"
+                    withAnimation { self.errorMessage = "File copy error: \(error.localizedDescription)" }
                 }
             }
         }
@@ -265,7 +353,7 @@ struct BrowseView: View {
 
         let fileManager = FileManager.default
         guard let pluginsDir = getPluginsDirectory() else {
-            await MainActor.run { self.errorMessage = "Failed to access plugins directory." }
+            await MainActor.run { withAnimation { self.errorMessage = "Failed to access plugins directory." } }
             return
         }
         let destinationURL = pluginsDir.appendingPathComponent(url.lastPathComponent)
@@ -275,61 +363,123 @@ struct BrowseView: View {
                 try fileManager.removeItem(at: destinationURL)
             }
             try fileManager.copyItem(at: url, to: destinationURL)
-
             await pluginManager.reloadInstalledPlugins()
         } catch {
-            await MainActor.run { self.errorMessage = "URL Open error: \(error.localizedDescription)" }
+            await MainActor.run { withAnimation { self.errorMessage = "URL Open error: \(error.localizedDescription)" } }
         }
     }
 }
+
+// MARK: - UpdateRowView
+
+struct UpdateRowView: View {
+    let updateItem: BrowseView.UpdateItem
+    let isInstalling: Bool
+    let onUpdate: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let icon = updateItem.pkg.iconUrl,
+               let url = URL(string: "\(updateItem.repoUrl)/\(icon)") {
+                LazyImage(url: url) { state in
+                    if let image = state.image {
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.secondary.opacity(0.2)
+                    }
+                }
+                .frame(width: 40, height: 40)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                Image(systemName: "puzzlepiece.extension.fill")
+                    .foregroundStyle(.blue)
+                    .imageScale(.large)
+                    .frame(width: 40, height: 40)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(updateItem.pkg.name)
+                    .font(.headline)
+                Text("v\(updateItem.pkg.version) available")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if isInstalling {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .frame(width: 70)
+            } else {
+                Button("Update", action: onUpdate)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+// MARK: - PluginRowView
 
 struct PluginRowView: View {
     let plugin: InstalledPlugin
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
             if let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
                 Image(uiImage: uiImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: 40, height: 40)
-                    .cornerRadius(8)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 Image(systemName: "puzzlepiece.extension.fill")
-                    .foregroundColor(.blue)
+                    .foregroundStyle(.blue)
                     .imageScale(.large)
                     .frame(width: 40, height: 40)
             }
 
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(plugin.info.name)
                     .font(.headline)
                 Text("v\(plugin.info.version) • \(plugin.info.author ?? "Unknown")")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            Text(plugin.info.type == .anime ? "ANIME" : "MANGA")
-                .font(.caption2)
-                .fontWeight(.bold)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(
-                    plugin.info.type == .anime
-                        ? Color.purple.opacity(0.2)
-                        : Color.orange.opacity(0.2)
-                )
-                .foregroundColor(
-                    plugin.info.type == .anime ? .purple : .orange
-                )
-                .cornerRadius(4)
+            PluginTypeBadge(type: plugin.info.type)
         }
         .padding(.vertical, 4)
     }
 }
 
-#Preview {
-    BrowseView()
+// MARK: - PluginTypeBadge
+
+struct PluginTypeBadge: View {
+    let type: PluginType // assumes .anime / .manga
+
+    private var isAnime: Bool { type == .anime }
+
+    var body: some View {
+        Label(isAnime ? "Anime" : "Manga", systemImage: isAnime ? "play.tv" : "book.closed")
+            .font(.caption2.weight(.semibold))
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background((isAnime ? Color.purple : Color.orange).opacity(0.15))
+            .foregroundStyle(isAnime ? Color.purple : Color.orange)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+// MARK: - Preview
+
+struct BrowseView_Previews: PreviewProvider {
+    static var previews: some View {
+        BrowseView()
+    }
 }
