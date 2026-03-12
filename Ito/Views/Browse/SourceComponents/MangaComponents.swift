@@ -38,7 +38,7 @@ struct MangaCardView: View {
                         .frame(width: 110, height: 160)
                         .cornerRadius(8)
                 }
-                
+
                 Text(manga.title)
                     .font(.caption)
                     .fontWeight(.medium)
@@ -84,7 +84,7 @@ struct MangaBigCardView: View {
                         .frame(width: 240, height: 150)
                         .cornerRadius(12)
                 }
-                
+
                 Text(manga.title)
                     .font(.body)
                     .fontWeight(.bold)

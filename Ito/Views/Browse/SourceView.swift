@@ -8,12 +8,12 @@ struct SourceView: View {
 
     @State private var runner: ItoRunner?
     @State private var homeLayout: HomeLayout?
-    
+
     // Fallback states for search
     @State private var searchMangas: [Manga] = []
     @State private var searchAnimes: [Anime] = []
     @State private var searchNovels: [Novel] = []
-    
+
     @State private var isLoaded = false
     @State private var errorMessage: String?
 
@@ -32,7 +32,7 @@ struct SourceView: View {
                         VStack(spacing: 16) {
                             ForEach(layout.components.indices, id: \.self) { index in
                                 let component = layout.components[index]
-                                Section(header: 
+                                Section(header:
                                     HStack {
                                         if let listing = component.value.listing, let runner = runner {
                                             NavigationLink(destination: ListingView(plugin: plugin, runner: runner, listing: listing, title: component.title ?? listing.name)) {
@@ -75,7 +75,7 @@ struct SourceView: View {
             await loadPlugin()
         }
     }
-    
+
     @ViewBuilder
     private func renderComponent(_ value: HomeComponentValue) -> some View {
         switch value {
@@ -160,7 +160,7 @@ struct SourceView: View {
                 .padding()
         }
     }
-    
+
     @ViewBuilder
     private func renderSearchList() -> some View {
         switch plugin.info.type {

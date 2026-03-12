@@ -38,7 +38,7 @@ struct AnimeCardView: View {
                         .frame(width: 110, height: 160)
                         .cornerRadius(8)
                 }
-                
+
                 Text(anime.title)
                     .font(.caption)
                     .fontWeight(.medium)
@@ -84,7 +84,7 @@ struct AnimeBigCardView: View {
                         .frame(width: 240, height: 150)
                         .cornerRadius(12)
                 }
-                
+
                 Text(anime.title)
                     .font(.body)
                     .fontWeight(.bold)

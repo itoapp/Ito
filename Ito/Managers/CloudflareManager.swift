@@ -18,14 +18,14 @@ class CloudflareManager: NSObject, ObservableObject {
 
     // We cache the valid UA and cookies per host
     private var cachedUserAgents: [String: String] = [:]
-    
+
     private var timeoutTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
 
     override private init() {
         super.init()
     }
-    
+
     func getCachedUserAgent(for host: String) -> String? {
         return cachedUserAgents[host] ?? cachedUserAgents[host.replacingOccurrences(of: "www.", with: "")]
     }
@@ -44,7 +44,7 @@ class CloudflareManager: NSObject, ObservableObject {
             self.targetURL = url
 
             self.setupAndLoadWebView(with: url)
-            
+
             // Add a 30 second hard timeout
             self.timeoutTask = Task {
                 do {
@@ -55,7 +55,7 @@ class CloudflareManager: NSObject, ObservableObject {
                     }
                 } catch { }
             }
-            
+
             // If not solved in 5 seconds, present the WebView interactively
             Task {
                 do {
@@ -66,17 +66,17 @@ class CloudflareManager: NSObject, ObservableObject {
                     }
                 } catch { }
             }
-            
+
             // Poll for cookies every 2 seconds
             self.pollingTask = Task {
                 while !Task.isCancelled && self.isResolving {
                     do {
                         try await Task.sleep(nanoseconds: 2_000_000_000)
                     } catch { break }
-                    
+
                     guard let host = self.targetURL?.host else { continue }
                     let baseHost = host.replacingOccurrences(of: "www.", with: "")
-                    
+
                     let cookies = await self.fetchCookies()
                     if let cfCookie = cookies.first(where: { $0.name == self.clearanceCookieName && $0.domain.contains(baseHost) }) {
                         print("[CloudflareManager] Polled and found cf_clearance cookie! Domain: \\(cfCookie.domain)")
@@ -88,7 +88,6 @@ class CloudflareManager: NSObject, ObservableObject {
         }
     }
 
-    
     private func fetchCookies() async -> [HTTPCookie] {
         return await withCheckedContinuation { continuation in
             WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
@@ -102,21 +101,21 @@ class CloudflareManager: NSObject, ObservableObject {
             let config = WKWebViewConfiguration()
             config.websiteDataStore = WKWebsiteDataStore.default()
             config.preferences.javaScriptCanOpenWindowsAutomatically = false
-            
+
             let prefs = WKWebpagePreferences()
             prefs.allowsContentJavaScript = true
             config.defaultWebpagePreferences = prefs
-            
+
             // Inject anti-bot evasion techniques and Turnstile auto-clicker
             let evasionJS = """
             Object.defineProperty(navigator, 'webdriver', { get: () => false });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-            
+
             // Auto-click Turnstile logic
             var interval = setInterval(function() {
-                var btn = document.querySelector('input[type="checkbox"]') || 
-                          document.querySelector('#challenge-stage') || 
+                var btn = document.querySelector('input[type="checkbox"]') ||
+                          document.querySelector('#challenge-stage') ||
                           document.querySelector('#cf-stage') ||
                           document.querySelector('.ctp-checkbox-label');
                 if (btn) {
@@ -126,13 +125,13 @@ class CloudflareManager: NSObject, ObservableObject {
             }, 500);
             setTimeout(function() { clearInterval(interval); }, 10000);
             """
-            
+
             let script = WKUserScript(source: evasionJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
             config.userContentController.addUserScript(script)
-            
+
             let wv = WKWebView(frame: UIScreen.main.bounds, configuration: config)
             wv.navigationDelegate = self
-            wv.alpha = 0.01 
+            wv.alpha = 0.01
             wv.isUserInteractionEnabled = false
 
             if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
@@ -152,7 +151,7 @@ class CloudflareManager: NSObject, ObservableObject {
         wv.alpha = 1.0
         wv.isUserInteractionEnabled = true
         wv.backgroundColor = .systemBackground
-        
+
         if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
            let window = windowScene.windows.first {
             wv.frame = window.bounds
@@ -190,9 +189,9 @@ class CloudflareManager: NSObject, ObservableObject {
         isResolving = false
         timeoutTask?.cancel()
         pollingTask?.cancel()
-        
+
         cleanupWebView()
-        
+
         resolveContinuation?.resume(returning: result)
         resolveContinuation = nil
         targetURL = nil
@@ -203,15 +202,14 @@ class CloudflareManager: NSObject, ObservableObject {
         isResolving = false
         timeoutTask?.cancel()
         pollingTask?.cancel()
-        
+
         cleanupWebView()
-        
+
         resolveContinuation?.resume(throwing: error)
         resolveContinuation = nil
         targetURL = nil
     }
 }
-
 
 extension CloudflareManager: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

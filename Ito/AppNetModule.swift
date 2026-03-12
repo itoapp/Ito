@@ -17,7 +17,7 @@ actor AppNetModule: NetModule {
         urlRequest.httpShouldHandleCookies = false
 
         var updatedHeaders = request.headers
-        
+
         // Always apply the cached User-Agent for this host if we have one
         if let host = url.host {
             let cachedUA = await MainActor.run {
@@ -69,7 +69,7 @@ actor AppNetModule: NetModule {
 
                 var retriedRequest = request
                 var retriedHeaders = request.headers
-                
+
                 retriedHeaders["User-Agent"] = bypassResult.userAgent
 
                 // Explicitly inject cookies into the request headers because HTTPCookieStorage drops subdomains
@@ -77,7 +77,7 @@ actor AppNetModule: NetModule {
                 for cookie in bypassResult.cookies {
                     cookieStrings.append("\(cookie.name)=\(cookie.value)")
                 }
-                
+
                 let cookieHeaderValue = cookieStrings.joined(separator: "; ")
                 if !cookieHeaderValue.isEmpty {
                     retriedHeaders["Cookie"] = cookieHeaderValue

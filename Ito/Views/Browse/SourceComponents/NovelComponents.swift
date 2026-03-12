@@ -38,7 +38,7 @@ struct NovelCardView: View {
                         .frame(width: 110, height: 160)
                         .cornerRadius(8)
                 }
-                
+
                 Text(novel.title)
                     .font(.caption)
                     .fontWeight(.medium)
@@ -84,7 +84,7 @@ struct NovelBigCardView: View {
                         .frame(width: 240, height: 150)
                         .cornerRadius(12)
                 }
-                
+
                 Text(novel.title)
                     .font(.body)
                     .fontWeight(.bold)

@@ -10,7 +10,7 @@ struct ListingView: View {
     @State private var page: Int32 = 1
     @State private var hasNextPage: Bool = true
     @State private var isLoading: Bool = false
-    @State private var errorMessage: String? = nil
+    @State private var errorMessage: String?
 
     // State for respective models
     @State private var mangas: [Manga] = []

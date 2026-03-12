@@ -45,5 +45,6 @@ excluded:
   - Tests
   - DerivedData
   - build
+  - projects
   
 reporter: "xcode"
