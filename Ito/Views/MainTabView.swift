@@ -13,6 +13,11 @@ struct MainTabView: View {
                     Label("Browse", systemImage: "globe")
                 }
 
+            DiscoverView()
+                .tabItem {
+                    Label("Discover", systemImage: "sparkles")
+                }
+
             SearchView()
                 .tabItem {
                     Label("Search", systemImage: "magnifyingglass")
