@@ -201,6 +201,15 @@ public class UpdateManager: ObservableObject {
         saveState()
     }
 
+    /// Fully removes the badge for a given item (used after bulk operations like AniList sync)
+    @MainActor
+    public func clearBadge(for itemId: String) {
+        if unreadCounts[itemId] != nil {
+            unreadCounts.removeValue(forKey: itemId)
+            saveState()
+        }
+    }
+
     private func loadState() {
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let decoded = try? JSONDecoder().decode([String: Int].self, from: data) {

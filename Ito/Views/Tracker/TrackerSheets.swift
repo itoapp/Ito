@@ -188,6 +188,13 @@ struct TrackerDetailsSheet: View {
         }
     }
 
+    private func displayLabel(for statusOption: String) -> String {
+        if statusOption == "CURRENT" {
+            return currentStatusLabel
+        }
+        return statusOption.capitalized
+    }
+
     @State private var showSyncAlert = false
     @State private var maxLocalProgress: Int?
 
@@ -223,11 +230,8 @@ struct TrackerDetailsSheet: View {
                     Section(header: Text("Progress")) {
                         Picker("Status", selection: $status) {
                             ForEach(statuses, id: \.self) { statusOption in
-                                if statusOption == "CURRENT" {
-                                    Text(currentStatusLabel).tag(String?.some(statusOption))
-                                } else {
-                                    Text(statusOption.capitalized).tag(String?.some(statusOption))
-                                }
+                                Text(displayLabel(for: statusOption))
+                                    .tag(String?.some(statusOption))
                             }
                         }
 

@@ -112,8 +112,9 @@ public class ReadProgressManager: ObservableObject {
         // Also ensure the exact float is marked
         readChapterNumbers[mangaId]?.insert(maxChapterNum)
 
+        // Bulk operation — fully clear the badge. Next refresh will recalculate.
         Task { @MainActor in
-            UpdateManager.shared.decrementBadge(for: mangaId)
+            UpdateManager.shared.clearBadge(for: mangaId)
         }
 
         saveProgress()
