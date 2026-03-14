@@ -56,7 +56,7 @@ struct LibraryView: View {
                         contentScrollView
                     }
                 }
-                
+
                 // Determinate Progress Banner
                 if updateManager.isRefreshing {
                     UpdateProgressBanner(
@@ -231,7 +231,7 @@ struct LibraryItemView: View {
     private var isPluginInstalled: Bool {
         pluginManager.installedPlugins[item.pluginId] != nil
     }
-    
+
     // Checks if we have an unread badge to show
     private var badgeCount: Int {
         updateManager.unreadCounts[item.id] ?? 0
