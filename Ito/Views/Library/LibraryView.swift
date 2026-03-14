@@ -15,6 +15,7 @@ private struct LibraryGroup: Identifiable {
 
 struct LibraryView: View {
     @StateObject private var libraryManager = LibraryManager.shared
+    @StateObject private var updateManager = UpdateManager.shared
     @State private var searchText = ""
     @State private var isEditing = false
 
@@ -45,13 +46,25 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationView {
-            Group {
-                if libraryManager.items.isEmpty {
-                    emptyStateView
-                } else if !searchText.isEmpty && filteredItems.isEmpty {
-                    noResultsView
-                } else {
-                    contentScrollView
+            ZStack(alignment: .top) {
+                Group {
+                    if libraryManager.items.isEmpty {
+                        emptyStateView
+                    } else if !searchText.isEmpty && filteredItems.isEmpty {
+                        noResultsView
+                    } else {
+                        contentScrollView
+                    }
+                }
+                
+                // Determinate Progress Banner
+                if updateManager.isRefreshing {
+                    UpdateProgressBanner(
+                        current: updateManager.itemsCheckedCurrentRun,
+                        total: updateManager.totalItemsToCheck
+                    )
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(2)
                 }
             }
             .navigationTitle("Library")
@@ -91,12 +104,27 @@ struct LibraryView: View {
             .padding(.top, 4)
             .padding(.bottom, 16)
         }
+        .refreshable {
+            await updateManager.checkForUpdates()
+        }
     }
 
     // MARK: Toolbar
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            if !libraryManager.items.isEmpty {
+                Button {
+                    Task {
+                        await updateManager.checkForUpdates()
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(updateManager.isRefreshing)
+            }
+        }
         ToolbarItem(placement: .navigationBarTrailing) {
             if !libraryManager.items.isEmpty {
                 Button {
@@ -195,12 +223,18 @@ struct LibraryItemView: View {
     let isEditing: Bool
 
     @ObservedObject private var pluginManager = PluginManager.shared
+    @StateObject private var updateManager = UpdateManager.shared
     @State private var wiggleAngle: Double = Double.random(in: -1.2...1.2)
     // Separate from isEditing so repeatForever never causes isEditing to re-diff
     @State private var isWiggling: Bool = false
 
     private var isPluginInstalled: Bool {
         pluginManager.installedPlugins[item.pluginId] != nil
+    }
+    
+    // Checks if we have an unread badge to show
+    private var badgeCount: Int {
+        updateManager.unreadCounts[item.id] ?? 0
     }
 
     var body: some View {
@@ -298,6 +332,17 @@ struct LibraryItemView: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.orange, Color(.systemBackground))
                         .padding(5)
+                } else if badgeCount > 0 && !isEditing {
+                    // HIG-compliant Unread Badge
+                    Text("\(badgeCount)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.red))
+                        .overlay(Capsule().stroke(Color(UIColor.systemBackground), lineWidth: 1.5))
+                        .padding(4)
+                        .transition(.scale.combined(with: .opacity))
                 }
             }
         }
@@ -505,6 +550,33 @@ struct DeferredPluginView: View {
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription }
         }
+    }
+}
+
+// MARK: - UpdateProgressBanner
+
+struct UpdateProgressBanner: View {
+    let current: Int
+    let total: Int
+
+    var body: some View {
+        HStack {
+            ProgressView()
+                .scaleEffect(0.8)
+                .padding(.trailing, 4)
+            Text("Checking for updates... \(current)/\(total)")
+                .font(.footnote)
+                .fontWeight(.medium)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            Capsule()
+                .fill(.thickMaterial)
+                .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: 3)
+        )
+        .padding(.top, 8)
     }
 }
 

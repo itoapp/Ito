@@ -71,6 +71,11 @@ public class ReadProgressManager: ObservableObject {
 
         lastReadChapter[mangaId] = chapterId
 
+        // Clear the unread badge automatically when the user reads a chapter
+        Task { @MainActor in
+            UpdateManager.shared.decrementBadge(for: mangaId)
+        }
+
         saveProgress()
     }
 
@@ -106,6 +111,10 @@ public class ReadProgressManager: ObservableObject {
         }
         // Also ensure the exact float is marked
         readChapterNumbers[mangaId]?.insert(maxChapterNum)
+
+        Task { @MainActor in
+            UpdateManager.shared.decrementBadge(for: mangaId)
+        }
 
         saveProgress()
     }
