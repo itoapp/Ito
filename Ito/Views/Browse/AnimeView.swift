@@ -186,28 +186,30 @@ struct AnimeView: View {
             }
         }
         .sheet(isPresented: $showTrackerSearch) {
-            TrackerSearchSheet(title: anime.title, isAnime: true) { media, progress in
-                TrackerManager.shared.link(localId: anime.key, anilistId: media.id)
-                if let prog = progress,
-                   UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
-                    ReadProgressManager.shared.markReadUpTo(mangaId: anime.key, maxChapterNum: Float(prog))
-                }
-            }
-        }
-        .sheet(item: $trackingMedia) { media in
-            NavigationView {
-                TrackerDetailsSheet(
-                    media: media,
-                    showCancelButton: true,
-                    onSave: { progress in
+                    // UPDATED: Added `, _` to accept the status parameter
+                    TrackerSearchSheet(title: anime.title, isAnime: true) { media, progress, _ in
+                        TrackerManager.shared.link(localId: anime.key, anilistId: media.id)
                         if let prog = progress,
                            UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
                             ReadProgressManager.shared.markReadUpTo(mangaId: anime.key, maxChapterNum: Float(prog))
                         }
-                    },
-                    onDelete: { TrackerManager.shared.unlink(localId: anime.key) }
-                )
-            }
+                    }
+                }
+                .sheet(item: $trackingMedia) { media in
+                    NavigationView {
+                        TrackerDetailsSheet(
+                            media: media,
+                            showCancelButton: true,
+                            // UPDATED: Added `, _` to accept the status parameter
+                            onSave: { progress, _ in
+                                if let prog = progress,
+                                   UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
+                                    ReadProgressManager.shared.markReadUpTo(mangaId: anime.key, maxChapterNum: Float(prog))
+                                }
+                            },
+                            onDelete: { TrackerManager.shared.unlink(localId: anime.key) }
+                        )
+                    }
         }
         .fullScreenCover(item: $watchingEpisode) { identified in
             VideoPlayerView(runner: runner, anime: anime, episode: identified.episode)

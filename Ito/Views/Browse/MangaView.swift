@@ -183,29 +183,31 @@ struct MangaView: View {
             }
         }
         .sheet(isPresented: $showTrackerSearch) {
-            TrackerSearchSheet(title: manga.title, isAnime: false) { media, progress in
-                TrackerManager.shared.link(localId: manga.key, anilistId: media.id)
-                if let prog = progress,
-                   UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
-                    ReadProgressManager.shared.markReadUpTo(mangaId: manga.key, maxChapterNum: Float(prog))
-                }
-            }
-        }
-        .sheet(item: $trackingMedia) { media in
-            NavigationView {
-                TrackerDetailsSheet(
-                    media: media,
-                    showCancelButton: true,
-                    onSave: { progress in
+                    // UPDATED: Added `, _` to accept the status parameter
+                    TrackerSearchSheet(title: manga.title, isAnime: false) { media, progress, _ in
+                        TrackerManager.shared.link(localId: manga.key, anilistId: media.id)
                         if let prog = progress,
                            UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
                             ReadProgressManager.shared.markReadUpTo(mangaId: manga.key, maxChapterNum: Float(prog))
                         }
-                    },
-                    onDelete: { TrackerManager.shared.unlink(localId: manga.key) }
-                )
-            }
-        }
+                    }
+                }
+                .sheet(item: $trackingMedia) { media in
+                    NavigationView {
+                        TrackerDetailsSheet(
+                            media: media,
+                            showCancelButton: true,
+                            // UPDATED: Added `, _` to accept the status parameter
+                            onSave: { progress, _ in
+                                if let prog = progress,
+                                   UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
+                                    ReadProgressManager.shared.markReadUpTo(mangaId: manga.key, maxChapterNum: Float(prog))
+                                }
+                            },
+                            onDelete: { TrackerManager.shared.unlink(localId: manga.key) }
+                        )
+                    }
+                }
         .fullScreenCover(item: $readingChapter) { wrapper in
             ReaderView(runner: runner, manga: manga, currentChapter: wrapper.chapter)
         }

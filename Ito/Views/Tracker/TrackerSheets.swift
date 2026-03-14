@@ -13,11 +13,11 @@ struct TrackerSearchSheet: View {
 
     @State private var showDetailsSheet = false
 
-    // We pass this callback so the parent view knows when tracking is finalized
-    var onTrack: (AnilistMedia, Int?) -> Void
+    // Updated: Now expects the media, the progress, and the selected status
+    var onTrack: (AnilistMedia, Int?, String?) -> Void
     @Environment(\.dismiss) var dismiss
 
-    init(title: String, isAnime: Bool, onTrack: @escaping (AnilistMedia, Int?) -> Void) {
+    init(title: String, isAnime: Bool, onTrack: @escaping (AnilistMedia, Int?, String?) -> Void) {
         self.title = title
         self.isAnime = isAnime
         self._searchQuery = State(initialValue: title)
@@ -94,8 +94,9 @@ struct TrackerSearchSheet: View {
                 ZStack {
                     if let selectedMedia = selectedMedia {
                         NavigationLink(
-                            destination: TrackerDetailsSheet(media: selectedMedia, onSave: { progress in
-                                onTrack(selectedMedia, progress)
+                            destination: TrackerDetailsSheet(media: selectedMedia, onSave: { progress, newStatus in
+                                // Updated: Passing the newStatus back to the parent closure
+                                onTrack(selectedMedia, progress, newStatus)
                                 showDetailsSheet = false
                                 dismiss() // Dismiss the search sheet itself
                             }),
@@ -162,7 +163,9 @@ struct TrackerSearchSheet: View {
 struct TrackerDetailsSheet: View {
     let media: AnilistMedia
     var showCancelButton: Bool = false
-    var onSave: (Int?) -> Void
+
+    // Updated: Closure now accepts progress and status string
+    var onSave: (Int?, String?) -> Void
     var onDelete: (() -> Void)?
 
     @State private var status: String? = "PLANNING"
@@ -271,7 +274,7 @@ struct TrackerDetailsSheet: View {
                         // Always show Started Date
                         DatePicker("Started", selection: $startDate, displayedComponents: .date)
 
-                        // Only show Finished Date if it exists or if status is Completed/Dropped, 
+                        // Only show Finished Date if it exists or if status is Completed/Dropped,
                         // otherwise offer a toggle or just use an optional binding
                         if finishDate != nil {
                             DatePicker("Finished", selection: Binding(get: { finishDate ?? Date() }, set: { finishDate = $0 }), displayedComponents: .date)
@@ -322,7 +325,8 @@ struct TrackerDetailsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if showCancelButton {
-                        Button("Cancel") { onSave(nil); dismiss() }
+                        // Updated: pass nil for both progress and status when canceling
+                        Button("Cancel") { onSave(nil, nil); dismiss() }
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -350,6 +354,7 @@ struct TrackerDetailsSheet: View {
                 }
             }
             .task {
+                guard isLoadingEntry else { return }
                 await fetchExistingEntry()
             }
             .onChange(of: progress) { newValue in
@@ -455,30 +460,27 @@ struct TrackerDetailsSheet: View {
     }
 
     private func saveProgress() {
-        isSaving = true
-        Task {
-            var savedProgress: Int?
-            // Determine if progress is just 0 but we want to save status anyway
-            let progInt = Int(progress)
+            isSaving = true
+            Task {
+                var savedProgress: Int?
+                let progInt = Int(progress)
+                let effectiveStatus = status
 
-            // If status is "PLANNING" but progress > 0, logically the user has started it.
-            // We can let TrackerManager handle the automatic transition, 
-            // but we might as well pass the user's explicit choice here.
-            let effectiveStatus = status
+                do {
+                    try await TrackerManager.shared.updateProgress(mediaId: media.id, progress: progInt, status: effectiveStatus)
+                    savedProgress = progInt
+                } catch {
+                    print("Failed saving TrackerProgress with status: \(error.localizedDescription)")
+                }
 
-            do {
-                try await TrackerManager.shared.updateProgress(mediaId: media.id, progress: progInt, status: effectiveStatus)
-                savedProgress = progInt
-            } catch {
-                print("Failed saving TrackerProgress with status: \(error.localizedDescription)")
-            }
-
-            await MainActor.run {
-                isSaving = false
-                onSave(savedProgress)
+                await MainActor.run {
+                    isSaving = false
+                    onSave(savedProgress, effectiveStatus)
+                    dismiss() // NEW: Tell the sheet to close after saving!
+                }
             }
         }
-    }}
+}
 
 // Data Model for Search
 public struct AnilistMedia: Identifiable, Codable {
