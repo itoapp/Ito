@@ -9,6 +9,16 @@
 > **Legal Disclaimer**  
 > We do not hold any responsibility for any illegal usage of the codebase. Please refer to your local laws about DMCA and other related laws.
 
+<div align="center">
+    <img src="https://count.getloli.com/get/@itoapp?theme=rule34" /><br>
+</div>
+
+<div align="center">
+    <a target="_blank" href="https://discord.gg/Es5qTB9BcN">
+        <img alt="Discord" src="https://img.shields.io/discord/1475329802532552869?color=%23738ADB&label=Discord&logo=discord&logoColor=white&style=flat-square"/>
+    </a>
+</div>
+
 Ito is a free, ad-free iOS client for reading and watching anime. It is free forever and powered by a secure WebAssembly (WASM) plugin architecture.
 
 ## Features
