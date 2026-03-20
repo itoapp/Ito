@@ -1,23 +1,143 @@
 import SwiftUI
 import NukeUI
 
+public struct TrackerSheetOrchestrator: View {
+    let localId: String
+    let title: String
+    let isAnime: Bool
+    var onTracked: ((TrackerMedia, Int?, String?) -> Void)?
+
+    @Environment(\.dismiss) var dismiss
+
+    @State private var selectedProvider: (any TrackerProvider)?
+
+    public init(localId: String, title: String, isAnime: Bool, onTracked: ((TrackerMedia, Int?, String?) -> Void)? = nil) {
+        self.localId = localId
+        self.title = title
+        self.isAnime = isAnime
+        self.onTracked = onTracked
+    }
+
+    public var body: some View {
+        let authenticatedProviders = TrackerManager.shared.authenticatedProviders
+
+        if authenticatedProviders.isEmpty {
+            NavigationView {
+                VStack(spacing: 20) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 50))
+                        .foregroundColor(.orange)
+                    Text("No Trackers Authenticated")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    Text("Please go to Settings > Trackers to log in to a service like AniList before tracking.")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
+                }
+                .navigationTitle("Track Series")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationBarItems(trailing: Button("Close") { dismiss() })
+            }
+        } else if authenticatedProviders.count == 1 {
+            // Bypass selection
+            let provider = authenticatedProviders.first!
+            if let existingId = TrackerManager.shared.getMediaId(for: localId, providerId: provider.identifier) {
+                let media = TrackerMedia(id: existingId, title: title, titleRomaji: nil, coverImage: nil, format: nil, episodes: nil, chapters: nil)
+                NavigationView {
+                    TrackerDetailsSheet(provider: provider, localId: localId, media: media, showCancelButton: true, onSave: { progress, status in
+                        onTracked?(media, progress, status)
+                        dismiss()
+                    }, onDelete: {
+                        onTracked?(media, nil, nil) // notify deleted
+                    })
+                }
+            } else {
+                TrackerSearchSheet(provider: provider, localId: localId, title: title, isAnime: isAnime) { media, progress, status in
+                    TrackerManager.shared.link(localId: localId, providerId: provider.identifier, mediaId: media.id)
+                    onTracked?(media, progress, status)
+                    dismiss()
+                }
+            }
+        } else {
+            // Selection Sheet
+            if let provider = selectedProvider {
+                if let existingId = TrackerManager.shared.getMediaId(for: localId, providerId: provider.identifier) {
+                    let media = TrackerMedia(id: existingId, title: title, titleRomaji: nil, coverImage: nil, format: nil, episodes: nil, chapters: nil)
+                    TrackerDetailsSheet(provider: provider, localId: localId, media: media, showCancelButton: true, onSave: { progress, status in
+                        onTracked?(media, progress, status)
+                        dismiss()
+                    }, onDelete: {
+                        onTracked?(media, nil, nil)
+                    })
+                } else {
+                    TrackerSearchSheet(provider: provider, localId: localId, title: title, isAnime: isAnime) { media, progress, status in
+                        TrackerManager.shared.link(localId: localId, providerId: provider.identifier, mediaId: media.id)
+                        onTracked?(media, progress, status)
+                        dismiss()
+                    }
+                }
+            } else {
+                NavigationView {
+                    List(authenticatedProviders, id: \.identifier) { provider in
+                        Button(action: {
+                            selectedProvider = provider
+                        }) {
+                            HStack {
+                                Text(provider.name)
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                if TrackerManager.shared.getMediaId(for: localId, providerId: provider.identifier) != nil {
+                                    Text("Tracked")
+                                        .font(.caption)
+                                        .foregroundColor(.green)
+                                        .padding(.trailing, 4)
+                                }
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                    }
+                    .navigationTitle("Select Tracker")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .navigationBarItems(trailing: Button("Cancel") { dismiss() })
+                }
+                .modifier(PresentationDetentsModifier())
+            }
+        }
+    }
+}
+
+struct PresentationDetentsModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.presentationDetents([.medium, .large])
+        } else {
+            content
+        }
+    }
+}
+
 struct TrackerSearchSheet: View {
+    let provider: any TrackerProvider
+    let localId: String
     let title: String
     let isAnime: Bool
 
     @State private var searchQuery: String
-    @State private var searchResults: [AnilistMedia] = []
+    @State private var searchResults: [TrackerMedia] = []
     @State private var isLoading = false
-    @State private var selectedMedia: AnilistMedia?
+    @State private var selectedMedia: TrackerMedia?
     @State private var errorMessage: String?
 
     @State private var showDetailsSheet = false
 
-    // Updated: Now expects the media, the progress, and the selected status
-    var onTrack: (AnilistMedia, Int?, String?) -> Void
+    var onTrack: (TrackerMedia, Int?, String?) -> Void
     @Environment(\.dismiss) var dismiss
 
-    init(title: String, isAnime: Bool, onTrack: @escaping (AnilistMedia, Int?, String?) -> Void) {
+    init(provider: any TrackerProvider, localId: String, title: String, isAnime: Bool, onTrack: @escaping (TrackerMedia, Int?, String?) -> Void) {
+        self.provider = provider
+        self.localId = localId
         self.title = title
         self.isAnime = isAnime
         self._searchQuery = State(initialValue: title)
@@ -27,11 +147,10 @@ struct TrackerSearchSheet: View {
     var body: some View {
         NavigationView {
             VStack {
-                // Search Bar
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.gray)
-                    TextField("Search", text: $searchQuery, onCommit: performSearch)
+                    TextField("Search \(provider.name)", text: $searchQuery, onCommit: performSearch)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                     if isLoading {
                         ProgressView()
@@ -94,11 +213,10 @@ struct TrackerSearchSheet: View {
                 ZStack {
                     if let selectedMedia = selectedMedia {
                         NavigationLink(
-                            destination: TrackerDetailsSheet(media: selectedMedia, onSave: { progress, newStatus in
-                                // Updated: Passing the newStatus back to the parent closure
+                            destination: TrackerDetailsSheet(provider: provider, localId: localId, media: selectedMedia, onSave: { progress, newStatus in
                                 onTrack(selectedMedia, progress, newStatus)
                                 showDetailsSheet = false
-                                dismiss() // Dismiss the search sheet itself
+                                dismiss()
                             }),
                             isActive: $showDetailsSheet
                         ) {
@@ -108,7 +226,6 @@ struct TrackerSearchSheet: View {
 
                     Button(action: {
                         if selectedMedia != nil {
-                            // Launch details sheet via NavigationLink activation
                             showDetailsSheet = true
                         }
                     }) {
@@ -124,9 +241,9 @@ struct TrackerSearchSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle("Track Series")
+            .navigationTitle("Search on \(provider.name)")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(trailing: Button("Cancel") { dismiss() })
+            .navigationBarItems(leading: Button("Back") { dismiss() }, trailing: Button("Cancel") { dismiss() })
             .task {
                 performSearch()
             }
@@ -140,12 +257,10 @@ struct TrackerSearchSheet: View {
 
         Task {
             do {
-                let results = try await TrackerManager.shared.searchAnilistMediaFull(title: searchQuery, isAnime: isAnime)
+                let results = try await provider.searchMedia(title: searchQuery, isAnime: isAnime)
                 await MainActor.run {
                     self.searchResults = results
                     self.isLoading = false
-
-                    // Auto-select first match if it's highly relevant (optional)
                     if let first = results.first, first.title.lowercased() == searchQuery.lowercased() {
                         self.selectedMedia = first
                     }
@@ -161,10 +276,11 @@ struct TrackerSearchSheet: View {
 }
 
 struct TrackerDetailsSheet: View {
-    let media: AnilistMedia
+    let provider: any TrackerProvider
+    let localId: String
+    let media: TrackerMedia
     var showCancelButton: Bool = false
 
-    // Updated: Closure now accepts progress and status string
     var onSave: (Int?, String?) -> Void
     var onDelete: (() -> Void)?
 
@@ -172,12 +288,9 @@ struct TrackerDetailsSheet: View {
     @State private var progress: String = "0"
     @State private var score: Double = 0
     @State private var startDate = Date()
-    // Changed to optional so we don't force a finish date
     @State private var finishDate: Date?
     @State private var isSaving = false
     @State private var isLoadingEntry = true
-
-    // Tracks if we actually fetched a remote entry or if this is a fresh form
     @State private var isNewEntry = true
 
     let statuses = ["CURRENT", "PLANNING", "COMPLETED", "DROPPED", "PAUSED", "REPEATING"]
@@ -205,250 +318,202 @@ struct TrackerDetailsSheet: View {
 
     var body: some View {
         Form {
-                if isLoadingEntry {
+            if isLoadingEntry {
+                HStack {
+                    Spacer()
+                    ProgressView("Checking existing progress...")
+                    Spacer()
+                }
+            } else {
+                Section(header: Text("Series Info")) {
                     HStack {
-                        Spacer()
-                        ProgressView("Checking existing progress...")
-                        Spacer()
-                    }
-                } else {
-                    Section(header: Text("Series Info")) {
-                        HStack {
-                            if let cover = media.coverImage, let url = URL(string: cover) {
-                                LazyImage(url: url) { state in
-                                    if let image = state.image {
-                                        image.resizable().aspectRatio(contentMode: .fill)
-                                    } else {
-                                        Color.gray
-                                    }
+                        if let cover = media.coverImage, let url = URL(string: cover) {
+                            LazyImage(url: url) { state in
+                                if let image = state.image {
+                                    image.resizable().aspectRatio(contentMode: .fill)
+                                } else {
+                                    Color.gray
                                 }
-                                .frame(width: 60, height: 90)
-                                .cornerRadius(6)
                             }
-                            Text(media.title)
-                                .font(.headline)
+                            .frame(width: 60, height: 90)
+                            .cornerRadius(6)
+                        }
+                        Text(media.title)
+                            .font(.headline)
+                    }
+                }
+
+                Section(header: Text("Progress")) {
+                    Picker("Status", selection: $status) {
+                        ForEach(statuses, id: \.self) { statusOption in
+                            Text(displayLabel(for: statusOption))
+                                .tag(String?.some(statusOption))
                         }
                     }
 
-                    Section(header: Text("Progress")) {
-                        Picker("Status", selection: $status) {
-                            ForEach(statuses, id: \.self) { statusOption in
-                                Text(displayLabel(for: statusOption))
-                                    .tag(String?.some(statusOption))
-                            }
-                        }
+                    HStack {
+                        Text("Progress")
+                        Spacer()
+                        TextField("0", text: $progress)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 50)
 
-                        HStack {
-                            Text("Progress")
-                            Spacer()
-                            TextField("0", text: $progress)
-                                .keyboardType(.numberPad)
-                                .multilineTextAlignment(.trailing)
-                                .frame(width: 50)
+                        Stepper("", onIncrement: {
+                            if let val = Int(progress) { progress = String(val + 1) }
+                        }, onDecrement: {
+                            if let val = Int(progress), val > 0 { progress = String(val - 1) }
+                        })
+                        .labelsHidden()
 
-                            Stepper("", onIncrement: {
-                                if let val = Int(progress) { progress = String(val + 1) }
-                            }, onDecrement: {
-                                if let val = Int(progress), val > 0 { progress = String(val - 1) }
-                            })
-                            .labelsHidden()
-
-                            if let total = media.episodes ?? media.chapters {
-                                Text("/ \(total)")
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Text("/ ?")
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-
-                        HStack {
-                            Text("Score")
-                            Spacer()
-                            Slider(value: $score, in: 0...10, step: 0.5)
-                            Text(String(format: "%.1f", score))
-                        }
-                    }
-
-                    Section(header: Text("Dates")) {
-                        // Always show Started Date
-                        DatePicker("Started", selection: $startDate, displayedComponents: .date)
-
-                        // Only show Finished Date if it exists or if status is Completed/Dropped,
-                        // otherwise offer a toggle or just use an optional binding
-                        if finishDate != nil {
-                            DatePicker("Finished", selection: Binding(get: { finishDate ?? Date() }, set: { finishDate = $0 }), displayedComponents: .date)
-                            Button("Remove Finish Date") {
-                                finishDate = nil
-                            }
-                            .foregroundColor(.red)
+                        if let total = media.episodes ?? media.chapters {
+                            Text("/ \(total)")
+                                .foregroundColor(.secondary)
                         } else {
-                            Button("Add Finish Date") {
-                                finishDate = Date()
-                            }
+                            Text("/ ?")
+                                .foregroundColor(.secondary)
                         }
                     }
-                    Section {
-                        Button(action: {
-                            calculateLocalProgress()
-                        }) {
-                            Label("Sync Local History", systemImage: "arrow.triangle.2.circlepath")
-                        }
 
-                        Button(action: {
-                            let urlStr = media.format == "MANGA" || media.format == "NOVEL" || media.format == "ONE_SHOT"
-                                ? "https://anilist.co/manga/\(media.id)"
-                                : "https://anilist.co/anime/\(media.id)"
-                            if let url = URL(string: urlStr) {
-                                UIApplication.shared.open(url)
-                            }
-                        }) {
-                            Label("View on AniList", systemImage: "safari")
-                        }
+                    HStack {
+                        Text("Score")
+                        Spacer()
+                        Slider(value: $score, in: 0...10, step: 0.5)
+                        Text(String(format: "%.1f", score))
+                    }
+                }
 
-                        if !isNewEntry {
-                            Button(role: .destructive, action: {
-                                if let onDelete = onDelete {
-                                    onDelete()
-                                }
-                                dismiss()
-                            }) {
-                                Label("Stop Tracking", systemImage: "trash")
-                                    .foregroundColor(.red)
+                Section(header: Text("Dates")) {
+                    DatePicker("Started", selection: $startDate, displayedComponents: .date)
+
+                    if finishDate != nil {
+                        DatePicker("Finished", selection: Binding(get: { finishDate ?? Date() }, set: { finishDate = $0 }), displayedComponents: .date)
+                        Button("Remove Finish Date") {
+                            finishDate = nil
+                        }
+                        .foregroundColor(.red)
+                    } else {
+                        Button("Add Finish Date") {
+                            finishDate = Date()
+                        }
+                    }
+                }
+                Section {
+                    Button(action: {
+                        calculateLocalProgress()
+                    }) {
+                        Label("Sync Local History", systemImage: "arrow.triangle.2.circlepath")
+                    }
+
+                    Button(action: {
+                        let urlStr = media.format == "MANGA" || media.format == "NOVEL" || media.format == "ONE_SHOT"
+                            ? "https://anilist.co/manga/\(media.id)"
+                            : "https://anilist.co/anime/\(media.id)"
+                        if let url = URL(string: urlStr) {
+                            UIApplication.shared.open(url)
+                        }
+                    }) {
+                        Label("View on \(provider.name)", systemImage: "safari")
+                    }
+
+                    if !isNewEntry {
+                        Button(role: .destructive, action: {
+                            if let onDelete = onDelete {
+                                onDelete()
                             }
+                            TrackerManager.shared.unlink(localId: localId, providerId: provider.identifier)
+                            dismiss()
+                        }) {
+                            Label("Stop Tracking", systemImage: "trash")
+                                .foregroundColor(.red)
                         }
                     }
                 }
             }
-            .navigationTitle("Update Entry")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    if showCancelButton {
-                        // Updated: pass nil for both progress and status when canceling
-                        Button("Cancel") { onSave(nil, nil); dismiss() }
-                    }
+        }
+        .navigationTitle("Update Entry")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                if showCancelButton {
+                    Button("Cancel") { onSave(nil, nil); dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(action: saveProgress) {
-                        if isSaving {
-                            ProgressView()
-                        } else {
-                            Text("Save").fontWeight(.bold)
-                        }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button(action: saveProgress) {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Text("Save").fontWeight(.bold)
                     }
                 }
             }
-            .alert("Sync Local History", isPresented: $showSyncAlert) {
-                Button("Cancel", role: .cancel) { }
-                Button("Sync") {
-                    if let maxLoc = maxLocalProgress {
-                        self.progress = String(maxLoc)
-                    }
-                }
-            } message: {
+        }
+        .alert("Sync Local History", isPresented: $showSyncAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Sync") {
                 if let maxLoc = maxLocalProgress {
-                    Text("We found local reading/watching history up to chapter/episode \(maxLoc). Do you want to update your AniList progress to match?")
-                } else {
-                    Text("No local reading or watching history was found for this series.")
+                    self.progress = String(maxLoc)
                 }
             }
-            .task {
-                guard isLoadingEntry else { return }
-                await fetchExistingEntry()
+        } message: {
+            if let maxLoc = maxLocalProgress {
+                Text("We found local reading/watching history up to chapter/episode \(maxLoc). Do you want to update your \(provider.name) progress to match?")
+            } else {
+                Text("No local reading or watching history was found for this series.")
             }
-            .onChange(of: progress) { newValue in
-                if let val = Int(newValue), val > 0, status == "PLANNING" {
-                    status = "CURRENT"
-                }
+        }
+        .task {
+            guard isLoadingEntry else { return }
+            await fetchExistingEntry()
+        }
+        .onChange(of: progress) { newValue in
+            if let val = Int(newValue), val > 0, status == "PLANNING" {
+                status = "CURRENT"
             }
+        }
     }
 
     private func calculateLocalProgress() {
-        // Find if we have a mapping to this AniList ID
-        let matchingMappings = TrackerManager.shared.trackerMappings.filter { $0.value == media.id }
-
-        // Find the maximum progress across any mapped local items (or fallback to LibraryManager search)
-        var highest: Int?
-
-        for (localId, _) in matchingMappings {
-            if let readNumbers = ReadProgressManager.shared.readChapterNumbers[localId], let maxNum = readNumbers.max() {
-                if let current = highest {
-                    highest = max(current, Int(maxNum))
-                } else {
-                    highest = Int(maxNum)
-                }
-            }
+        if let readNumbers = ReadProgressManager.shared.readChapterNumbers[localId], let maxNum = readNumbers.max() {
+            self.maxLocalProgress = Int(maxNum)
+            self.showSyncAlert = true
+        } else {
+            self.maxLocalProgress = nil
+            self.showSyncAlert = true
         }
-
-        // Backward compatibility: If no mapping found in TrackerManager, check LibraryManager directly
-        if highest == nil {
-            if let matchingItem = LibraryManager.shared.items.first(where: { $0.anilistId == media.id }) {
-                if let readNumbers = ReadProgressManager.shared.readChapterNumbers[matchingItem.id] {
-                    if let maxNum = readNumbers.max() {
-                        highest = Int(maxNum)
-                    }
-                }
-            }
-        }
-
-        self.maxLocalProgress = highest
-        self.showSyncAlert = true
     }
 
     private func fetchExistingEntry() async {
         do {
-            if let entry = try await TrackerManager.shared.getMediaListEntry(mediaId: media.id) {
-                print("Found existing entry: \(entry)")
+            if let entry = try await provider.getMediaListEntry(mediaId: media.id) {
                 await MainActor.run {
                     self.isNewEntry = false
 
-                    if let statusStr = entry["status"] as? String {
+                    if let statusStr = entry.status {
                         self.status = statusStr
                     } else {
                         self.status = "PLANNING"
                     }
-                    if let prog = entry["progress"] as? Int {
+                    if let prog = entry.progress {
                         self.progress = String(prog)
                     }
-                    if let scoreVal = entry["score"] as? Double {
+                    if let scoreVal = entry.score {
                         self.score = scoreVal
                     }
-
-                    // Parse Dates if available
-                    if let start = entry["startedAt"] as? [String: Any?],
-                       let year = start["year"] as? Int, let month = start["month"] as? Int, let day = start["day"] as? Int {
-                        var components = DateComponents()
-                        components.year = year
-                        components.month = month
-                        components.day = day
-                        if let date = Calendar.current.date(from: components) {
-                            self.startDate = date
-                        }
+                    if let start = entry.startDate {
+                        self.startDate = start
                     }
-
-                    if let end = entry["completedAt"] as? [String: Any?],
-                       let year = end["year"] as? Int, let month = end["month"] as? Int, let day = end["day"] as? Int {
-                        var components = DateComponents()
-                        components.year = year
-                        components.month = month
-                        components.day = day
-                        if let date = Calendar.current.date(from: components) {
-                            self.finishDate = date
-                        }
+                    if let end = entry.finishDate {
+                        self.finishDate = end
                     }
                 }
             } else {
-                // No entry found, treat as new.
-                // Default start/finish dates are already set to Date() by state initialization.
-                // We keep them as is so user can just hit save.
                 await MainActor.run {
                     self.isNewEntry = true
                 }
             }
         } catch {
-            print("Failed to fetch existing entry: \(error)")
-            // If error (e.g. 404 or auth error), assume new entry or offline
             await MainActor.run {
                 self.isNewEntry = true
             }
@@ -460,35 +525,24 @@ struct TrackerDetailsSheet: View {
     }
 
     private func saveProgress() {
-            isSaving = true
-            Task {
-                var savedProgress: Int?
-                let progInt = Int(progress)
-                let effectiveStatus = status
+        isSaving = true
+        Task {
+            var savedProgress: Int?
+            let progInt = Int(progress)
+            let effectiveStatus = status
 
-                do {
-                    try await TrackerManager.shared.updateProgress(mediaId: media.id, progress: progInt, status: effectiveStatus)
-                    savedProgress = progInt
-                } catch {
-                    print("Failed saving TrackerProgress with status: \(error.localizedDescription)")
-                }
+            do {
+                try await provider.updateProgress(mediaId: media.id, progress: progInt, status: effectiveStatus)
+                savedProgress = progInt
+            } catch {
+                print("Failed saving TrackerProgress with status: \(error.localizedDescription)")
+            }
 
-                await MainActor.run {
-                    isSaving = false
-                    onSave(savedProgress, effectiveStatus)
-                    dismiss() // NEW: Tell the sheet to close after saving!
-                }
+            await MainActor.run {
+                isSaving = false
+                onSave(savedProgress, effectiveStatus)
+                dismiss()
             }
         }
-}
-
-// Data Model for Search
-public struct AnilistMedia: Identifiable, Codable {
-    public let id: Int
-    public let title: String
-    public let titleRomaji: String?
-    public let coverImage: String?
-    public let format: String?
-    public let episodes: Int?
-    public let chapters: Int?
+    }
 }

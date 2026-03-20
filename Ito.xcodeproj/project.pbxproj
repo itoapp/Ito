@@ -10,7 +10,7 @@
 		3A7509552F57FFE40057955D /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3A7509542F57FFE40057955D /* ito-runner */; };
 		3AC825702F5FD9300054AD29 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC8256F2F5FD9300054AD29 /* Nuke */; };
 		3AC825722F5FD9300054AD29 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC825712F5FD9300054AD29 /* NukeUI */; };
-		3AD389352F61FD8300AED636 /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3AD389342F61FD8300AED636 /* ito-runner */; };
+		3ADF8E0F2F6CE2E6007A5EA0 /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3ADF8E0E2F6CE2E6007A5EA0 /* ito-runner */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -73,7 +73,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3AC825722F5FD9300054AD29 /* NukeUI in Frameworks */,
-				3AD389352F61FD8300AED636 /* ito-runner in Frameworks */,
+				3ADF8E0F2F6CE2E6007A5EA0 /* ito-runner in Frameworks */,
 				3A7509552F57FFE40057955D /* ito-runner in Frameworks */,
 				3AC825702F5FD9300054AD29 /* Nuke in Frameworks */,
 			);
@@ -140,7 +140,7 @@
 				3A7509542F57FFE40057955D /* ito-runner */,
 				3AC8256F2F5FD9300054AD29 /* Nuke */,
 				3AC825712F5FD9300054AD29 /* NukeUI */,
-				3AD389342F61FD8300AED636 /* ito-runner */,
+				3ADF8E0E2F6CE2E6007A5EA0 /* ito-runner */,
 			);
 			productName = Ito;
 			productReference = 3A43D87F2F57E4BD008E061E /* Ito.app */;
@@ -227,7 +227,7 @@
 			packageReferences = (
 				3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */,
 				3AC825732F5FF84D0054AD29 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */,
-				3AD389332F61FD8300AED636 /* XCRemoteSwiftPackageReference "ito-runner" */,
+				3ADF8E0D2F6CE2E6007A5EA0 /* XCLocalSwiftPackageReference "projects/ito-runner" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3A43D8802F57E4BD008E061E /* Products */;
@@ -623,12 +623,19 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		3ADF8E0D2F6CE2E6007A5EA0 /* XCLocalSwiftPackageReference "projects/ito-runner" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "projects/ito-runner";
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/kean/Nuke";
 			requirement = {
-				kind = upToNextMajorVersion;
+				kind = upToNextMinorVersion;
 				minimumVersion = 12.9.0;
 			};
 		};
@@ -636,16 +643,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/SimplyDanny/SwiftLintPlugins";
 			requirement = {
-				kind = upToNextMajorVersion;
+				kind = upToNextMinorVersion;
 				minimumVersion = 0.63.2;
-			};
-		};
-		3AD389332F61FD8300AED636 /* XCRemoteSwiftPackageReference "ito-runner" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/kunihir0/ito-runner";
-			requirement = {
-				branch = main;
-				kind = branch;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -670,9 +669,8 @@
 			package = 3AC825732F5FF84D0054AD29 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */;
 			productName = "plugin:SwiftLintBuildToolPlugin";
 		};
-		3AD389342F61FD8300AED636 /* ito-runner */ = {
+		3ADF8E0E2F6CE2E6007A5EA0 /* ito-runner */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 3AD389332F61FD8300AED636 /* XCRemoteSwiftPackageReference "ito-runner" */;
 			productName = "ito-runner";
 		};
 /* End XCSwiftPackageProductDependency section */

@@ -95,7 +95,7 @@ struct MangaView: View {
     @State private var readingChapter: IdentifiableChapter?
 
     @State private var showTrackerSearch = false
-    @State private var trackingMedia: AnilistMedia?
+
     @State private var isDescriptionExpanded = false
     @State private var showNavTitle = false
 
@@ -107,7 +107,7 @@ struct MangaView: View {
     @ObservedObject var libraryManager = LibraryManager.shared
 
     private var isSaved: Bool { libraryManager.isSaved(id: manga.key) }
-    private var isTracked: Bool { TrackerManager.shared.getAnilistId(for: manga.key) != nil }
+    private var isTracked: Bool { TrackerManager.shared.trackerMappings[manga.key]?.isEmpty == false }
 
     private var cleanDescription: String? {
         guard let desc = manga.description, !desc.isEmpty else { return nil }
@@ -183,31 +183,13 @@ struct MangaView: View {
             }
         }
         .sheet(isPresented: $showTrackerSearch) {
-                    // UPDATED: Added `, _` to accept the status parameter
-                    TrackerSearchSheet(title: manga.title, isAnime: false) { media, progress, _ in
-                        TrackerManager.shared.link(localId: manga.key, anilistId: media.id)
-                        if let prog = progress,
-                           UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
-                            ReadProgressManager.shared.markReadUpTo(mangaId: manga.key, maxChapterNum: Float(prog))
-                        }
-                    }
+            TrackerSheetOrchestrator(localId: manga.key, title: manga.title, isAnime: false) { _, progress, _ in
+                if let prog = progress,
+                   UserDefaults.standard.object(forKey: "Ito.AutoSyncTrackersToLocal") as? Bool ?? true {
+                    ReadProgressManager.shared.markReadUpTo(mangaId: manga.key, maxChapterNum: Float(prog))
                 }
-                .sheet(item: $trackingMedia) { media in
-                    NavigationView {
-                        TrackerDetailsSheet(
-                            media: media,
-                            showCancelButton: true,
-                            // UPDATED: Added `, _` to accept the status parameter
-                            onSave: { progress, _ in
-                                if let prog = progress,
-                                   UserDefaults.standard.object(forKey: "Ito.AutoSyncAnilistToLocal") as? Bool ?? true {
-                                    ReadProgressManager.shared.markReadUpTo(mangaId: manga.key, maxChapterNum: Float(prog))
-                                }
-                            },
-                            onDelete: { TrackerManager.shared.unlink(localId: manga.key) }
-                        )
-                    }
-                }
+            }
+        }
         .fullScreenCover(item: $readingChapter) { wrapper in
             ReaderView(runner: runner, pluginId: pluginId, manga: manga, currentChapter: wrapper.chapter)
         }
@@ -345,16 +327,9 @@ struct MangaView: View {
             }
             .tint(isSaved ? .blue : .secondary).buttonStyle(.bordered).controlSize(.regular)
 
-            if TrackerManager.shared.isAnilistAuthenticated {
+            if !TrackerManager.shared.authenticatedProviders.isEmpty {
                 Button {
-                    if isTracked {
-                        let existingId = TrackerManager.shared.getAnilistId(for: manga.key)!
-                        trackingMedia = AnilistMedia(id: existingId, title: manga.title,
-                            titleRomaji: nil, coverImage: manga.cover,
-                            format: "MANGA", episodes: nil, chapters: nil)
-                    } else {
-                        showTrackerSearch = true
-                    }
+                    showTrackerSearch = true
                 } label: {
                     Label(
                         isTracked ? "Tracking" : "Track",

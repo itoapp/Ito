@@ -171,24 +171,16 @@ extension NovelReaderView {
                 self.progressManager.markAsRead(mangaId: novel.key, chapterId: currentChapter.key, chapterNum: currentChapter.chapter)
 
                 // Track progress
-                if TrackerManager.shared.isAnilistAuthenticated {
-                    Task {
-                        if let mediaId = TrackerManager.shared.getAnilistId(for: novel.key) {
-                            do {
-                                if let chapterFloat = currentChapter.chapter {
-                                    try await TrackerManager.shared.updateProgress(mediaId: mediaId, progress: Int(chapterFloat))
-                                } else {
-                                    let titleOrFallback = currentChapter.title ?? currentChapter.key
-                                    let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
-                                    if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                                        let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                                        if let chapNum = Int(numbersOnly) {
-                                            try await TrackerManager.shared.updateProgress(mediaId: mediaId, progress: chapNum)
-                                        }
-                                    }
-                                }
-                            } catch {
-                                print("📖 [DEBUG-TRACKER] Failed to update progress: \(error)")
+                Task {
+                    if let chapterFloat = currentChapter.chapter {
+                        await TrackerManager.shared.updateProgress(localId: novel.key, progress: Int(chapterFloat))
+                    } else {
+                        let titleOrFallback = currentChapter.title ?? currentChapter.key
+                        let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
+                        if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
+                            let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                            if let chapNum = Int(numbersOnly) {
+                                await TrackerManager.shared.updateProgress(localId: novel.key, progress: chapNum)
                             }
                         }
                     }

@@ -534,22 +534,18 @@ extension ReaderView {
             mangaId: manga.key, chapterId: chapter.key, chapterNum: chapter.chapter
         )
 
-        if TrackerManager.shared.isAnilistAuthenticated {
-            Task {
-                if let mediaId = TrackerManager.shared.getAnilistId(for: manga.key) {
-                    if let chapterFloat = chapter.chapter {
-                        try? await TrackerManager.shared.updateProgress(mediaId: mediaId, progress: Int(chapterFloat))
-                    } else {
-                        let titleOrFallback = chapter.title ?? chapter.key
-                        let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
+        Task {
+            if let chapterFloat = chapter.chapter {
+                await TrackerManager.shared.updateProgress(localId: manga.key, progress: Int(chapterFloat))
+            } else {
+                let titleOrFallback = chapter.title ?? chapter.key
+                let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
 
-                        // Parse first valid number isolated by spaces
-                        if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                            let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                            if let chapNum = Int(numbersOnly) {
-                                try? await TrackerManager.shared.updateProgress(mediaId: mediaId, progress: chapNum)
-                            }
-                        }
+                // Parse first valid number isolated by spaces
+                if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
+                    let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                    if let chapNum = Int(numbersOnly) {
+                        await TrackerManager.shared.updateProgress(localId: manga.key, progress: chapNum)
                     }
                 }
             }

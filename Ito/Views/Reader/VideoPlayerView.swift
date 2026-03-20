@@ -346,23 +346,17 @@ struct VideoPlayerView: View {
                     ReadProgressManager.shared.markAsWatched(animeId: anime.key, episodeId: episode.key, episodeNum: episode.episode)
                 }
 
-                if let mediaId = TrackerManager.shared.getAnilistId(for: anime.key) {
-                    Task {
-                        do {
-                            if let episodeFloat = episode.episode {
-                                try await TrackerManager.shared.updateProgress(mediaId: mediaId, progress: Int(episodeFloat))
-                            } else {
-                                let titleOrFallback = episode.title ?? episode.key
-                                let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
-                                if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                                    let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                                    if let episodeNum = Int(numbersOnly) {
-                                        try await TrackerManager.shared.updateProgress(mediaId: mediaId, progress: episodeNum)
-                                    }
-                                }
+                Task {
+                    if let episodeFloat = episode.episode {
+                        await TrackerManager.shared.updateProgress(localId: anime.key, progress: Int(episodeFloat))
+                    } else {
+                        let titleOrFallback = episode.title ?? episode.key
+                        let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
+                        if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
+                            let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                            if let episodeNum = Int(numbersOnly) {
+                                await TrackerManager.shared.updateProgress(localId: anime.key, progress: episodeNum)
                             }
-                        } catch {
-                            print("🎬 [DEBUG-TRACKER] Failed to update progress: \(error)")
                         }
                     }
                 }
