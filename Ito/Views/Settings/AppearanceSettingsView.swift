@@ -19,6 +19,8 @@ struct AppearanceSettingsView: View {
     }
 }
 
-#Preview {
-    AppearanceSettingsView()
+struct AppearanceSettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        AppearanceSettingsView()
+    }
 }

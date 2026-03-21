@@ -3,6 +3,7 @@ import Foundation
 import SwiftUI
 import ito_runner
 
+@MainActor
 public class UpdateManager: ObservableObject {
     public static let shared = UpdateManager()
 
@@ -69,7 +70,7 @@ public class UpdateManager: ObservableObject {
         saveState()
     }
 
-    private nonisolated func checkSingleItem(_ item: LibraryItem) async {
+    private func checkSingleItem(_ item: LibraryItem) async {
         print("🔄 [UpdateManager] Checking: \(item.title) (type: \(item.effectiveType))")
         do {
             let runner = try await PluginManager.shared.getRunner(for: item.pluginId)
@@ -103,7 +104,6 @@ public class UpdateManager: ObservableObject {
 
             print("🔄 [UpdateManager] \(item.title): \(latestCount) total, \(unreadCount) unread")
 
-            await MainActor.run {
                 if unreadCount > 0 {
                     self.unreadCounts[item.id] = unreadCount
                 } else {
@@ -111,13 +111,10 @@ public class UpdateManager: ObservableObject {
                 }
                 self.itemsCheckedCurrentRun += 1
                 print("🔄 [UpdateManager] Progress: \(self.itemsCheckedCurrentRun)/\(self.totalItemsToCheck)")
-            }
 
         } catch {
             print("🔄 [UpdateManager] ❌ Failed for \(item.title): \(error)")
-            await MainActor.run {
-                self.itemsCheckedCurrentRun += 1
-            }
+            self.itemsCheckedCurrentRun += 1
         }
     }
 

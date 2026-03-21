@@ -89,6 +89,8 @@ struct TrackerSettingsView: View {
     }
 }
 
-#Preview {
-    TrackerSettingsView()
+struct TrackerSettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        TrackerSettingsView()
+    }
 }

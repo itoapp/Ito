@@ -587,6 +587,8 @@ struct UpdateProgressBanner: View {
 
 // MARK: - Preview
 
-#Preview {
-    LibraryView()
+struct LibraryView_Previews: PreviewProvider {
+    static var previews: some View {
+        LibraryView()
+    }
 }

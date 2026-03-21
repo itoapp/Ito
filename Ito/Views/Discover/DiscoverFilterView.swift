@@ -288,54 +288,15 @@ struct WrappingHStack<Item: Hashable, ItemView: View>: View {
         self.viewForItem = viewForItem
     }
 
-    @State private var totalHeight: CGFloat = .zero
-
     var body: some View {
-        GeometryReader { geometry in
-            generateContent(in: geometry)
-        }
-        .frame(height: totalHeight)
-    }
-
-    private func generateContent(in geometry: GeometryProxy) -> some View {
-        var width = CGFloat.zero
-        var height = CGFloat.zero
-
-        return ZStack(alignment: .topLeading) {
-            ForEach(items, id: \.self) { item in
-                viewForItem(item)
-                    .padding(.vertical, 2)
-                    .alignmentGuide(.leading) { d in
-                        if abs(width - d.width) > geometry.size.width {
-                            width = 0
-                            height -= d.height + spacing
-                        }
-                        let result = width
-                        if item == items.last {
-                            width = 0
-                        } else {
-                            width -= d.width + spacing
-                        }
-                        return result
-                    }
-                    .alignmentGuide(.top) { _ in
-                        let result = height
-                        if item == items.last {
-                            height = 0
-                        }
-                        return result
-                    }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: spacing) {
+                ForEach(items, id: \.self) { item in
+                    viewForItem(item)
+                }
             }
-        }
-        .background(viewHeightReader($totalHeight))
-    }
-
-    private func viewHeightReader(_ binding: Binding<CGFloat>) -> some View {
-        GeometryReader { geometry -> Color in
-            DispatchQueue.main.async {
-                binding.wrappedValue = geometry.frame(in: .local).size.height
-            }
-            return Color.clear
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
         }
     }
 }

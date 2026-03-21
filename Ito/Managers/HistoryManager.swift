@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import ito_runner
 
-public struct HistoryEntry: Codable, Identifiable, Hashable {
+public struct HistoryEntry: Codable, Identifiable, Hashable, Sendable {
     public var id: String { item.id }
     public let item: LibraryItem
     public var lastReadAt: Date
@@ -13,6 +13,7 @@ public struct HistoryEntry: Codable, Identifiable, Hashable {
     }
 }
 
+@MainActor
 public class HistoryManager: ObservableObject {
     public static let shared = HistoryManager()
 

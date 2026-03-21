@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 
+@MainActor
 public class TrackerManager: ObservableObject {
     public static let shared = TrackerManager()
 

@@ -3,7 +3,7 @@ import Foundation
 import SwiftUI
 import ito_runner
 
-public struct LibraryItem: Codable, Identifiable, Hashable {
+public struct LibraryItem: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     public let title: String
     public let coverUrl: String?
@@ -32,6 +32,7 @@ public struct LibraryItem: Codable, Identifiable, Hashable {
     }
 }
 
+@MainActor
 public class LibraryManager: ObservableObject {
     public static let shared = LibraryManager()
 

@@ -4,6 +4,7 @@ import SwiftUI
 
 /// Manages reading progress, tracking which chapters have been read,
 /// and the last read chapter per manga.
+@MainActor
 public class ReadProgressManager: ObservableObject {
     public static let shared = ReadProgressManager()
 
@@ -72,9 +73,7 @@ public class ReadProgressManager: ObservableObject {
         lastReadChapter[mangaId] = chapterId
 
         // Clear the unread badge automatically when the user reads a chapter
-        Task { @MainActor in
-            UpdateManager.shared.decrementBadge(for: mangaId)
-        }
+        UpdateManager.shared.decrementBadge(for: mangaId)
 
         saveProgress()
     }
@@ -113,9 +112,7 @@ public class ReadProgressManager: ObservableObject {
         readChapterNumbers[mangaId]?.insert(maxChapterNum)
 
         // Bulk operation — fully clear the badge. Next refresh will recalculate.
-        Task { @MainActor in
-            UpdateManager.shared.clearBadge(for: mangaId)
-        }
+        UpdateManager.shared.clearBadge(for: mangaId)
 
         saveProgress()
     }

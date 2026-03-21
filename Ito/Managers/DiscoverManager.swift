@@ -23,7 +23,7 @@ struct DiscoverMedia: Identifiable, Codable, Hashable, Sendable {
     let recommendations: [DiscoverMedia]?
 }
 
-struct DiscoverTag: Identifiable, Codable, Hashable {
+struct DiscoverTag: Identifiable, Codable, Hashable, Sendable {
     let id: Int
     let name: String
     let description: String?
@@ -54,7 +54,7 @@ enum DiscoverSort: String, CaseIterable {
     }
 }
 
-struct DiscoverFilters: Equatable {
+struct DiscoverFilters: Equatable, Sendable {
     var genres: [String] = []
     var tags: [String] = []
     var format: String?
@@ -80,6 +80,7 @@ private struct CacheEntry<T> {
 
 // MARK: - DiscoverManager
 
+@MainActor
 public class DiscoverManager: ObservableObject {
     public static let shared = DiscoverManager()
 

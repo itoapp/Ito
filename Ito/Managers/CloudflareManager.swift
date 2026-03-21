@@ -78,8 +78,8 @@ class CloudflareManager: NSObject, ObservableObject {
                     let baseHost = host.replacingOccurrences(of: "www.", with: "")
 
                     let cookies = await self.fetchCookies()
-                    if let cfCookie = cookies.first(where: { $0.name == self.clearanceCookieName && $0.domain.contains(baseHost) }) {
-                        print("[CloudflareManager] Polled and found cf_clearance cookie! Domain: \\(cfCookie.domain)")
+                    if cookies.contains(where: { $0.name == self.clearanceCookieName && $0.domain.contains(baseHost) }) {
+                        print("[CloudflareManager] Polled and found cf_clearance cookie! Domain: \(baseHost)")
                         self.extractClearanceAndComplete()
                         break
                     }

@@ -263,7 +263,9 @@ struct VideoPlayerView: View {
 
             // Setup periodic time observer for custom subtitles
             self.player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
-                self.updateSubtitles(for: time.seconds)
+                Task { @MainActor in
+                    self.updateSubtitles(for: time.seconds)
+                }
             }
         } else {
             self.player?.replaceCurrentItem(with: playerItem)

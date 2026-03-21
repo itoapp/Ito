@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import CryptoKit
 
-public struct RepoPackage: Codable, Identifiable, Hashable {
+public struct RepoPackage: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
     public let version: String
@@ -21,7 +21,7 @@ public struct RepoPackage: Codable, Identifiable, Hashable {
     }
 }
 
-public struct RepoIndex: Codable, Equatable {
+public struct RepoIndex: Codable, Equatable, Sendable {
     public let repoName: String
     public let repoUrl: String
     public let description: String
@@ -34,13 +34,14 @@ public struct RepoIndex: Codable, Equatable {
     }
 }
 
-public struct Repository: Codable, Identifiable, Equatable {
+public struct Repository: Codable, Identifiable, Equatable, Sendable {
     public var id: String { url }
     public let url: String
     public var lastFetched: Date?
     public var index: RepoIndex?
 }
 
+@MainActor
 public class RepoManager: ObservableObject {
     public static let shared = RepoManager()
 
@@ -82,11 +83,9 @@ public class RepoManager: ObservableObject {
             repo.index = fetchedIndex
             repo.lastFetched = Date()
 
-            DispatchQueue.main.async {
-                self.repositories.append(repo)
-                self.saveRepos()
-                print("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
-            }
+            self.repositories.append(repo)
+            self.saveRepos()
+            print("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
         } catch {
             print("🌍 [DEBUG-REPO] Failed to add repository: \(error)")
             throw error
@@ -104,12 +103,10 @@ public class RepoManager: ObservableObject {
         for (index, repo) in repositories.enumerated() {
             do {
                 let newIndex = try await fetchIndex(for: repo.url)
-                DispatchQueue.main.async {
-                    self.repositories[index].index = newIndex
-                    self.repositories[index].lastFetched = Date()
-                    self.saveRepos()
-                    print("🌍 [DEBUG-REPO] Refreshed: \(newIndex.repoName)")
-                }
+                self.repositories[index].index = newIndex
+                self.repositories[index].lastFetched = Date()
+                self.saveRepos()
+                print("🌍 [DEBUG-REPO] Refreshed: \(newIndex.repoName)")
             } catch {
                 print("🌍 [DEBUG-REPO] Failed to refresh \(repo.url): \(error)")
             }

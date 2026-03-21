@@ -19,6 +19,8 @@ struct PrivacySettingsView: View {
     }
 }
 
-#Preview {
-    PrivacySettingsView()
+struct PrivacySettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        PrivacySettingsView()
+    }
 }

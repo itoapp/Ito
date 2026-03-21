@@ -312,21 +312,21 @@ struct BrowseView: View {
 
         provider.loadFileRepresentation(forTypeIdentifier: typeToLoad) { url, error in
             guard let tempURL = url else {
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     withAnimation { self.errorMessage = "Failed to load dropped file: \(String(describing: error))" }
                 }
                 return
             }
 
             guard tempURL.pathExtension.lowercased() == "ito" else {
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     withAnimation { self.errorMessage = "Please drop a valid .ito plugin file." }
                 }
                 return
             }
 
             let fileManager = FileManager.default
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 guard let pluginsDir = self.getPluginsDirectory() else {
                     withAnimation { self.errorMessage = "Failed to access plugins directory." }
                     return

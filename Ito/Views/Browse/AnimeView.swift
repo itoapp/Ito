@@ -159,16 +159,36 @@ struct AnimeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                heroHeader
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: AnimeNavTitleKey.self,
-                                value: geo.frame(in: .global).maxY < 0
-                            )
-                        }
-                    )
-                contentSection
+                SharedHeroHeader(
+                    title: anime.title,
+                    coverURL: anime.cover,
+                    authorOrStudio: anime.studios?.joined(separator: ", "),
+                    statusLabel: statusLabel(for: anime.status),
+                    pluginId: pluginId
+                )
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: AnimeNavTitleKey.self,
+                            value: geo.frame(in: .global).maxY < 0
+                        )
+                    }
+                )
+
+                SharedDetailContent(
+                    isSaved: isSaved,
+                    isTracked: isTracked,
+                    tags: anime.tags,
+                    cleanDescription: cleanDescription,
+                    onSaveToggle: {
+                        LibraryManager.shared.toggleSaveAnime(anime: anime, pluginId: pluginId)
+                    },
+                    onTrackToggle: TrackerManager.shared.authenticatedProviders.isEmpty ? nil : {
+                        showTrackerSearch = true
+                    }
+                )
+
+                episodeSection
             }
         }
         .onPreferenceChange(AnimeNavTitleKey.self) { heroGone in
@@ -198,192 +218,6 @@ struct AnimeView: View {
         }
         .task { await loadDetails() }
         .refreshable { await loadDetails(force: true) }
-    }
-
-    // MARK: - Hero Header
-
-    private var heroHeader: some View {
-        ZStack(alignment: .bottom) {
-            coverBackground
-
-            LinearGradient(
-                gradient: Gradient(stops: [
-                    .init(color: .clear, location: 0.0),
-                    .init(color: .black.opacity(0.15), location: 0.4),
-                    .init(color: .black.opacity(0.72), location: 1.0)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea(edges: .top)
-
-            HStack(alignment: .bottom, spacing: 14) {
-                sharpCoverView
-                heroMetadata.padding(.bottom, 20)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-        }
-        .frame(height: animeHeroHeight)
-        .ignoresSafeArea(edges: .top)
-    }
-
-    @ViewBuilder
-    private var coverBackground: some View {
-        if let coverURL = anime.cover, let url = URL(string: coverURL) {
-            LazyImage(url: url) { state in
-                if let image = state.image {
-                    image.resizable().aspectRatio(contentMode: .fill)
-                        .blur(radius: 28, opaque: true)
-                } else {
-                    Color(.secondarySystemBackground)
-                }
-            }
-            .processors([.resize(width: 400)])
-            .frame(maxWidth: .infinity)
-            .frame(height: animeHeroHeight)
-            .clipped()
-            .ignoresSafeArea(edges: .top)
-            .overlay(Color.black.opacity(0.35))
-        } else {
-            Color(.secondarySystemBackground)
-                .frame(height: animeHeroHeight)
-                .ignoresSafeArea(edges: .top)
-        }
-    }
-
-    private var sharpCoverView: some View {
-        Group {
-            if let coverURL = anime.cover, let url = URL(string: coverURL) {
-                LazyImage(url: url) { state in
-                    if let image = state.image {
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } else if state.error != nil {
-                        Color(.secondarySystemFill)
-                    } else {
-                        Color(.secondarySystemFill).overlay(ProgressView().tint(.white))
-                    }
-                }
-                // Same processor as background — shares Nuke cache, one request
-                .processors([.resize(width: 400)])
-            } else {
-                ZStack {
-                    Color(.secondarySystemFill)
-                    Image(systemName: "photo.on.rectangle.angled").foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .frame(width: 130, height: 195)
-        .cornerRadius(10)
-        .clipped()
-        .shadow(color: .black.opacity(0.5), radius: 14, x: 0, y: 6)
-    }
-
-    private var heroMetadata: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(anime.title)
-                .font(.title2).fontWeight(.bold)
-                .foregroundColor(.white)
-                .lineLimit(3)
-                .fixedSize(horizontal: false, vertical: true)
-                .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 1)
-
-            if let studios = anime.studios, !studios.isEmpty {
-                Text(studios.joined(separator: ", "))
-                    .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.8))
-                    .lineLimit(1)
-            }
-
-            HStack(spacing: 6) {
-                if let label = statusLabel(for: anime.status) {
-                    AnimeHeroBadge(label: label)
-                }
-                AnimeHeroBadge(label: pluginId.capitalized)
-            }
-        }
-    }
-
-    // MARK: - Content Section
-
-    private var contentSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            actionButtons.padding(.horizontal, 16).padding(.top, 16)
-
-            if let tags = anime.tags, !tags.isEmpty { tagsRow(tags: tags) }
-            if let desc = cleanDescription { descriptionSection(desc) }
-
-            Divider().padding(.horizontal, 16)
-
-            episodeSection
-        }
-        .padding(.bottom, 16)
-        .background(Color(.systemBackground))
-    }
-
-    // MARK: Action Buttons
-
-    private var actionButtons: some View {
-        HStack(spacing: 10) {
-            Button {
-                LibraryManager.shared.toggleSaveAnime(anime: anime, pluginId: pluginId)
-            } label: {
-                Label(isSaved ? "Saved" : "Save",
-                      systemImage: isSaved ? "bookmark.fill" : "bookmark")
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity)
-            }
-            .tint(isSaved ? .blue : .secondary)
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-
-            if !TrackerManager.shared.authenticatedProviders.isEmpty {
-                Button {
-                    showTrackerSearch = true
-                } label: {
-                    Label(isTracked ? "Tracking" : "Track",
-                          systemImage: isTracked ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
-                        .font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity)
-                }
-                .tint(isTracked ? .purple : .green)
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-            }
-        }
-    }
-
-    // MARK: Tags
-
-    private func tagsRow(tags: [String]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(tags, id: \.self) { tag in
-                    Text(tag).font(.caption).lineLimit(1)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Color(.tertiarySystemFill)).cornerRadius(12)
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-    }
-
-    // MARK: Description
-
-    private func descriptionSection(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(text).font(.subheadline).foregroundStyle(.primary)
-                .lineLimit(isDescriptionExpanded ? nil : 3)
-                .animation(.easeInOut(duration: 0.2), value: isDescriptionExpanded)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { isDescriptionExpanded.toggle() }
-            } label: {
-                Text(isDescriptionExpanded ? "Show less" : "Show more")
-                    .font(.caption).fontWeight(.semibold).foregroundStyle(.blue)
-            }
-        }
-        .padding(.horizontal, 16)
     }
 
     // MARK: - Episode Section
@@ -673,15 +507,6 @@ private struct AnimePressRecordingButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .onChange(of: configuration.isPressed) { pressed in isPressed = pressed }
-    }
-}
-
-private struct AnimeHeroBadge: View {
-    let label: String
-    var body: some View {
-        Text(label).font(.caption2).fontWeight(.medium)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(.white.opacity(0.2)).foregroundColor(.white).cornerRadius(5)
     }
 }
 

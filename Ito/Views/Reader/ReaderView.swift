@@ -101,9 +101,28 @@ struct ReaderView: View {
 
             if showUI {
                 VStack {
-                    headerView
+                    ReaderHeaderView(
+                        title: manga.title,
+                        chapterTitle: currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)",
+                        safeAreaTop: safeAreaTop,
+                        onDismiss: { dismiss() }
+                    )
+
                     Spacer()
-                    footerView
+
+                    ReaderFooterView(
+                        displayIndex: isPaged ? pagedIndex : continuousPageIndex,
+                        displayTotal: isPaged ? pagedPages.count : flatPages.count,
+                        hasPrev: chapterBefore(currentChapter) != nil,
+                        hasNext: chapterAfter(currentChapter) != nil,
+                        overrideViewer: $overrideViewer,
+                        safeAreaBottom: safeAreaBottom,
+                        onPrevChapter: { goToPreviousChapter() },
+                        onNextChapter: { goToNextChapter() },
+                        onPrevPage: { prevPage() },
+                        onNextPage: { nextPage() },
+                        onSettings: { showSettings.toggle() }
+                    )
                 }
                 .transition(.opacity)
                 .ignoresSafeArea(edges: .bottom)
@@ -121,127 +140,6 @@ struct ReaderView: View {
         .task { await loadInitialChapter() }
         .onDisappear { imagePrefetcher.stopPrefetching() }
     }
-
-    // MARK: - HUD
-
-    private var headerView: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(manga.title)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-
-                Text(currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.8))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-            .environment(\.colorScheme, .dark)
-
-            Spacer()
-
-            Button(action: { dismiss() }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(12)
-                    .background(.ultraThinMaterial, in: Circle())
-                    .environment(\.colorScheme, .dark)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.top, safeAreaTop)
-    }
-
-    private var footerView: some View {
-        let displayIndex = isPaged ? pagedIndex : continuousPageIndex
-        let displayTotal = isPaged ? pagedPages.count : flatPages.count
-        let hasPrev = chapterBefore(currentChapter) != nil
-        let hasNext = chapterAfter(currentChapter) != nil
-
-        return HStack {
-            if hasPrev {
-                Button(action: { goToPreviousChapter() }) {
-                    Image(systemName: "backward.end.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-            } else {
-                Color.clear.frame(width: 16, height: 16)
-            }
-
-            Spacer()
-
-            Button(action: { showSettings.toggle() }) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.white)
-            }
-
-            Spacer()
-
-            HStack(spacing: 24) {
-                Button(action: { prevPage() }) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(displayIndex > 0 ? .white : .white.opacity(0.3))
-                }
-                .disabled(displayIndex == 0)
-
-                Text("\(displayTotal == 0 ? 0 : displayIndex + 1) / \(displayTotal)")
-                    .font(.system(size: 14, weight: .bold).monospacedDigit())
-                    .foregroundColor(.white)
-                    .frame(minWidth: 60, alignment: .center)
-
-                Button(action: { nextPage() }) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(
-                            displayIndex < displayTotal - 1 ? .white : .white.opacity(0.3))
-                }
-                .disabled(displayIndex >= displayTotal - 1)
-            }
-
-            Spacer()
-
-            Menu {
-                Picker("Reading Mode", selection: $overrideViewer) {
-                    Text("Auto").tag(Manga.Viewer.Default)
-                    Text("Right to Left").tag(Manga.Viewer.Rtl)
-                    Text("Left to Right").tag(Manga.Viewer.Ltr)
-                    Text("Vertical").tag(Manga.Viewer.Vertical)
-                    Text("Webtoon").tag(Manga.Viewer.Webtoon)
-                }
-            } label: {
-                Image(systemName: "book.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.white)
-            }
-
-            Spacer()
-
-            if hasNext {
-                Button(action: { goToNextChapter() }) {
-                    Image(systemName: "forward.end.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                }
-            } else {
-                Color.clear.frame(width: 16, height: 16)
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 14)
-        .background(.ultraThinMaterial, in: Capsule())
-        .environment(\.colorScheme, .dark)
-        .padding(.horizontal, 20)
-        .padding(.bottom, safeAreaBottom > 0 ? safeAreaBottom : 16)
-    }
-
     // MARK: - Reader Components
 
     @ViewBuilder
@@ -378,12 +276,12 @@ struct ReaderView: View {
 
             VStack(spacing: 6) {
                 Text("Next Chapter")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundColor(.white.opacity(0.35))
                     .textCase(.uppercase)
 
                 Text(chapter.title ?? "Chapter \(chapter.chapter ?? 0)")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.headline)
                     .foregroundColor(.white.opacity(0.75))
                     .multilineTextAlignment(.center)
             }
@@ -785,6 +683,143 @@ struct ReaderSettingsView: View {
         case .Vertical: return "Vertical"
         case .Webtoon: return "Webtoon"
         }
+    }
+}
+
+// MARK: - Reader HUD Components
+
+private struct ReaderHeaderView: View {
+    let title: String
+    let chapterTitle: String
+    let safeAreaTop: CGFloat
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+
+                Text(chapterTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.8))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+            .environment(\.colorScheme, .dark)
+
+            Spacer()
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.bold))
+                    .foregroundColor(.white)
+                    .padding(12)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .environment(\.colorScheme, .dark)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, safeAreaTop)
+    }
+}
+
+private struct ReaderFooterView: View {
+    let displayIndex: Int
+    let displayTotal: Int
+    let hasPrev: Bool
+    let hasNext: Bool
+    @Binding var overrideViewer: Manga.Viewer
+    let safeAreaBottom: CGFloat
+
+    let onPrevChapter: () -> Void
+    let onNextChapter: () -> Void
+    let onPrevPage: () -> Void
+    let onNextPage: () -> Void
+    let onSettings: () -> Void
+
+    var body: some View {
+        HStack {
+            if hasPrev {
+                Button(action: onPrevChapter) {
+                    Image(systemName: "backward.end.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundColor(.white)
+                }
+            } else {
+                Color.clear.frame(width: 16, height: 16)
+            }
+
+            Spacer()
+
+            Button(action: onSettings) {
+                Image(systemName: "gearshape.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+            }
+
+            Spacer()
+
+            HStack(spacing: 24) {
+                Button(action: onPrevPage) {
+                    Image(systemName: "chevron.left")
+                        .font(.title3.weight(.bold))
+                        .foregroundColor(displayIndex > 0 ? .white : .white.opacity(0.3))
+                }
+                .disabled(displayIndex == 0)
+
+                Text("\(displayTotal == 0 ? 0 : displayIndex + 1) / \(displayTotal)")
+                    .font(.subheadline.weight(.bold).monospacedDigit())
+                    .foregroundColor(.white)
+                    .frame(minWidth: 60, alignment: .center)
+
+                Button(action: onNextPage) {
+                    Image(systemName: "chevron.right")
+                        .font(.title3.weight(.bold))
+                        .foregroundColor(
+                            displayIndex < displayTotal - 1 ? .white : .white.opacity(0.3))
+                }
+                .disabled(displayIndex >= displayTotal - 1)
+            }
+
+            Spacer()
+
+            Menu {
+                Picker("Reading Mode", selection: $overrideViewer) {
+                    Text("Auto").tag(Manga.Viewer.Default)
+                    Text("Right to Left").tag(Manga.Viewer.Rtl)
+                    Text("Left to Right").tag(Manga.Viewer.Ltr)
+                    Text("Vertical").tag(Manga.Viewer.Vertical)
+                    Text("Webtoon").tag(Manga.Viewer.Webtoon)
+                }
+            } label: {
+                Image(systemName: "book.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundColor(.white)
+            }
+
+            Spacer()
+
+            if hasNext {
+                Button(action: onNextChapter) {
+                    Image(systemName: "forward.end.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundColor(.white)
+                }
+            } else {
+                Color.clear.frame(width: 16, height: 16)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial, in: Capsule())
+        .environment(\.colorScheme, .dark)
+        .padding(.horizontal, 20)
+        .padding(.bottom, safeAreaBottom > 0 ? safeAreaBottom : 16)
     }
 }
 

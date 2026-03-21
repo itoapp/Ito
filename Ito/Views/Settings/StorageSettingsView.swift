@@ -39,6 +39,8 @@ struct StorageSettingsView: View {
     }
 }
 
-#Preview {
-    StorageSettingsView()
+struct StorageSettingsView_Previews: PreviewProvider {
+    static var previews: some View {
+        StorageSettingsView()
+    }
 }

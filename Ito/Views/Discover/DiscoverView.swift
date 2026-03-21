@@ -24,7 +24,7 @@ struct DiscoverView: View {
                 if !searchQuery.isEmpty || isFilterActive {
                     searchResultsView
                 } else {
-                    homeView
+                    DiscoverHomeView(manager: manager, selectedType: $selectedType)
                 }
             }
             .navigationTitle("Discover")
@@ -62,128 +62,6 @@ struct DiscoverView: View {
             }
         }
         .navigationViewStyle(.stack)
-    }
-
-    // MARK: - Home View
-
-    private var homeView: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                typePicker
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 16)
-
-                if manager.isLoadingHome && currentTrending.isEmpty {
-                    ProgressView("Loading...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 100)
-                } else if currentTrending.isEmpty && currentPopular.isEmpty && currentTopRated.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "wifi.slash")
-                            .font(.system(size: 48, weight: .thin))
-                            .foregroundStyle(.secondary)
-                        Text("Unable to load content")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                        Text("Check your connection and try again")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .multilineTextAlignment(.center)
-                        Button {
-                            Task {
-                                manager.clearCache(for: selectedType)
-                                await manager.loadHomeSections(for: selectedType)
-                            }
-                        } label: {
-                            Text("Try Again")
-                                .font(.body.weight(.medium))
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.top, 100)
-                } else {
-                    LazyVStack(spacing: 24) {
-                        if !currentTrending.isEmpty {
-                            discoverSection(title: "Trending Now", items: currentTrending)
-                        }
-                        if selectedType == .anime && !manager.seasonalAnime.isEmpty {
-                            discoverSection(title: "Popular This Season", items: manager.seasonalAnime)
-                        }
-                        if !currentPopular.isEmpty {
-                            discoverSection(title: "All-Time Popular", items: currentPopular)
-                        }
-                        if !currentTopRated.isEmpty {
-                            discoverSection(title: "Top Rated", items: currentTopRated)
-                        }
-                    }
-                    .padding(.bottom, 24)
-                }
-            }
-        }
-        .refreshable {
-            manager.clearCache(for: selectedType)
-            await manager.loadHomeSections(for: selectedType)
-        }
-        .task {
-            if currentTrending.isEmpty {
-                await manager.loadHomeSections(for: selectedType)
-            }
-        }
-        .onChange(of: selectedType) { newType in
-            Task {
-                if selectedType == .anime ? manager.trendingAnime.isEmpty : manager.trendingManga.isEmpty {
-                    await manager.loadHomeSections(for: newType)
-                }
-            }
-        }
-    }
-
-    // MARK: - Type Picker
-
-    private var typePicker: some View {
-        Picker("Type", selection: $selectedType) {
-            Text("Anime").tag(DiscoverMediaType.anime)
-            Text("Manga").tag(DiscoverMediaType.manga)
-        }
-        .pickerStyle(.segmented)
-    }
-
-    // MARK: - Computed Properties
-
-    private var currentTrending: [DiscoverMedia] {
-        selectedType == .anime ? manager.trendingAnime : manager.trendingManga
-    }
-
-    private var currentPopular: [DiscoverMedia] {
-        selectedType == .anime ? manager.popularAnime : manager.popularManga
-    }
-
-    private var currentTopRated: [DiscoverMedia] {
-        selectedType == .anime ? manager.topRatedAnime : manager.topRatedManga
-    }
-
-    // MARK: - Section
-
-    private func discoverSection(title: String, items: [DiscoverMedia]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.title2.weight(.bold))
-                .padding(.horizontal, 16)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(items) { media in
-                        NavigationLink(destination: DiscoverDetailView(media: media)) {
-                            DiscoverCardView(media: media)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-        }
     }
 
     // MARK: - Search Results
@@ -282,7 +160,7 @@ struct DiscoverView: View {
                 Text(label)
                     .font(.caption.weight(.medium))
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.caption2.weight(.bold))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -349,6 +227,127 @@ struct DiscoverView: View {
     }
 }
 
+// MARK: - Discover Home View
+
+private struct DiscoverHomeView: View {
+    @ObservedObject var manager: DiscoverManager
+    @Binding var selectedType: DiscoverMediaType
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                typePicker
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+
+                if manager.isLoadingHome && currentTrending.isEmpty {
+                    ProgressView("Loading...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 100)
+                } else if currentTrending.isEmpty && currentPopular.isEmpty && currentTopRated.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 48, weight: .thin))
+                            .foregroundStyle(.secondary)
+                        Text("Unable to load content")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                        Text("Check your connection and try again")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                        Button {
+                            Task {
+                                manager.clearCache(for: selectedType)
+                                await manager.loadHomeSections(for: selectedType)
+                            }
+                        } label: {
+                            Text("Try Again")
+                                .font(.body.weight(.medium))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, 100)
+                } else {
+                    LazyVStack(spacing: 24) {
+                        if !currentTrending.isEmpty {
+                            discoverSection(title: "Trending Now", items: currentTrending)
+                        }
+                        if selectedType == .anime && !manager.seasonalAnime.isEmpty {
+                            discoverSection(title: "Popular This Season", items: manager.seasonalAnime)
+                        }
+                        if !currentPopular.isEmpty {
+                            discoverSection(title: "All-Time Popular", items: currentPopular)
+                        }
+                        if !currentTopRated.isEmpty {
+                            discoverSection(title: "Top Rated", items: currentTopRated)
+                        }
+                    }
+                    .padding(.bottom, 24)
+                }
+            }
+        }
+        .refreshable {
+            manager.clearCache(for: selectedType)
+            await manager.loadHomeSections(for: selectedType)
+        }
+        .task {
+            if currentTrending.isEmpty {
+                await manager.loadHomeSections(for: selectedType)
+            }
+        }
+        .onChange(of: selectedType) { newType in
+            Task {
+                if selectedType == .anime ? manager.trendingAnime.isEmpty : manager.trendingManga.isEmpty {
+                    await manager.loadHomeSections(for: newType)
+                }
+            }
+        }
+    }
+
+    private var typePicker: some View {
+        Picker("Type", selection: $selectedType) {
+            Text("Anime").tag(DiscoverMediaType.anime)
+            Text("Manga").tag(DiscoverMediaType.manga)
+        }
+        .pickerStyle(.segmented)
+    }
+
+    private var currentTrending: [DiscoverMedia] {
+        selectedType == .anime ? manager.trendingAnime : manager.trendingManga
+    }
+
+    private var currentPopular: [DiscoverMedia] {
+        selectedType == .anime ? manager.popularAnime : manager.popularManga
+    }
+
+    private var currentTopRated: [DiscoverMedia] {
+        selectedType == .anime ? manager.topRatedAnime : manager.topRatedManga
+    }
+
+    private func discoverSection(title: String, items: [DiscoverMedia]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.title2.weight(.bold))
+                .padding(.horizontal, 16)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(items) { media in
+                        NavigationLink(destination: DiscoverDetailView(media: media)) {
+                            DiscoverCardView(media: media)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+}
+
 // MARK: - Discover Card
 
 struct DiscoverCardView: View {
@@ -382,7 +381,7 @@ struct DiscoverCardView: View {
 
                 if let score = media.averageScore {
                     Text("\(score)%")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundColor(.white)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -461,7 +460,7 @@ struct DiscoverSearchRow: View {
                     if let score = media.averageScore {
                         HStack(spacing: 2) {
                             Image(systemName: "star.fill")
-                                .font(.system(size: 8))
+                                .font(.caption2)
                             Text("\(score)%")
                                 .font(.caption2.weight(.medium))
                         }
@@ -485,6 +484,8 @@ struct DiscoverSearchRow: View {
     }
 }
 
-#Preview {
-    DiscoverView()
+struct DiscoverView_Previews: PreviewProvider {
+    static var previews: some View {
+        DiscoverView()
+    }
 }
