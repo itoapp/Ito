@@ -398,16 +398,6 @@ private struct DiscoverRecommendationCard: View {
     }
 }
 
-// MARK: - Plugin Search Result Model
-
-struct PluginSearchResult: Identifiable {
-    let id: String
-    let title: String
-    let cover: String?
-    let subtitle: String?
-    let destination: AnyView
-}
-
 // MARK: - Plugin Source Row
 
 private struct PluginSourceRow: View {
@@ -456,54 +446,5 @@ private struct PluginSourceRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Plugin Result Row
-
-private struct PluginResultRow: View {
-    let result: PluginSearchResult
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if let coverURL = result.cover, let url = URL(string: coverURL) {
-                LazyImage(url: url) { state in
-                    if let image = state.image {
-                        image.resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        Color.itoCardBackground
-                    }
-                }
-                .processors([.resize(width: 100)])
-                .frame(width: 50, height: 72)
-                .cornerRadius(8)
-                .clipped()
-            } else {
-                Color.itoCardBackground
-                    .frame(width: 50, height: 72)
-                    .cornerRadius(8)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(result.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let subtitle = result.subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
     }
 }

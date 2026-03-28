@@ -28,7 +28,7 @@ actor AppNetModule: NetModule {
 
         if let cookies = HTTPCookieStorage.shared.cookies(for: url), !cookies.isEmpty {
             var cookieMap: [String: String] = [:]
-            
+
             let existingCookieStr = updatedHeaders["Cookie"] ?? updatedHeaders["cookie"] ?? ""
             let components = existingCookieStr.components(separatedBy: "; ")
             for comp in components {
@@ -37,7 +37,7 @@ actor AppNetModule: NetModule {
                     cookieMap[String(parts[0]).trimmingCharacters(in: .whitespaces)] = String(parts[1]).trimmingCharacters(in: .whitespaces)
                 }
             }
-            
+
             for cookie in cookies {
                 cookieMap[cookie.name] = cookie.value
             }
