@@ -13,9 +13,10 @@ class CloudflareManager: NSObject, ObservableObject {
     private var resolveContinuation: CheckedContinuation<(userAgent: String, cookies: [HTTPCookie]), Error>?
     private var targetURL: URL?
     private var isResolving = false
-
     private let clearanceCookieName = "cf_clearance"
 
+    public static let defaultUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+    
     // We cache the valid UA and cookies per host
     private var cachedUserAgents: [String: String] = [:]
 
@@ -26,8 +27,8 @@ class CloudflareManager: NSObject, ObservableObject {
         super.init()
     }
 
-    func getCachedUserAgent(for host: String) -> String? {
-        return cachedUserAgents[host] ?? cachedUserAgents[host.replacingOccurrences(of: "www.", with: "")]
+    func getCachedUserAgent(for host: String) -> String {
+        return cachedUserAgents[host] ?? cachedUserAgents[host.replacingOccurrences(of: "www.", with: "")] ?? Self.defaultUserAgent
     }
 
     /// Resolves the Cloudflare challenge for the given URL and returns the solved User-Agent and Cookies.
@@ -106,30 +107,11 @@ class CloudflareManager: NSObject, ObservableObject {
             prefs.allowsContentJavaScript = true
             config.defaultWebpagePreferences = prefs
 
-            // Inject anti-bot evasion techniques and Turnstile auto-clicker
-            let evasionJS = """
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-
-            // Auto-click Turnstile logic
-            var interval = setInterval(function() {
-                var btn = document.querySelector('input[type="checkbox"]') ||
-                          document.querySelector('#challenge-stage') ||
-                          document.querySelector('#cf-stage') ||
-                          document.querySelector('.ctp-checkbox-label');
-                if (btn) {
-                    btn.click();
-                    clearInterval(interval);
-                }
-            }, 500);
-            setTimeout(function() { clearInterval(interval); }, 10000);
-            """
-
-            let script = WKUserScript(source: evasionJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
-            config.userContentController.addUserScript(script)
-
+            // Removed naive JS evasions and auto-clickers because Cloudflare Turnstile explicitly
+            // detects simulated .click() events (isTrusted = false) and bad navigator mocks,
+            // which causes the infinite reload/challenge loop block.
             let wv = WKWebView(frame: UIScreen.main.bounds, configuration: config)
+            wv.customUserAgent = Self.defaultUserAgent
             wv.navigationDelegate = self
             wv.alpha = 0.01
             wv.isUserInteractionEnabled = false
@@ -186,6 +168,9 @@ class CloudflareManager: NSObject, ObservableObject {
 
     private func finish(with result: (String, [HTTPCookie])) {
         guard isResolving else { return }
+        for cookie in result.1 {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
         isResolving = false
         timeoutTask?.cancel()
         pollingTask?.cancel()

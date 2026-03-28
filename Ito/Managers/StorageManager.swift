@@ -42,9 +42,9 @@ public class StorageManager: ObservableObject {
             // Set up Nuke to use our aggressive data cache instead of URLCache
             ImagePipeline.shared = ImagePipeline {
                 $0.dataCache = dataCache
-                // Disable URLCache so they don't fight over disk space
                 let config = URLSessionConfiguration.default
                 config.urlCache = nil
+                config.httpAdditionalHeaders = ["User-Agent": CloudflareManager.defaultUserAgent]
                 $0.dataLoader = DataLoader(configuration: config)
             }
         } catch {

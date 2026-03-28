@@ -23,9 +23,26 @@ actor AppNetModule: NetModule {
             let cachedUA = await MainActor.run {
                 CloudflareManager.shared.getCachedUserAgent(for: host)
             }
-            if let ua = cachedUA {
-                updatedHeaders["User-Agent"] = ua
+            updatedHeaders["User-Agent"] = cachedUA
+        }
+
+        if let cookies = HTTPCookieStorage.shared.cookies(for: url), !cookies.isEmpty {
+            var cookieMap: [String: String] = [:]
+            
+            let existingCookieStr = updatedHeaders["Cookie"] ?? updatedHeaders["cookie"] ?? ""
+            let components = existingCookieStr.components(separatedBy: "; ")
+            for comp in components {
+                let parts = comp.split(separator: "=", maxSplits: 1)
+                if parts.count == 2 {
+                    cookieMap[String(parts[0]).trimmingCharacters(in: .whitespaces)] = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                }
             }
+            
+            for cookie in cookies {
+                cookieMap[cookie.name] = cookie.value
+            }
+
+            updatedHeaders["Cookie"] = cookieMap.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
         }
 
         for (key, value) in updatedHeaders {
