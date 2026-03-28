@@ -89,22 +89,26 @@ public actor DiscoverService {
 
     // MARK: - Core Query
 
-    public func queryMedia(type: DiscoverMediaType, sort: DiscoverSort, season: String? = nil, seasonYear: Int? = nil, search: String? = nil, genres: [String]? = nil, tags: [String]? = nil, format: String? = nil, status: String? = nil, countryOfOrigin: String? = nil, page: Int = 1, perPage: Int = 20) async throws -> [DiscoverMedia] {
-        let (media, _) = try await queryMediaPaginated(type: type, sort: sort, season: season, seasonYear: seasonYear, search: search, genres: genres, tags: tags, format: format, status: status, countryOfOrigin: countryOfOrigin, page: page, perPage: perPage)
+    public func queryMedia(type: DiscoverMediaType, sort: DiscoverSort, season: String? = nil, seasonYear: Int? = nil, search: String? = nil, genres: [String]? = nil, excludedGenres: [String]? = nil, tags: [String]? = nil, excludedTags: [String]? = nil, format: String? = nil, status: String? = nil, countryOfOrigin: String? = nil, page: Int = 1, perPage: Int = 20) async throws -> [DiscoverMedia] {
+        let (media, _) = try await queryMediaPaginated(type: type, sort: sort, season: season, seasonYear: seasonYear, search: search, genres: genres, excludedGenres: excludedGenres, tags: tags, excludedTags: excludedTags, format: format, status: status, countryOfOrigin: countryOfOrigin, page: page, perPage: perPage)
         return media
     }
 
-    public func queryMediaPaginated(type: DiscoverMediaType, sort: DiscoverSort, season: String? = nil, seasonYear: Int? = nil, search: String? = nil, genres: [String]? = nil, tags: [String]? = nil, format: String? = nil, status: String? = nil, countryOfOrigin: String? = nil, page: Int = 1, perPage: Int = 20) async throws -> (media: [DiscoverMedia], hasNextPage: Bool) {
+    public func queryMediaPaginated(type: DiscoverMediaType, sort: DiscoverSort, season: String? = nil, seasonYear: Int? = nil, search: String? = nil, genres: [String]? = nil, excludedGenres: [String]? = nil, tags: [String]? = nil, excludedTags: [String]? = nil, format: String? = nil, status: String? = nil, countryOfOrigin: String? = nil, page: Int = 1, perPage: Int = 20) async throws -> (media: [DiscoverMedia], hasNextPage: Bool) {
         let graphqlQuery = """
         query ($page: Int, $perPage: Int, $type: MediaType, $sort: [MediaSort],
                $season: MediaSeason, $seasonYear: Int, $search: String,
-               $genres: [String], $tags: [String], $format: [MediaFormat],
+               $genres: [String], $excludedGenres: [String],
+               $tags: [String], $excludedTags: [String],
+               $format: [MediaFormat],
                $status: MediaStatus, $countryOfOrigin: CountryCode,
                $isAdult: Boolean = false) {
           Page(page: $page, perPage: $perPage) {
             pageInfo { hasNextPage }
             media(type: $type, sort: $sort, season: $season, seasonYear: $seasonYear,
-                  search: $search, genre_in: $genres, tag_in: $tags,
+                  search: $search,
+                  genre_in: $genres, genre_not_in: $excludedGenres,
+                  tag_in: $tags, tag_not_in: $excludedTags,
                   format_in: $format, status: $status, countryOfOrigin: $countryOfOrigin,
                   isAdult: $isAdult) {
               id
@@ -133,8 +137,10 @@ public actor DiscoverService {
         if let season = season { variables["season"] = season }
         if let seasonYear = seasonYear { variables["seasonYear"] = seasonYear }
         if let search = search { variables["search"] = search }
-        if let genres = genres { variables["genres"] = genres }
-        if let tags = tags { variables["tags"] = tags }
+        if let genres = genres, !genres.isEmpty { variables["genres"] = genres }
+        if let excludedGenres = excludedGenres, !excludedGenres.isEmpty { variables["excludedGenres"] = excludedGenres }
+        if let tags = tags, !tags.isEmpty { variables["tags"] = tags }
+        if let excludedTags = excludedTags, !excludedTags.isEmpty { variables["excludedTags"] = excludedTags }
         if let format = format { variables["format"] = [format] }
         if let status = status { variables["status"] = status }
         if let country = countryOfOrigin { variables["countryOfOrigin"] = country }

@@ -10,7 +10,7 @@ struct DiscoverFilterView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var localFilters: DiscoverFilters = DiscoverFilters()
-    @State private var expandedTagCategories: Set<String> = []
+    @State private var tagSearchText = ""
 
     private var animeFormats: [(String, String)] {
         [("TV", "TV"), ("TV_SHORT", "TV Short"), ("MOVIE", "Movie"),
@@ -34,16 +34,21 @@ struct DiscoverFilterView: View {
         ("JP", "Japan"), ("KR", "South Korea"), ("CN", "China"), ("TW", "Taiwan")
     ]
 
-    private var groupedTags: [(String, [DiscoverTag])] {
+    private let seasons: [(String, String)] = [
+        ("WINTER", "Winter"), ("SPRING", "Spring"), ("SUMMER", "Summer"), ("FALL", "Fall")
+    ]
+
+    private var filteredTags: [DiscoverTag] {
         let nonAdult = manager.availableTags.filter { $0.isAdult != true }
-        let grouped = Dictionary(grouping: nonAdult) { $0.category ?? "Other" }
-        return grouped.sorted { $0.key < $1.key }
+        if tagSearchText.isEmpty { return nonAdult }
+        return nonAdult.filter { $0.name.localizedCaseInsensitiveContains(tagSearchText) }
     }
 
     var body: some View {
         NavigationView {
             List {
                 sortSection
+                yearSeasonSection
                 genreSection
                 formatSection
                 statusSection
@@ -91,7 +96,72 @@ struct DiscoverFilterView: View {
         }
     }
 
-    // MARK: - Genres
+    // MARK: - Year & Season
+
+    private var yearSeasonSection: some View {
+        Section {
+            HStack {
+                Text("Year")
+                Spacer()
+                if let year = localFilters.year {
+                    Text(String(year))
+                        .foregroundStyle(.secondary)
+                    Stepper("", value: Binding(
+                        get: { year },
+                        set: { localFilters.year = $0 }
+                    ), in: 1970...2030)
+                    .labelsHidden()
+                    .frame(width: 100)
+
+                    Button {
+                        localFilters.year = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button("Set") {
+                        let currentYear = Calendar.current.component(.year, from: Date())
+                        localFilters.year = currentYear
+                    }
+                    .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            if localFilters.year != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Season")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(seasons, id: \.0) { value, label in
+                                let isSelected = localFilters.season == value
+                                Button {
+                                    localFilters.season = isSelected ? nil : value
+                                } label: {
+                                    Text(label)
+                                        .font(.caption.weight(.medium))
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(isSelected ? Color.accentColor : Color(.tertiarySystemFill))
+                                        .foregroundColor(isSelected ? .white : .primary)
+                                        .cornerRadius(16)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Year & Season")
+        }
+    }
+
+    // MARK: - Genres (Tri-state)
 
     private var genreSection: some View {
         Section {
@@ -102,33 +172,22 @@ struct DiscoverFilterView: View {
                     Spacer()
                 }
             } else {
+                triStateHint
                 WrappingHStack(items: manager.availableGenres) { genre in
-                    let isSelected = localFilters.genres.contains(genre)
-                    Button {
-                        if isSelected {
-                            localFilters.genres.removeAll { $0 == genre }
-                        } else {
-                            localFilters.genres.append(genre)
-                        }
-                    } label: {
-                        Text(genre)
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .frame(minHeight: 44)
-                            .background(isSelected ? Color.accentColor : Color(.tertiarySystemFill))
-                            .foregroundColor(isSelected ? .white : .primary)
-                            .cornerRadius(14)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+                    triStateChip(
+                        label: genre,
+                        included: localFilters.genres,
+                        excluded: localFilters.excludedGenres,
+                        onTap: { cycleGenre(genre) }
+                    )
                 }
             }
         } header: {
             HStack {
                 Text("Genres")
-                if !localFilters.genres.isEmpty {
-                    Text("(\(localFilters.genres.count))")
+                let total = localFilters.genres.count + localFilters.excludedGenres.count
+                if total > 0 {
+                    Text("(\(total))")
                         .foregroundStyle(Color.accentColor)
                 }
             }
@@ -204,7 +263,7 @@ struct DiscoverFilterView: View {
         }
     }
 
-    // MARK: - Tags
+    // MARK: - Tags (Tri-state with search)
 
     private var tagSection: some View {
         Section {
@@ -215,62 +274,129 @@ struct DiscoverFilterView: View {
                     Spacer()
                 }
             } else {
-                ForEach(groupedTags, id: \.0) { category, tags in
-                    DisclosureGroup(
-                        isExpanded: Binding(
-                            get: { expandedTagCategories.contains(category) },
-                            set: { expanded in
-                                if expanded {
-                                    expandedTagCategories.insert(category)
-                                } else {
-                                    expandedTagCategories.remove(category)
-                                }
-                            }
-                        )
-                    ) {
-                        WrappingHStack(items: tags) { tag in
-                            let isSelected = localFilters.tags.contains(tag.name)
-                            Button {
-                                if isSelected {
-                                    localFilters.tags.removeAll { $0 == tag.name }
-                                } else {
-                                    localFilters.tags.append(tag.name)
-                                }
-                            } label: {
-                                Text(tag.name)
-                                    .font(.caption.weight(.medium))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .frame(minHeight: 44)
-                                    .background(isSelected ? Color.accentColor : Color(.tertiarySystemFill))
-                                    .foregroundColor(isSelected ? .white : .primary)
-                                    .cornerRadius(14)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                // Inline search field for tags
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search tags...", text: $tagSearchText)
+                        .disableAutocorrection(true)
+                    if !tagSearchText.isEmpty {
+                        Button {
+                            tagSearchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
                         }
-                    } label: {
-                        HStack {
-                            Text(category)
-                                .foregroundColor(.primary)
-                            let selectedCount = tags.filter { localFilters.tags.contains($0.name) }.count
-                            if selectedCount > 0 {
-                                Text("(\(selectedCount))")
-                                    .font(.caption)
-                                    .foregroundStyle(Color.accentColor)
-                            }
-                        }
+                        .buttonStyle(.plain)
                     }
+                }
+                .padding(.vertical, 4)
+
+                if !tagSearchText.isEmpty || !(localFilters.tags.isEmpty && localFilters.excludedTags.isEmpty) {
+                    triStateHint
+                }
+
+                WrappingHStack(items: filteredTags.map { $0.name }) { tagName in
+                    triStateChip(
+                        label: tagName,
+                        included: localFilters.tags,
+                        excluded: localFilters.excludedTags,
+                        onTap: { cycleTag(tagName) }
+                    )
+                }
+
+                if filteredTags.isEmpty && !tagSearchText.isEmpty {
+                    Text("No tags matching \"\(tagSearchText)\"")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
                 }
             }
         } header: {
             HStack {
                 Text("Tags")
-                if !localFilters.tags.isEmpty {
-                    Text("(\(localFilters.tags.count))")
+                let total = localFilters.tags.count + localFilters.excludedTags.count
+                if total > 0 {
+                    Text("(\(total))")
                         .foregroundStyle(Color.accentColor)
                 }
             }
+        }
+    }
+
+    // MARK: - Tri-State Helpers
+
+    private var triStateHint: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 4) {
+                Circle().fill(Color.accentColor).frame(width: 8, height: 8)
+                Text("Include")
+            }
+            HStack(spacing: 4) {
+                Circle().fill(Color.red).frame(width: 8, height: 8)
+                Text("Exclude")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 2)
+    }
+
+    private func triStateChip(label: String, included: [String], excluded: [String], onTap: @escaping () -> Void) -> some View {
+        let isIncluded = included.contains(label)
+        let isExcluded = excluded.contains(label)
+
+        return Button(action: onTap) {
+            HStack(spacing: 4) {
+                if isExcluded {
+                    Image(systemName: "minus")
+                        .font(.caption2.weight(.bold))
+                }
+                Text(label)
+                    .strikethrough(isExcluded)
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 36)
+            .background(chipBackground(included: isIncluded, excluded: isExcluded))
+            .foregroundColor(chipForeground(included: isIncluded, excluded: isExcluded))
+            .cornerRadius(14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chipBackground(included: Bool, excluded: Bool) -> Color {
+        if included { return Color.accentColor }
+        if excluded { return Color.red }
+        return Color(.tertiarySystemFill)
+    }
+
+    private func chipForeground(included: Bool, excluded: Bool) -> Color {
+        if included || excluded { return .white }
+        return .primary
+    }
+
+    private func cycleGenre(_ item: String) {
+        if localFilters.genres.contains(item) {
+            localFilters.genres.removeAll { $0 == item }
+            localFilters.excludedGenres.append(item)
+        } else if localFilters.excludedGenres.contains(item) {
+            localFilters.excludedGenres.removeAll { $0 == item }
+        } else {
+            localFilters.genres.append(item)
+        }
+    }
+
+    private func cycleTag(_ item: String) {
+        if localFilters.tags.contains(item) {
+            localFilters.tags.removeAll { $0 == item }
+            localFilters.excludedTags.append(item)
+        } else if localFilters.excludedTags.contains(item) {
+            localFilters.excludedTags.removeAll { $0 == item }
+        } else {
+            localFilters.tags.append(item)
         }
     }
 }

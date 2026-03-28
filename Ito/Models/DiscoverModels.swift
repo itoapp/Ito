@@ -53,14 +53,21 @@ public enum DiscoverSort: String, CaseIterable, Sendable {
 
 public struct DiscoverFilters: Equatable, Sendable {
     public var genres: [String] = []
+    public var excludedGenres: [String] = []
     public var tags: [String] = []
+    public var excludedTags: [String] = []
     public var format: String?
     public var status: String?
     public var countryOfOrigin: String?
     public var sort: DiscoverSort = .popularity
+    public var year: Int?
+    public var season: String?
+    // TODO: Wire `onList: Boolean` filter when AniList tracker auth is integrated
 
     public var isEmpty: Bool {
-        genres.isEmpty && tags.isEmpty && format == nil && status == nil && countryOfOrigin == nil
+        genres.isEmpty && excludedGenres.isEmpty && tags.isEmpty && excludedTags.isEmpty
+            && format == nil && status == nil && countryOfOrigin == nil
+            && year == nil && season == nil
     }
 
     public init() {}

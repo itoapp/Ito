@@ -121,30 +121,59 @@ struct DiscoverView: View {
     private var activeFilterPills: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                // Included genres (accent)
                 ForEach(activeFilters.genres, id: \.self) { genre in
-                    filterPill(genre) {
+                    filterPill(genre, style: .include) {
                         activeFilters.genres.removeAll { $0 == genre }
                         isFilterActive = !activeFilters.isEmpty
                         performSearch(query: searchQuery)
                     }
                 }
+                // Excluded genres (red)
+                ForEach(activeFilters.excludedGenres, id: \.self) { genre in
+                    filterPill("− \(genre)", style: .exclude) {
+                        activeFilters.excludedGenres.removeAll { $0 == genre }
+                        isFilterActive = !activeFilters.isEmpty
+                        performSearch(query: searchQuery)
+                    }
+                }
+                // Included tags (accent)
                 ForEach(activeFilters.tags, id: \.self) { tag in
-                    filterPill(tag) {
+                    filterPill(tag, style: .include) {
                         activeFilters.tags.removeAll { $0 == tag }
                         isFilterActive = !activeFilters.isEmpty
                         performSearch(query: searchQuery)
                     }
                 }
+                // Excluded tags (red)
+                ForEach(activeFilters.excludedTags, id: \.self) { tag in
+                    filterPill("− \(tag)", style: .exclude) {
+                        activeFilters.excludedTags.removeAll { $0 == tag }
+                        isFilterActive = !activeFilters.isEmpty
+                        performSearch(query: searchQuery)
+                    }
+                }
                 if let format = activeFilters.format {
-                    filterPill(format) {
+                    filterPill(format, style: .include) {
                         activeFilters.format = nil
                         isFilterActive = !activeFilters.isEmpty
                         performSearch(query: searchQuery)
                     }
                 }
                 if let status = activeFilters.status {
-                    filterPill(status.replacingOccurrences(of: "_", with: " ").capitalized) {
+                    filterPill(status.replacingOccurrences(of: "_", with: " ").capitalized, style: .include) {
                         activeFilters.status = nil
+                        isFilterActive = !activeFilters.isEmpty
+                        performSearch(query: searchQuery)
+                    }
+                }
+                if let year = activeFilters.year {
+                    let label = activeFilters.season != nil
+                        ? "\(activeFilters.season!.capitalized) \(year)"
+                        : "\(year)"
+                    filterPill(label, style: .include) {
+                        activeFilters.year = nil
+                        activeFilters.season = nil
                         isFilterActive = !activeFilters.isEmpty
                         performSearch(query: searchQuery)
                     }
@@ -154,8 +183,13 @@ struct DiscoverView: View {
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
     }
 
-    private func filterPill(_ label: String, onRemove: @escaping () -> Void) -> some View {
-        Button(action: onRemove) {
+    private enum PillStyle {
+        case include, exclude
+    }
+
+    private func filterPill(_ label: String, style: PillStyle, onRemove: @escaping () -> Void) -> some View {
+        let tint: Color = style == .exclude ? .red : .accentColor
+        return Button(action: onRemove) {
             HStack(spacing: 4) {
                 Text(label)
                     .font(.caption.weight(.medium))
@@ -164,9 +198,9 @@ struct DiscoverView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .frame(minHeight: 44)
-            .background(Color.accentColor.opacity(0.12))
-            .foregroundStyle(Color.accentColor)
+            .frame(minHeight: 36)
+            .background(tint.opacity(0.12))
+            .foregroundStyle(tint)
             .cornerRadius(14)
             .contentShape(Rectangle())
         }

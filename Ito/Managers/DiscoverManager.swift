@@ -110,9 +110,14 @@ public class DiscoverManager: ObservableObject {
     public func search(query: String, type: DiscoverMediaType, filters: DiscoverFilters = DiscoverFilters(), page: Int = 1) async throws -> (media: [DiscoverMedia], hasNextPage: Bool) {
         let sort: DiscoverSort = query.isEmpty ? filters.sort : .searchMatch
         return try await service.queryMediaPaginated(
-            type: type, sort: sort, search: query.isEmpty ? nil : query,
+            type: type, sort: sort,
+            season: filters.season,
+            seasonYear: filters.year,
+            search: query.isEmpty ? nil : query,
             genres: filters.genres.isEmpty ? nil : filters.genres,
+            excludedGenres: filters.excludedGenres.isEmpty ? nil : filters.excludedGenres,
             tags: filters.tags.isEmpty ? nil : filters.tags,
+            excludedTags: filters.excludedTags.isEmpty ? nil : filters.excludedTags,
             format: filters.format, status: filters.status,
             countryOfOrigin: filters.countryOfOrigin,
             page: page, perPage: 20
