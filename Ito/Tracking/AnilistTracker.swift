@@ -107,8 +107,11 @@ public class AnilistTracker: TrackerProvider {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
-            throw URLError(.backgroundSessionInUseByAnotherProcess)
+        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            if httpResponse.statusCode == 429 {
+                throw URLError(.backgroundSessionInUseByAnotherProcess)
+            }
+            throw URLError(.badServerResponse)
         }
 
         if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

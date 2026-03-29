@@ -30,6 +30,12 @@ public class DiscoverManager: ObservableObject {
     @Published public var availableTags: [DiscoverTag] = []
 
     @Published public var isLoadingHome = false
+    @Published public var errorMessage: String?
+
+    public var isAniListOutage: Bool {
+        guard let error = errorMessage else { return false }
+        return error.contains("disabled") || error.contains("stability issues") || error.contains("403")
+    }
 
     private var sectionCache: [String: CacheEntry<[DiscoverMedia]>] = [:]
     private var genresCache: CacheEntry<[String]>?
@@ -48,7 +54,10 @@ public class DiscoverManager: ObservableObject {
     // MARK: - Home Sections
 
     public func loadHomeSections(for type: DiscoverMediaType) async {
-        await MainActor.run { isLoadingHome = true }
+        await MainActor.run {
+            isLoadingHome = true
+            errorMessage = nil
+        }
 
         async let trending = fetchSection(type: type, sort: .trending, cacheKey: "trending_\(type.rawValue)")
         async let popular = fetchSection(type: type, sort: .popularity, cacheKey: "popular_\(type.rawValue)")
@@ -84,7 +93,7 @@ public class DiscoverManager: ObservableObject {
             sectionCache[cacheKey] = CacheEntry(data: results, timestamp: Date())
             return results
         } catch {
-            print("[DiscoverManager] fetchSection(\(cacheKey)) failed: \(error)")
+            await MainActor.run { self.errorMessage = "Failed to load \(cacheKey): \(error.localizedDescription)" }
             return []
         }
     }
@@ -100,7 +109,7 @@ public class DiscoverManager: ObservableObject {
             sectionCache[cacheKey] = CacheEntry(data: results, timestamp: Date())
             return results
         } catch {
-            print("[DiscoverManager] fetchSeasonal failed: \(error)")
+            await MainActor.run { self.errorMessage = "Failed to load Seasonal Anime: \(error.localizedDescription)" }
             return []
         }
     }

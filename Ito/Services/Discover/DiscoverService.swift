@@ -223,9 +223,18 @@ public actor DiscoverService {
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
             try await Task.sleep(nanoseconds: 2_000_000_000)
             return try await performRequest(body: body)
+        }
+
+        if !(200...299).contains(httpResponse.statusCode) {
+            let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown Error"
+            throw NSError(domain: "DiscoverService", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "AniList Error \(httpResponse.statusCode): \(errorMsg)"])
         }
 
         return data

@@ -280,30 +280,17 @@ private struct DiscoverHomeView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 100)
                 } else if currentTrending.isEmpty && currentPopular.isEmpty && currentTopRated.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "wifi.slash")
-                            .font(.system(size: 48, weight: .thin))
-                            .foregroundStyle(.secondary)
-                        Text("Unable to load content")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                        Text("Check your connection and try again")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .multilineTextAlignment(.center)
-                        Button {
+                    DiscoverErrorView(
+                        errorMessage: manager.errorMessage,
+                        isOutage: manager.isAniListOutage,
+                        onRetry: {
                             Task {
                                 manager.clearCache(for: selectedType)
                                 await manager.loadHomeSections(for: selectedType)
                             }
-                        } label: {
-                            Text("Try Again")
-                                .font(.body.weight(.medium))
                         }
-                        .buttonStyle(.bordered)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.top, 100)
+                    )
+                    .padding(.top, 60)
                 } else {
                     LazyVStack(spacing: 24) {
                         if !currentTrending.isEmpty {
