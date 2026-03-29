@@ -111,6 +111,8 @@ struct DiscoverDetailView: View {
         }
         .padding(.bottom, 24)
         .background(Color(.systemBackground))
+        .frame(maxWidth: UIScreen.main.bounds.width)
+        .clipped()
     }
 
     // MARK: - Info Row
@@ -135,7 +137,6 @@ struct DiscoverDetailView: View {
             }
             .padding(.horizontal, 16)
         }
-        .frame(maxWidth: UIScreen.main.bounds.width)
     }
 
     private func infoChip(label: String, value: String) -> some View {
@@ -166,7 +167,6 @@ struct DiscoverDetailView: View {
             }
             .padding(.horizontal, 16)
         }
-        .frame(maxWidth: UIScreen.main.bounds.width)
     }
 
     // MARK: - Description
@@ -351,7 +351,6 @@ struct DiscoverDetailView: View {
             }
         }
         .padding(.top, 8)
-        .frame(maxWidth: UIScreen.main.bounds.width)
     }
 }
 
