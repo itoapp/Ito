@@ -1,14 +1,15 @@
 import Combine
 import Foundation
 import SwiftUI
+import GRDB
 import ito_runner
 
 @MainActor
 public class UpdateManager: ObservableObject {
     public static let shared = UpdateManager()
 
-    /// Maps LibraryItem ID to the number of unread chapters/episodes
-    @Published public private(set) var unreadCounts: [String: Int] = [:]
+    /// Maps LibraryItem ID to the number of new chapters/episodes since last read
+    @Published public private(set) var newChapterCounts: [String: Int] = [:]
 
     /// Indicates if a refresh operation is currently actively running
     @Published public private(set) var isRefreshing: Bool = false
@@ -17,7 +18,9 @@ public class UpdateManager: ObservableObject {
     @Published public private(set) var totalItemsToCheck: Int = 0
     @Published public private(set) var itemsCheckedCurrentRun: Int = 0
 
-    private let defaultsKey = "Ito.UpdateCounts"
+    private let defaultsKey = "Ito.NewChapterCounts"
+
+    private let dbPool = AppDatabase.shared.dbPool
 
     private init() {
         loadState()
@@ -38,171 +41,194 @@ public class UpdateManager: ObservableObject {
             return
         }
 
-        print("🔄 [UpdateManager] Starting update check for \(items.count) items...")
+        _ = await runSmartUpdate(items: items, isBackground: false)
+    }
+
+    /// Entry point for BGAppRefreshTask.
+    /// Returns the items that have new chapters and their new chapter count.
+    @MainActor
+    public func checkForUpdatesInBackground() async -> [(LibraryItem, Int)] {
+        guard !isRefreshing else { return [] }
+
+        print("🔄 [UpdateManager] Starting background update check.")
+        let items: [LibraryItem]
+        do {
+            items = try await dbPool.read { db in
+                try LibraryItem.fetchAll(db)
+            }
+        } catch {
+            print("🔄 [UpdateManager] Background error fetching items: \(error)")
+            return []
+        }
+
+        return await runSmartUpdate(items: items, isBackground: true)
+    }
+
+    @MainActor
+    private func runSmartUpdate(items: [LibraryItem], isBackground: Bool) async -> [(LibraryItem, Int)] {
+        print("🔄 [UpdateManager] Starting smart update check for \(items.count) total items...")
 
         // Wait for PluginManager to finish loading plugins on cold start
         var waitAttempts = 0
         while PluginManager.shared.installedPlugins.isEmpty && waitAttempts < 20 {
-            print("🔄 [UpdateManager] Waiting for plugins to load... (attempt \(waitAttempts + 1))")
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            try? await Task.sleep(nanoseconds: 500_000_000)
             waitAttempts += 1
         }
 
         guard !PluginManager.shared.installedPlugins.isEmpty else {
-            print("🔄 [UpdateManager] No plugins loaded after waiting, aborting.")
-            return
+            print("🔄 [UpdateManager] No plugins loaded, aborting.")
+            return []
         }
 
-        print("🔄 [UpdateManager] Plugins loaded, proceeding with \(PluginManager.shared.installedPlugins.count) plugins.")
         isRefreshing = true
-        totalItemsToCheck = items.count
+        var updatedItemsWithCounts: [(LibraryItem, Int)] = []
+
+        // 1. Filter out completed/cancelled if setting is on
+        let skipCompleted = UserDefaults.standard.bool(forKey: UserDefaultsKeys.skipCompleted)
+        var candidates = items
+        if skipCompleted {
+            candidates = candidates.filter { item in
+                let status = item.status?.lowercased() ?? ""
+                return status != "completed" && status != "cancelled"
+            }
+        }
+
+        // 2. Score items
+        var scoredItems: [(item: LibraryItem, score: Int)] = candidates.map { item in
+            let score = calculateScore(for: item)
+            return (item, score)
+        }
+
+        scoredItems.sort { $0.score > $1.score }
+
+        // 3. Dynamic Batch Size (only for background updates)
+        let maxBatchSize = max(5, items.count / 4)
+        let batchItems = isBackground && items.count > 10
+            ? Array(scoredItems.prefix(maxBatchSize).map(\.item))
+            : scoredItems.map(\.item)
+
+        totalItemsToCheck = batchItems.count
         itemsCheckedCurrentRun = 0
 
-        // Process items sequentially — ItoRunner's WASM runtime is single-threaded
-        // and deadlocks when multiple calls hit the same runner concurrently.
-        for item in items {
+        print("🔄 [UpdateManager] Batch size: \(batchItems.count)")
+
+        // 4. Check Items
+        for item in batchItems {
+            if Task.isCancelled { break }
+
             print("🔄 [UpdateManager] Checking: \(item.title)")
-            await self.checkSingleItem(item)
+            if let newCount = await checkSingleItem(item) {
+                updatedItemsWithCounts.append((item, newCount))
+            }
+            itemsCheckedCurrentRun += 1
+            print("🔄 [UpdateManager] Progress: \(itemsCheckedCurrentRun)/\(totalItemsToCheck)")
+
+            // Be gentle on source networks for big manual updates
+            if !isBackground {
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            }
         }
 
-        print("🔄 [UpdateManager] Finished. Unread counts: \(unreadCounts)")
+        print("🔄 [UpdateManager] Finished smart update. Found \(updatedItemsWithCounts.count) new updates.")
         isRefreshing = false
         saveState()
+        return updatedItemsWithCounts
     }
 
-    private func checkSingleItem(_ item: LibraryItem) async {
-        print("🔄 [UpdateManager] Checking: \(item.title) (type: \(item.effectiveType))")
+    private func calculateScore(for item: LibraryItem) -> Int {
+        var baseStatusScore = 7 // Unknown/nil
+        if let status = item.status?.lowercased() {
+            if status.contains("ongoing") { baseStatusScore = 10 } else if status.contains("hiatus") { baseStatusScore = 3 }
+        }
+
+        let hoursSinceChecked: Int
+        if let lastChecked = item.lastCheckedAt {
+            let diff = Calendar.current.dateComponents([.hour], from: lastChecked, to: Date()).hour ?? 0
+            hoursSinceChecked = min(24, max(0, diff))
+        } else {
+            hoursSinceChecked = 24
+        }
+
+        var recentUpdateBonus = 0
+        if let lastUpdated = item.lastUpdatedAt {
+            let daysSinceUpdate = Calendar.current.dateComponents([.day], from: lastUpdated, to: Date()).day ?? 999
+            if daysSinceUpdate <= 7 {
+                recentUpdateBonus = 30
+            }
+        }
+
+        return baseStatusScore + hoursSinceChecked + recentUpdateBonus
+    }
+
+    private func checkSingleItem(_ item: LibraryItem) async -> Int? {
         do {
             let runner = try await PluginManager.shared.getRunner(for: item.pluginId)
-            print("🔄 [UpdateManager] Got runner for: \(item.title)")
 
-            var latestCount = 0
-            var unreadCount = 0
+            var freshCount = 0
+            var newStatus: String?
 
             switch item.effectiveType {
             case .manga:
                 let baseManga = try JSONDecoder().decode(Manga.self, from: item.rawPayload)
-                print("🔄 [UpdateManager] Fetching manga update for: \(item.title)")
                 let fullManga = try await runner.getMangaUpdate(manga: baseManga)
-                latestCount = fullManga.chapters?.count ?? 0
-                unreadCount = calculateUnread(mangaId: item.id, chapters: fullManga.chapters ?? [])
-
+                freshCount = fullManga.chapters?.count ?? 0
+                newStatus = String(describing: fullManga.status)
             case .anime:
                 let baseAnime = try JSONDecoder().decode(Anime.self, from: item.rawPayload)
-                print("🔄 [UpdateManager] Fetching anime update for: \(item.title)")
                 let fullAnime = try await runner.getAnimeUpdate(anime: baseAnime, needsDetails: false, needsEpisodes: true)
-                latestCount = fullAnime.episodes?.count ?? 0
-                unreadCount = calculateUnread(animeId: item.id, episodes: fullAnime.episodes ?? [])
-
+                freshCount = fullAnime.episodes?.count ?? 0
+                newStatus = String(describing: fullAnime.status)
             case .novel:
                 let baseNovel = try JSONDecoder().decode(Novel.self, from: item.rawPayload)
-                print("🔄 [UpdateManager] Fetching novel update for: \(item.title)")
                 let fullNovel = try await runner.getNovelUpdate(novel: baseNovel)
-                latestCount = fullNovel.chapters?.count ?? 0
-                unreadCount = calculateUnread(novelId: item.id, chapters: fullNovel.chapters ?? [])
+                freshCount = fullNovel.chapters?.count ?? 0
+                newStatus = String(describing: fullNovel.status)
             }
 
-            print("🔄 [UpdateManager] \(item.title): \(latestCount) total, \(unreadCount) unread")
+            let isInitialCheck = item.knownChapterCount == nil
+            let knownCount = item.knownChapterCount ?? freshCount
+            let newChapters = isInitialCheck ? 0 : max(0, freshCount - knownCount)
+            let finalStatus = newStatus
 
-                if unreadCount > 0 {
-                    self.unreadCounts[item.id] = unreadCount
-                } else {
-                    self.unreadCounts.removeValue(forKey: item.id)
+            print("🔄 [UpdateManager] \(item.title): \(freshCount) total, \(knownCount) known -> \(newChapters) new")
+
+            try await dbPool.write { db in
+                if var dbItem = try LibraryItem.fetchOne(db, key: item.id) {
+                    dbItem.lastCheckedAt = Date()
+                    if newChapters > 0 {
+                        dbItem.lastUpdatedAt = Date()
+                    }
+                    if let status = finalStatus {
+                        dbItem.status = status
+                    }
+                    try dbItem.update(db)
+
+                    // Also trigger the LibraryManager list refresh by modifying the active payload?
+                    // Actually, LibraryManager reacts to database changes via ValueObservation
                 }
-                self.itemsCheckedCurrentRun += 1
-                print("🔄 [UpdateManager] Progress: \(self.itemsCheckedCurrentRun)/\(self.totalItemsToCheck)")
+            }
+
+            if newChapters > 0 {
+                newChapterCounts[item.id] = newChapters
+                return newChapters
+            } else {
+                newChapterCounts.removeValue(forKey: item.id)
+            }
+
+            return nil
 
         } catch {
             print("🔄 [UpdateManager] ❌ Failed for \(item.title): \(error)")
-            self.itemsCheckedCurrentRun += 1
+            return nil
         }
-    }
-
-    // MARK: - Unread Calculation Helpers
-
-    private func calculateUnread(mangaId: String, chapters: [Manga.Chapter]) -> Int {
-        // Deduplicate by chapter number to handle multi-source series
-        var seenNumbers = Set<Float>()
-        var uniqueChapters: [Manga.Chapter] = []
-        for chapter in chapters {
-            if let num = chapter.chapter {
-                if seenNumbers.insert(num).inserted {
-                    uniqueChapters.append(chapter)
-                }
-            } else {
-                uniqueChapters.append(chapter) // no number, keep as unique
-            }
-        }
-        var unread = 0
-        for chapter in uniqueChapters {
-            if !ReadProgressManager.shared.isRead(mangaId: mangaId, chapterId: chapter.key, chapterNum: chapter.chapter) {
-                unread += 1
-            }
-        }
-        return unread
-    }
-
-    private func calculateUnread(animeId: String, episodes: [Anime.Episode]) -> Int {
-        var seenNumbers = Set<Float>()
-        var uniqueEpisodes: [Anime.Episode] = []
-        for episode in episodes {
-            if let num = episode.episode {
-                if seenNumbers.insert(num).inserted {
-                    uniqueEpisodes.append(episode)
-                }
-            } else {
-                uniqueEpisodes.append(episode)
-            }
-        }
-        var unread = 0
-        for episode in uniqueEpisodes {
-            if !ReadProgressManager.shared.isRead(mangaId: animeId, chapterId: episode.key, chapterNum: episode.episode) {
-                unread += 1
-            }
-        }
-        return unread
-    }
-
-    private func calculateUnread(novelId: String, chapters: [Novel.Chapter]) -> Int {
-        var seenNumbers = Set<Float>()
-        var uniqueChapters: [Novel.Chapter] = []
-        for chapter in chapters {
-            if let num = chapter.chapter {
-                if seenNumbers.insert(num).inserted {
-                    uniqueChapters.append(chapter)
-                }
-            } else {
-                uniqueChapters.append(chapter)
-            }
-        }
-        var unread = 0
-        for chapter in uniqueChapters {
-            if !ReadProgressManager.shared.isRead(mangaId: novelId, chapterId: chapter.key, chapterNum: chapter.chapter) {
-                unread += 1
-            }
-        }
-        return unread
     }
 
     // MARK: - State Management
 
     @MainActor
-    public func decrementBadge(for itemId: String) {
-        guard let current = unreadCounts[itemId], current > 0 else { return }
-        let newCount = current - 1
-        if newCount <= 0 {
-            unreadCounts.removeValue(forKey: itemId)
-        } else {
-            unreadCounts[itemId] = newCount
-        }
-        saveState()
-    }
-
-    /// Fully removes the badge for a given item (used after bulk operations like AniList sync)
-    @MainActor
     public func clearBadge(for itemId: String) {
-        if unreadCounts[itemId] != nil {
-            unreadCounts.removeValue(forKey: itemId)
+        if newChapterCounts[itemId] != nil {
+            newChapterCounts.removeValue(forKey: itemId)
             saveState()
         }
     }
@@ -210,12 +236,12 @@ public class UpdateManager: ObservableObject {
     private func loadState() {
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let decoded = try? JSONDecoder().decode([String: Int].self, from: data) {
-            self.unreadCounts = decoded
+            self.newChapterCounts = decoded
         }
     }
 
     private func saveState() {
-        if let encoded = try? JSONEncoder().encode(unreadCounts) {
+        if let encoded = try? JSONEncoder().encode(newChapterCounts) {
             UserDefaults.standard.set(encoded, forKey: defaultsKey)
         }
     }

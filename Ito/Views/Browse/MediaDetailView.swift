@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import GRDB
 import ito_runner
 
 private struct NavTitleVisibilityKey: PreferenceKey {
@@ -86,6 +87,28 @@ public class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
             }
             self.isLoaded = true
             self.errorMessage = nil
+
+            // Advance baseline and clear badge if the item is in the library
+            let isSaved = LibraryManager.shared.isSaved(id: media.key)
+            if isSaved {
+                let count = updated.chapterList?.count ?? 0
+                let currentMediaKey = media.key
+                Task {
+                    do {
+                        try await AppDatabase.shared.dbPool.write { db in
+                            if var dbItem = try LibraryItem.fetchOne(db, key: currentMediaKey) {
+                                dbItem.knownChapterCount = count
+                                try dbItem.update(db)
+                            }
+                        }
+                    } catch {
+                        print("Failed to update knownChapterCount on appear: \(error)")
+                    }
+                }
+                Task { @MainActor in
+                    UpdateManager.shared.clearBadge(for: currentMediaKey)
+                }
+            }
         } catch {
             self.errorMessage = error.localizedDescription
             self.isLoaded = true

@@ -160,22 +160,25 @@ public class LibraryManager: ObservableObject, LibraryManaging {
 
     public func toggleSaveManga(manga: Manga, pluginId: String) {
         let payload = (try? JSONEncoder().encode(manga)) ?? Data()
+        let count = manga.chapters?.count ?? 0
         saveOrRemoveItem(id: manga.key) {
-            LibraryItem(id: manga.key, title: manga.title, coverUrl: manga.cover, pluginId: pluginId, isAnime: false, pluginType: .manga, rawPayload: payload, anilistId: nil)
+            LibraryItem(id: manga.key, title: manga.title, coverUrl: manga.cover, pluginId: pluginId, isAnime: false, pluginType: .manga, rawPayload: payload, anilistId: nil, knownChapterCount: count)
         }
     }
 
     public func toggleSaveNovel(novel: Novel, pluginId: String) {
         let payload = (try? JSONEncoder().encode(novel)) ?? Data()
+        let count = novel.chapters?.count ?? 0
         saveOrRemoveItem(id: novel.key) {
-            LibraryItem(id: novel.key, title: novel.title, coverUrl: novel.cover, pluginId: pluginId, isAnime: false, pluginType: .novel, rawPayload: payload, anilistId: nil)
+            LibraryItem(id: novel.key, title: novel.title, coverUrl: novel.cover, pluginId: pluginId, isAnime: false, pluginType: .novel, rawPayload: payload, anilistId: nil, knownChapterCount: count)
         }
     }
 
     public func toggleSaveAnime(anime: Anime, pluginId: String) {
         let payload = (try? JSONEncoder().encode(anime)) ?? Data()
+        let count = anime.episodes?.count ?? 0
         saveOrRemoveItem(id: anime.key) {
-            LibraryItem(id: anime.key, title: anime.title, coverUrl: anime.cover, pluginId: pluginId, isAnime: true, pluginType: .anime, rawPayload: payload, anilistId: nil)
+            LibraryItem(id: anime.key, title: anime.title, coverUrl: anime.cover, pluginId: pluginId, isAnime: true, pluginType: .anime, rawPayload: payload, anilistId: nil, knownChapterCount: count)
         }
     }
 

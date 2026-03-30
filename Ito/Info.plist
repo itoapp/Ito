@@ -75,5 +75,13 @@
 			</dict>
 		</dict>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.kunihir0.ito.refresh</string>
+	</array>
 </dict>
 </plist>

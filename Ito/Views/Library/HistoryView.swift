@@ -26,18 +26,10 @@ struct HistoryView: View {
             } else {
                 List {
                     ForEach(historyManager.history) { entry in
-                        NavigationLink(destination: DeferredPluginView(item: entry.item)) {
-                            HistoryItemRow(entry: entry)
-                        }
+                        HistoryItemRow(entry: entry)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
-                                if let index = historyManager.history.firstIndex(where: { $0.id == entry.id }) {
-                                    var updatedHistory = historyManager.history
-                                    updatedHistory.remove(at: index)
-                                    // Hacky way to update just one item without making it a full model manager function,
-                                    // but wait, I can just call clearHistory() or add a removeItem(id:).
-                                    // I'll skip individual delete for now, or just let users clear all.
-                                }
+                                historyManager.removeEntry(id: entry.id)
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -68,7 +60,7 @@ struct HistoryItemRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if let coverUrl = entry.item.coverUrl, let url = URL(string: coverUrl) {
+            if let coverUrl = entry.record.coverUrl, let url = URL(string: coverUrl) {
                 LazyImage(url: url) { state in
                     if let image = state.image {
                         image.resizable().aspectRatio(contentMode: .fill)
@@ -90,22 +82,22 @@ struct HistoryItemRow: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.item.title)
+                Text(entry.record.title)
                     .font(.headline)
                     .lineLimit(2)
 
-                if let chapterTitle = entry.chapterTitle {
+                if let chapterTitle = entry.record.chapterTitle {
                     Text(chapterTitle)
                         .font(.subheadline)
                         .foregroundColor(.primary)
                         .lineLimit(1)
                 }
 
-                Text(timeAgo(from: entry.lastReadAt))
+                Text(timeAgo(from: entry.record.readAt))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Text(entry.item.pluginId.capitalized)
+                Text(entry.record.pluginId.capitalized)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -119,5 +111,13 @@ struct HistoryItemRow: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+struct HistoryView_Previews: PreviewProvider {
+    static var previews: some View {
+        NavigationView {
+            HistoryView()
+        }
     }
 }

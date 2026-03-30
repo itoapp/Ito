@@ -392,7 +392,7 @@ struct LibraryItemView: View {
     }
 
     private var badgeCount: Int {
-        updateManager.unreadCounts[item.id] ?? 0
+        updateManager.newChapterCounts[item.id] ?? 0
     }
 
     var body: some View {

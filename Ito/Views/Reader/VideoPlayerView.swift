@@ -208,7 +208,7 @@ struct VideoPlayerView: View {
 
         // Record history right away so it shows up even if it fails to load
         let episodeTitleStr = episode.title ?? episode.key
-        HistoryManager.shared.addAnime(anime, episodeTitle: episodeTitleStr, pluginId: pluginId)
+        HistoryManager.shared.addAnime(anime, episodeKey: episode.key, episodeTitle: episodeTitleStr, pluginId: pluginId)
 
         do {
             print("🎬 [DEBUG] Fetching video list for episode: \(episode.key)")

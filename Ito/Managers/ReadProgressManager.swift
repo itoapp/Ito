@@ -72,9 +72,6 @@ public class ReadProgressManager: ObservableObject, ProgressTracking {
 
         lastReadChapter[mangaId] = chapterId
 
-        // Clear the unread badge automatically when the user reads a chapter
-        UpdateManager.shared.decrementBadge(for: mangaId)
-
         saveProgress()
     }
 

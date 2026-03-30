@@ -424,7 +424,7 @@ extension ReaderView {
 
     func markChapterRead(_ chapter: Manga.Chapter) {
         let chapterTitleStr = chapter.title ?? chapter.key
-        HistoryManager.shared.addManga(manga, chapterTitle: chapterTitleStr, pluginId: pluginId)
+        HistoryManager.shared.addManga(manga, chapterKey: chapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
 
         guard !markedChapterKeys.contains(chapter.key) else { return }
         markedChapterKeys.insert(chapter.key)

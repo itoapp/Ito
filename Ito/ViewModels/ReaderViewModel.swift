@@ -22,11 +22,11 @@ public class ReaderViewModel<M: MediaDisplayable, C: ChapterDisplayable>: Observ
         let chapterTitleStr = currentChapter.title ?? currentChapter.key
 
         if let manga = media as? Manga {
-            HistoryManager.shared.addManga(manga, chapterTitle: chapterTitleStr, pluginId: pluginId)
+            HistoryManager.shared.addManga(manga, chapterKey: currentChapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
         } else if let anime = media as? Anime {
-            HistoryManager.shared.addAnime(anime, episodeTitle: chapterTitleStr, pluginId: pluginId)
+            HistoryManager.shared.addAnime(anime, episodeKey: currentChapter.key, episodeTitle: chapterTitleStr, pluginId: pluginId)
         } else if let novel = media as? Novel {
-            HistoryManager.shared.addNovel(novel, chapterTitle: chapterTitleStr, pluginId: pluginId)
+            HistoryManager.shared.addNovel(novel, chapterKey: currentChapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
         }
 
         progressManager.markAsRead(

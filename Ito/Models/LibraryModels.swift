@@ -16,6 +16,13 @@ public enum UserDefaultsKeys {
     public static let backupLibraryItems = "ito_library_items_backup"
     public static let layoutStyle = "ito_library_layout_style"
     public static let alwaysShowCategoryPicker = "ito_always_show_category_picker"
+
+    // Update & Notification Settings
+    public static let bgUpdatesEnabled = "ito_bg_updates_enabled"
+    public static let updateInterval = "ito_update_interval"
+    public static let skipCompleted = "ito_skip_completed"
+    public static let updateNotifications = "ito_update_notifications"
+    public static let wifiOnlyUpdates = "ito_wifi_only_updates"
 }
 
 // MARK: - PHASE 1: Models
@@ -59,6 +66,12 @@ public struct LibraryItem: Codable, Identifiable, Hashable, Sendable, FetchableR
     // AniList Tracker Mapping
     public var anilistId: Int?
 
+    // v2: Smart Update Tracking
+    public var status: String?
+    public var lastCheckedAt: Date?
+    public var lastUpdatedAt: Date?
+    public var knownChapterCount: Int?
+
     public var effectiveType: PluginType {
         if let pt = pluginType { return pt }
         return isAnime ? .anime : .manga
@@ -73,6 +86,10 @@ public struct LibraryItem: Codable, Identifiable, Hashable, Sendable, FetchableR
         public static let pluginType = Column(CodingKeys.pluginType)
         public static let rawPayload = Column(CodingKeys.rawPayload)
         public static let anilistId = Column(CodingKeys.anilistId)
+        public static let status = Column(CodingKeys.status)
+        public static let lastCheckedAt = Column(CodingKeys.lastCheckedAt)
+        public static let lastUpdatedAt = Column(CodingKeys.lastUpdatedAt)
+        public static let knownChapterCount = Column(CodingKeys.knownChapterCount)
     }
 
     public static func == (lhs: LibraryItem, rhs: LibraryItem) -> Bool {
@@ -100,6 +117,56 @@ public struct ItemCategoryLink: Codable, Hashable, Sendable, FetchableRecord, Pe
         public static let itemId = Column(CodingKeys.itemId)
         public static let categoryId = Column(CodingKeys.categoryId)
         public static let addedAt = Column(CodingKeys.addedAt)
+    }
+}
+
+// MARK: - Reading History Record
+
+public struct ReadingHistoryRecord: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "readingHistory"
+
+    public var id: String
+    public var libraryItemId: String?
+    public var mediaKey: String
+    public var title: String
+    public var coverUrl: String?
+    public var pluginId: String
+    public var chapterKey: String
+    public var chapterTitle: String?
+    public var readAt: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        libraryItemId: String? = nil,
+        mediaKey: String,
+        title: String,
+        coverUrl: String?,
+        pluginId: String,
+        chapterKey: String,
+        chapterTitle: String?,
+        readAt: Date = Date()
+    ) {
+        self.id = id
+        self.libraryItemId = libraryItemId
+        self.mediaKey = mediaKey
+        self.title = title
+        self.coverUrl = coverUrl
+        self.pluginId = pluginId
+        self.chapterKey = chapterKey
+        self.chapterTitle = chapterTitle
+        self.readAt = readAt
+    }
+
+    public enum Columns {
+        public static let id = Column(CodingKeys.id)
+        public static let libraryItemId = Column(CodingKeys.libraryItemId)
+        public static let mediaKey = Column(CodingKeys.mediaKey)
+        public static let title = Column(CodingKeys.title)
+        public static let coverUrl = Column(CodingKeys.coverUrl)
+        public static let pluginId = Column(CodingKeys.pluginId)
+        public static let chapterKey = Column(CodingKeys.chapterKey)
+        public static let chapterTitle = Column(CodingKeys.chapterTitle)
+        public static let readAt = Column(CodingKeys.readAt)
     }
 }
 

@@ -167,7 +167,7 @@ extension NovelReaderView {
                 self.isLoaded = true
 
                 let chapterTitleStr = currentChapter.title ?? currentChapter.key
-                HistoryManager.shared.addNovel(novel, chapterTitle: chapterTitleStr, pluginId: pluginId)
+                HistoryManager.shared.addNovel(novel, chapterKey: currentChapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
                 self.progressManager.markAsRead(mangaId: novel.key, chapterId: currentChapter.key, chapterNum: currentChapter.chapter)
 
                 // Track progress

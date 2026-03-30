@@ -70,6 +70,32 @@ public final class AppDatabase: Sendable {
             try db.create(index: "idx_link_categoryId", on: "itemCategoryLink", columns: ["categoryId"])
         }
 
+        // MARK: - v2: Smart Updates + Reading History
+        migrator.registerMigration("v2") { db in
+            // Add update tracking columns to libraryItem
+            try db.alter(table: "libraryItem") { t in
+                t.add(column: "status", .text)
+                t.add(column: "lastCheckedAt", .datetime)
+                t.add(column: "lastUpdatedAt", .datetime)
+                t.add(column: "knownChapterCount", .integer)
+            }
+
+            // Create reading history table (no FK — history works for unsaved series)
+            try db.create(table: "readingHistory") { t in
+                t.primaryKey("id", .text)
+                t.column("libraryItemId", .text) // nullable, no FK
+                t.column("mediaKey", .text).notNull()
+                t.column("title", .text).notNull()
+                t.column("coverUrl", .text)
+                t.column("pluginId", .text).notNull()
+                t.column("chapterKey", .text).notNull()
+                t.column("chapterTitle", .text)
+                t.column("readAt", .datetime).notNull()
+            }
+
+            try db.create(index: "idx_history_mediaKey_readAt", on: "readingHistory", columns: ["mediaKey", "readAt"])
+        }
+
         return migrator
     }
 }
