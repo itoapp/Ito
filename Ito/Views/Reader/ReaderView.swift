@@ -174,6 +174,41 @@ struct ReaderView: View {
             DiscordRPCManager.shared.clearActivity()
         }
         .onDisappear { imagePrefetcher.stopPrefetching() }
+        .onChange(of: isPaged) { newIsPaged in
+            if newIsPaged {
+                if let seg = segments.first(where: { $0.chapter.key == currentChapter.key }) {
+                    pagedPages = seg.pages
+                    let allPages = flatPages
+                    if continuousPageIndex < allPages.count {
+                        let fp = allPages[continuousPageIndex]
+                        if fp.chapter.key == currentChapter.key {
+                            pagedIndex = Int(fp.page.index)
+                        } else {
+                            pagedIndex = Int(pagedPages.first?.index ?? 0)
+                        }
+                    } else {
+                        pagedIndex = Int(pagedPages.first?.index ?? 0)
+                    }
+                } else {
+                    isLoaded = false
+                    Task { await loadInitialChapter() }
+                }
+            } else {
+                if !pagedPages.isEmpty {
+                    segments = [ChapterSegment(chapter: currentChapter, pages: pagedPages)]
+                    if let arrIndex = pagedPages.firstIndex(where: { Int($0.index) == pagedIndex }) {
+                        continuousPageIndex = arrIndex
+                        scrollTarget = arrIndex
+                    } else {
+                        continuousPageIndex = 0
+                        scrollTarget = 0
+                    }
+                } else {
+                    isLoaded = false
+                    Task { await loadInitialChapter() }
+                }
+            }
+        }
     }
     // MARK: - Reader Components
 
