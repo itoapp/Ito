@@ -460,18 +460,25 @@ struct PluginRowView: View {
 // MARK: - PluginTypeBadge
 
 struct PluginTypeBadge: View {
-    let type: PluginType // assumes .anime / .manga
+    let type: PluginType
 
-    private var isAnime: Bool { type == .anime }
+    private var style: (title: String, icon: String, color: Color) {
+        switch type {
+        case .anime: return ("Anime", "play.tv", .purple)
+        case .manga: return ("Manga", "book.closed", .orange)
+        case .novel: return ("Novel", "text.book.closed", .green)
+        default: return ("Unknown", "puzzlepiece", .gray)
+        }
+    }
 
     var body: some View {
-        Label(isAnime ? "Anime" : "Manga", systemImage: isAnime ? "play.tv" : "book.closed")
+        Label(style.title, systemImage: style.icon)
             .font(.caption2.weight(.semibold))
             .labelStyle(.titleAndIcon)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background((isAnime ? Color.purple : Color.orange).opacity(0.15))
-            .foregroundStyle(isAnime ? Color.purple : Color.orange)
+            .background(style.color.opacity(0.15))
+            .foregroundStyle(style.color)
             .clipShape(RoundedRectangle(cornerRadius: 5))
     }
 }
