@@ -65,7 +65,7 @@ struct SourceView: View {
                 }
             }
         }
-        .navigationTitle(plugin.url.deletingPathExtension().lastPathComponent.capitalized)
+        .navigationTitle(plugin.info.name)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchQuery, prompt: "Search source...")
         .onChange(of: searchQuery) { newValue in
