@@ -183,6 +183,8 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
     @State private var showNavTitle = false
     @State private var readingChapter: IdentifiableChapter<M.Chapter>?
     @State private var showCategoryAssignment = false
+    @State private var themeDominant: Color?
+    @State private var themeSecondary: Color?
 
     public init(runner: ItoRunner, media: M, pluginId: String, loader: @escaping (M) async throws -> M) {
         self.runner = runner
@@ -193,14 +195,33 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
     private var isTracked: Bool { TrackerManager.shared.trackerMappings[viewModel.media.key]?.isEmpty == false }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+        ZStack {
+            if let themeDominant = themeDominant {
+                themeDominant.ignoresSafeArea()
+                Rectangle().fill(.regularMaterial).ignoresSafeArea()
+            } else {
+                Color(.systemBackground).ignoresSafeArea()
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
                 SharedHeroHeader(
                     title: viewModel.media.title,
                     coverURL: viewModel.media.cover,
                     authorOrStudio: viewModel.media.studios?.joined(separator: ", ") ?? viewModel.media.authors?.joined(separator: ", "),
                     statusLabel: viewModel.media.displayStatus,
-                    pluginId: viewModel.pluginId
+                    pluginId: viewModel.pluginId,
+                    onImageLoaded: { uiImage in
+                        Task {
+                            await ThemeManager.shared.extractAndCache(image: uiImage, for: viewModel.media.key)
+                            if let theme = await ThemeManager.shared.getTheme(for: viewModel.media.key) {
+                                withAnimation(.easeIn(duration: 0.6)) {
+                                    self.themeDominant = Color(hex: theme.dominantHex)
+                                    self.themeSecondary = Color(hex: theme.secondaryHex)
+                                }
+                            }
+                        }
+                    }
                 )
                 .background(
                     GeometryReader { geo in
@@ -216,6 +237,7 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
                     isTracked: isTracked,
                     tags: viewModel.media.tags,
                     cleanDescription: viewModel.media.description?.strippingHTML(),
+                    themeSecondary: themeSecondary,
                     onSaveToggle: {
                         let didSaveNew = viewModel.toggleSave()
                         if didSaveNew {
@@ -232,6 +254,8 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
 
                 chapterSection
             }
+        }
+        .background(Color.clear)
         }
         .onPreferenceChange(NavTitleVisibilityKey.self) { hidden in
             withAnimation(.easeInOut(duration: 0.18)) { showNavTitle = hidden }
@@ -267,7 +291,13 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
                 CategoryAssignmentSheet(itemId: viewModel.media.key)
             }
         }
-        .task { await viewModel.loadDetails() }
+        .task {
+            if let theme = await ThemeManager.shared.getTheme(for: viewModel.media.key) {
+                self.themeDominant = Color(hex: theme.dominantHex)
+                self.themeSecondary = Color(hex: theme.secondaryHex)
+            }
+            await viewModel.loadDetails()
+        }
         .onAppear {
             let anilistId = TrackerManager.shared.getMediaId(for: viewModel.media.key, providerId: "anilist")
             let isAnime = viewModel.media is Anime
@@ -328,6 +358,7 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
                     )
                     .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity)
                 }
+                .tint(themeSecondary ?? .blue)
                 .buttonStyle(.borderedProminent).controlSize(.large).padding(.horizontal, 16)
             }
 

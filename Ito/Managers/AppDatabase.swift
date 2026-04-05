@@ -96,6 +96,15 @@ public final class AppDatabase: Sendable {
             try db.create(index: "idx_history_mediaKey_readAt", on: "readingHistory", columns: ["mediaKey", "readAt"])
         }
 
+        // MARK: - v3: Theme Cache
+        migrator.registerMigration("v3") { db in
+            try db.create(table: "themeCache") { t in
+                t.primaryKey("mediaKey", .text)
+                t.column("dominantHex", .text).notNull()
+                t.column("secondaryHex", .text).notNull()
+            }
+        }
+
         return migrator
     }
 }

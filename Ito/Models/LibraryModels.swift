@@ -174,6 +174,29 @@ public struct ReadingHistoryRecord: Codable, Identifiable, Hashable, Sendable, F
     }
 }
 
+// MARK: - Theme Cache Record
+
+public struct ThemeCacheRecord: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "themeCache"
+
+    public var id: String { mediaKey }
+    public var mediaKey: String
+    public var dominantHex: String
+    public var secondaryHex: String
+
+    public init(mediaKey: String, dominantHex: String, secondaryHex: String) {
+        self.mediaKey = mediaKey
+        self.dominantHex = dominantHex
+        self.secondaryHex = secondaryHex
+    }
+
+    public enum Columns {
+        public static let mediaKey = Column("mediaKey")
+        public static let dominantHex = Column("dominantHex")
+        public static let secondaryHex = Column("secondaryHex")
+    }
+}
+
 // MARK: - Associations
 extension LibraryItem {
     static let itemCategoryLinks = hasMany(ItemCategoryLink.self)

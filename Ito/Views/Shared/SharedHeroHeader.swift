@@ -1,6 +1,7 @@
 import SwiftUI
 import Nuke
 import NukeUI
+import Combine
 
 public struct SharedHeroHeader: View {
     public let title: String
@@ -8,13 +9,15 @@ public struct SharedHeroHeader: View {
     public let authorOrStudio: String?
     public let statusLabel: String?
     public let pluginId: String
+    public var onImageLoaded: ((UIImage) -> Void)?
 
-    public init(title: String, coverURL: String?, authorOrStudio: String?, statusLabel: String?, pluginId: String) {
+    public init(title: String, coverURL: String?, authorOrStudio: String?, statusLabel: String?, pluginId: String, onImageLoaded: ((UIImage) -> Void)? = nil) {
         self.title = title
         self.coverURL = coverURL
         self.authorOrStudio = authorOrStudio
         self.statusLabel = statusLabel
         self.pluginId = pluginId
+        self.onImageLoaded = onImageLoaded
     }
 
     private let heroHeight: CGFloat = 340
@@ -78,6 +81,11 @@ public struct SharedHeroHeader: View {
                 LazyImage(url: url) { state in
                     if let image = state.image {
                         image.resizable().aspectRatio(contentMode: .fill)
+                            .onAppear {
+                                if let uiImage = state.imageContainer?.image {
+                                    onImageLoaded?(uiImage)
+                                }
+                            }
                     } else if state.error != nil {
                         Color.itoCardBackground
                     } else {

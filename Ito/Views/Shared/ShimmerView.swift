@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 public struct ShimmerView: View {
     @State private var phase: CGFloat = -1.0

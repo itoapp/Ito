@@ -25,7 +25,7 @@ public struct ChapterRowView<C: ChapterDisplayable>: View {
                 trailingIcon
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
-            .background(isPressed ? Color(.systemFill) : Color(.systemBackground))
+            .background(isPressed ? Color(.systemFill) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(PressRecordingButtonStyle(isPressed: $isPressed))

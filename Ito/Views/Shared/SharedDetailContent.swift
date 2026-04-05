@@ -5,16 +5,18 @@ public struct SharedDetailContent: View {
     public let isTracked: Bool
     public let tags: [String]?
     public let cleanDescription: String?
+    public var themeSecondary: Color?
     public let onSaveToggle: () -> Void
     public let onTrackToggle: (() -> Void)?
 
     @State private var isDescriptionExpanded = false
 
-    public init(isSaved: Bool, isTracked: Bool, tags: [String]?, cleanDescription: String?, onSaveToggle: @escaping () -> Void, onTrackToggle: (() -> Void)? = nil) {
+    public init(isSaved: Bool, isTracked: Bool, tags: [String]?, cleanDescription: String?, themeSecondary: Color? = nil, onSaveToggle: @escaping () -> Void, onTrackToggle: (() -> Void)? = nil) {
         self.isSaved = isSaved
         self.isTracked = isTracked
         self.tags = tags
         self.cleanDescription = cleanDescription
+        self.themeSecondary = themeSecondary
         self.onSaveToggle = onSaveToggle
         self.onTrackToggle = onTrackToggle
     }
@@ -29,29 +31,51 @@ public struct SharedDetailContent: View {
             Divider().padding(.horizontal, 16)
         }
         .padding(.bottom, 16)
-        .background(Color(.systemBackground))
+        .background(Color.clear)
     }
 
     private var actionButtons: some View {
         HStack(spacing: 10) {
-            Button(action: onSaveToggle) {
-                Label(isSaved ? "Saved" : "Save", systemImage: isSaved ? "bookmark.fill" : "bookmark")
-                    .font(.subheadline.weight(.medium))
-                    .frame(maxWidth: .infinity)
-            }
-            .tint(isSaved ? .blue : .secondary)
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
-
-            if let onTrackToggle = onTrackToggle {
-                Button(action: onTrackToggle) {
-                    Label(isTracked ? "Tracking" : "Track", systemImage: isTracked ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath")
+            if isSaved {
+                Button(action: onSaveToggle) {
+                    Label("Saved", systemImage: "bookmark.fill")
                         .font(.subheadline.weight(.medium))
                         .frame(maxWidth: .infinity)
                 }
-                .tint(isTracked ? .purple : .green)
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
+                .tint(themeSecondary ?? .blue)
                 .controlSize(.regular)
+            } else {
+                Button(action: onSaveToggle) {
+                    Label("Save", systemImage: "bookmark")
+                        .font(.subheadline.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.primary)
+                .controlSize(.regular)
+            }
+
+            if let onTrackToggle = onTrackToggle {
+                if isTracked {
+                    Button(action: onTrackToggle) {
+                        Label("Tracking", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(themeSecondary ?? .purple)
+                    .controlSize(.regular)
+                } else {
+                    Button(action: onTrackToggle) {
+                        Label("Track", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.primary)
+                    .controlSize(.regular)
+                }
             }
         }
     }

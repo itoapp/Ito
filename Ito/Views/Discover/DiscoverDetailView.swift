@@ -23,6 +23,10 @@ struct DiscoverDetailView: View {
     @State private var pluginSearchResults: [PluginSearchResult] = []
     @State private var isSearchingPlugin = false
     @State private var pluginSearchError: String?
+    @State private var themeDominant: Color?
+    @State private var themeSecondary: Color?
+
+    private var uniqueMediaKey: String { "anilist_\(media.id)" }
 
     private var matchingPlugins: [InstalledPlugin] {
         pluginManager.installedPlugins.values
@@ -42,14 +46,34 @@ struct DiscoverDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                SharedHeroHeader(
+        ZStack {
+            if let themeDominant = themeDominant {
+                themeDominant.ignoresSafeArea()
+                Rectangle().fill(.regularMaterial).ignoresSafeArea()
+            } else {
+                Color(.systemBackground).ignoresSafeArea()
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    SharedHeroHeader(
                     title: media.title,
                     coverURL: media.bannerImage ?? media.coverImage,
                     authorOrStudio: media.titleRomaji != media.title ? media.titleRomaji : nil,
                     statusLabel: media.status?.replacingOccurrences(of: "_", with: " ").capitalized,
-                    pluginId: media.averageScore != nil ? "★ \(media.averageScore!)%" : (media.format?.replacingOccurrences(of: "_", with: " ") ?? "Discover")
+                    pluginId: media.averageScore != nil ? "★ \(media.averageScore!)%" : (media.format?.replacingOccurrences(of: "_", with: " ") ?? "Discover"),
+                    onImageLoaded: { uiImage in
+                        let key = uniqueMediaKey
+                        Task {
+                            await ThemeManager.shared.extractAndCache(image: uiImage, for: key)
+                            if let theme = await ThemeManager.shared.getTheme(for: key) {
+                                withAnimation(.easeIn(duration: 0.6)) {
+                                    self.themeDominant = Color(hex: theme.dominantHex)
+                                    self.themeSecondary = Color(hex: theme.secondaryHex)
+                                }
+                            }
+                        }
+                    }
                 )
                 .background(
                     GeometryReader { geo in
@@ -62,6 +86,8 @@ struct DiscoverDetailView: View {
 
                 contentSection
             }
+        }
+        .background(Color.clear)
         }
         .coordinateSpace(name: "scroll")
         .onPreferenceChange(DetailNavTitleKey.self) { heroGone in
@@ -79,6 +105,11 @@ struct DiscoverDetailView: View {
             }
         }
         .task {
+            if let theme = await ThemeManager.shared.getTheme(for: uniqueMediaKey) {
+                self.themeDominant = Color(hex: theme.dominantHex)
+                self.themeSecondary = Color(hex: theme.secondaryHex)
+            }
+
             if let fetched = try? await DiscoverManager.shared.fetchMediaDetails(id: media.id) {
                 await MainActor.run { self.media = fetched }
             }
@@ -110,7 +141,7 @@ struct DiscoverDetailView: View {
             }
         }
         .padding(.bottom, 24)
-        .background(Color(.systemBackground))
+        .background(Color.clear)
         .frame(maxWidth: UIScreen.main.bounds.width)
         .clipped()
     }
@@ -183,7 +214,7 @@ struct DiscoverDetailView: View {
                 withAnimation(.easeInOut(duration: 0.2)) { isDescriptionExpanded.toggle() }
             } label: {
                 Text(isDescriptionExpanded ? "Show less" : "Show more")
-                    .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                    .font(.caption.weight(.semibold)).foregroundStyle(themeSecondary ?? Color.accentColor)
             }
         }
         .padding(.horizontal, 16)
