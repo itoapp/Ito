@@ -11,6 +11,9 @@ struct BackupSettingsView: View {
     @State private var showImportOptions = false
     @State private var pendingImportURL: URL?
 
+    @State private var showConflictResolver = false
+    @State private var activeConflicts: [MergeConflict] = []
+
     @State private var alertTitle = ""
     @State private var alertMessage = ""
     @State private var showAlert = false
@@ -78,12 +81,12 @@ struct BackupSettingsView: View {
         .confirmationDialog("How would you like to restore?", isPresented: $showImportOptions, titleVisibility: .visible) {
             Button("Merge with Current Library") {
                 if let url = pendingImportURL {
-                    executeImport(url: url, mode: .merge)
+                    executeMergeAnalysis(url: url)
                 }
             }
             Button("Wipe and Replace Library", role: .destructive) {
                 if let url = pendingImportURL {
-                    executeImport(url: url, mode: .wipe)
+                    executeFinalImport(url: url, mode: .wipe)
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -91,6 +94,26 @@ struct BackupSettingsView: View {
             }
         } message: {
             Text("Merging keeps your existing library items and only adds missing ones. Wiping completely deletes your current library and replaces it with the backup.")
+        }
+        .sheet(isPresented: $showConflictResolver) {
+            if let pendingURL = pendingImportURL {
+                MergeResolverView(
+                    conflicts: $activeConflicts,
+                    onResolve: {
+                        showConflictResolver = false
+                        var resolutions = [String: ConflictResolution]()
+                        for conflict in activeConflicts {
+                            resolutions[conflict.id] = conflict.resolution
+                        }
+                        executeFinalImport(url: pendingURL, mode: .merge, resolutions: resolutions)
+                    },
+                    onCancel: {
+                        showConflictResolver = false
+                        pendingImportURL = nil
+                    }
+                )
+                .interactiveDismissDisabled()
+            }
         }
         // General Alerts
         .alert(isPresented: $showAlert) {
@@ -110,18 +133,38 @@ struct BackupSettingsView: View {
         }
     }
 
-    private func executeImport(url: URL, mode: BackupRestoreMode) {
+    private func executeMergeAnalysis(url: URL) {
         Task {
             do {
-                try await backupManager.restoreBackup(from: url, mode: mode)
+                let conflicts = try await backupManager.analyzeMerge(from: url)
+                if conflicts.isEmpty {
+                    // Fast track: no structural differences found
+                    executeFinalImport(url: url, mode: .merge)
+                } else {
+                    // Surface UI resolver
+                    self.activeConflicts = conflicts
+                    self.showConflictResolver = true
+                }
+            } catch {
+                showError("Merge Check Failed", error.localizedDescription)
+            }
+        }
+    }
+
+    private func executeFinalImport(url: URL, mode: BackupRestoreMode, resolutions: [String: ConflictResolution] = [:]) {
+        Task {
+            do {
+                try await backupManager.restoreBackup(from: url, mode: mode, resolvedConflicts: resolutions)
                 alertTitle = "Restore Successful"
                 alertMessage = mode == .wipe ? "Your library has been successfully replaced." : "Your backup has been merged into your library."
                 showAlert = true
+                pendingImportURL = nil
             } catch {
                 alertTitle = "Restore Failed"
                 // Explaining HIG revert rules:
                 alertMessage = "An error occurred: \(error.localizedDescription)\n\nYour library was safely reverted and no changes were made."
                 showAlert = true
+                pendingImportURL = nil
             }
         }
     }
