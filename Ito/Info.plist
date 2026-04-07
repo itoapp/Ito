@@ -6,6 +6,16 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
+			<string>Ito Backup Database</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>moe.itoapp.backup</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
 			<string>Plugin archive</string>
 			<key>LSHandlerRank</key>
 			<string>Owner</string>
@@ -33,6 +43,26 @@
 	    <true/>
 	</dict>
 	<key>UTExportedTypeDeclarations</key>	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.database</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Ito Backup Database</string>
+			<key>UTTypeIconFiles</key>
+			<array/>
+			<key>UTTypeIdentifier</key>
+			<string>moe.itoapp.backup</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>itobackup</string>
+				</array>
+			</dict>
+		</dict>
 		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>

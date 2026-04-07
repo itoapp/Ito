@@ -27,6 +27,12 @@ struct LibraryView: View {
 
     @State private var itemToCategorize: String?
 
+    // Backup State
+    @State private var isExportingBackup = false
+    @State private var generatedBackup: BackupDocument?
+    @State private var backupError: String?
+    @State private var showBackupError = false
+
     private var layoutStyle: LibraryLayoutStyle {
         LibraryLayoutStyle(rawValue: rawLayoutStyle) ?? .sectioned
     }
@@ -91,6 +97,23 @@ struct LibraryView: View {
                 placement: .navigationBarDrawer(displayMode: .automatic),
                 prompt: "Search library"
             )
+            .fileExporter(
+                isPresented: $isExportingBackup,
+                document: generatedBackup,
+                contentType: .itoBackup,
+                defaultFilename: generatedBackup?.fileURL?.lastPathComponent ?? "ItoBackup"
+            ) { result in
+                switch result {
+                case .success(let url):
+                    print("Exported to \(url)")
+                case .failure(let error):
+                    backupError = error.localizedDescription
+                    showBackupError = true
+                }
+            }
+            .alert(isPresented: $showBackupError) {
+                Alert(title: Text("Backup Error"), message: Text(backupError ?? "Unknown error"), dismissButton: .default(Text("OK")))
+            }
         }
         .navigationViewStyle(.stack)
         .onAppear {
@@ -274,6 +297,25 @@ struct LibraryView: View {
                             .font(.body)
                             .fontWeight(isEditing ? .semibold : .regular)
                     }
+                }
+
+                Menu {
+                    Button {
+                        Task {
+                            do {
+                                let tempURL = try await BackupManager.shared.createBackupFile()
+                                self.generatedBackup = BackupDocument(url: tempURL)
+                                self.isExportingBackup = true
+                            } catch {
+                                self.backupError = error.localizedDescription
+                                self.showBackupError = true
+                            }
+                        }
+                    } label: {
+                        Label("Export Library", systemImage: "square.and.arrow.up")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }

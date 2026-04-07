@@ -467,7 +467,6 @@ struct PluginTypeBadge: View {
         case .anime: return ("Anime", "play.tv", .purple)
         case .manga: return ("Manga", "book.closed", .orange)
         case .novel: return ("Novel", "text.book.closed", .green)
-        default: return ("Unknown", "puzzlepiece", .gray)
         }
     }
 

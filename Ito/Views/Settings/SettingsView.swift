@@ -29,6 +29,9 @@ struct SettingsView: View {
                     NavigationLink(destination: TrackerSettingsView()) {
                         Label("Trackers", systemImage: "arrow.triangle.2.circlepath")
                     }
+                    NavigationLink(destination: BackupSettingsView()) {
+                        Label("Backup & Restore", systemImage: "arrow.triangle.2.circlepath.doc")
+                    }
                 }
 
                 Section(header: Text("Extensions")) {
