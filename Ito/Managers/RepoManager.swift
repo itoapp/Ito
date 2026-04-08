@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CryptoKit
+import GRDB
 
 public struct RepoPackage: Codable, Identifiable, Hashable, Sendable {
     public let id: String
@@ -56,15 +57,40 @@ public class RepoManager: ObservableObject {
     }
 
     private func loadRepos() {
+        // ALWAYS prioritize SQLite store to enable robust cross-device backups
+        do {
+            let dbPool = AppDatabase.shared.dbPool
+            if let pref = try dbPool.read({ db in
+                try AppPreference.fetchOne(db, key: defaultsKey)
+            }), let decoded = try? JSONDecoder().decode([Repository].self, from: pref.value) {
+                print("🌍 [DEBUG-REPO] Loaded Repositories from Database AppPreference.")
+                self.repositories = decoded
+                return
+            }
+        } catch {
+            print("🌍 [DEBUG-REPO] Failed to parse SQLite repos: \(error)")
+        }
+
+        // Legacy fallback
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let decoded = try? JSONDecoder().decode([Repository].self, from: data) {
             self.repositories = decoded
+            print("🌍 [DEBUG-REPO] Loaded Repositories from Legacy UserDefaults. Migrating to SQLite...")
+            self.saveRepos() // Propagate to SQLite immediately
         }
     }
 
     private func saveRepos() {
         if let encoded = try? JSONEncoder().encode(repositories) {
-            UserDefaults.standard.set(encoded, forKey: defaultsKey)
+            do {
+                let dbPool = AppDatabase.shared.dbPool
+                try dbPool.write { db in
+                    try AppPreference(key: defaultsKey, value: encoded).save(db)
+                }
+                print("🌍 [DEBUG-REPO] Maintained single source of truth for repos via SQLite.")
+            } catch {
+                print("🌍 [DEBUG-REPO] Fatal SQLite Save error: \(error)")
+            }
         }
     }
 
@@ -193,7 +219,12 @@ public class RepoManager: ObservableObject {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            print("Server returned \(httpResponse.statusCode) for \(url)")
+            throw URLError(.fileDoesNotExist)
+        }
 
         // Verify Hash
         let digest = SHA256.hash(data: data)

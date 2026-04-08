@@ -602,9 +602,14 @@ struct DeferredPluginView: View {
     @State private var decodedManga: Manga?
     @State private var decodedNovel: Novel?
 
+    @State private var isMissingPlugin = false
+    @State private var isDownloadingPlugin = false
+
     var body: some View {
         Group {
-            if let error = errorMessage {
+            if isMissingPlugin {
+                missingPluginView
+            } else if let error = errorMessage {
                 errorView(error)
             } else if let runner = runner {
                 resolvedContentView(runner: runner)
@@ -675,6 +680,84 @@ struct DeferredPluginView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var missingPluginView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "puzzlepiece.extension")
+                .font(.system(size: 52, weight: .thin))
+                .foregroundStyle(.blue)
+
+            VStack(spacing: 6) {
+                Text("Extension Required")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+
+                Text("To read this content, you must install the '\(item.pluginId)' extension.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            if isDownloadingPlugin {
+                ProgressView("Searching & Installing...")
+                    .padding(.top, 10)
+            } else {
+                Button {
+                    Task { await installMissingPlugin() }
+                } label: {
+                    Text("Search Repositories & Install")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(Color.blue)
+                        .clipShape(Capsule())
+                }
+                .padding(.top, 10)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func installMissingPlugin() async {
+        isDownloadingPlugin = true
+        defer { isDownloadingPlugin = false }
+
+        // ALWAYS refresh repositories first when explicitly installing a missing plugin.
+        // This ensures if the user rebuilt their extensions locally or upstream updated, 
+        // we won't throw Hash Mismatches due to stale stored data.
+        await RepoManager.shared.refreshAll()
+
+        var targetPkg: RepoPackage?
+        var foundRepoUrl: String?
+
+        for repo in RepoManager.shared.repositories {
+            if let pkg = repo.index?.packages.first(where: { $0.id == item.pluginId }) {
+                targetPkg = pkg
+                foundRepoUrl = repo.url
+                break
+            }
+        }
+
+        guard let pkg = targetPkg, let url = foundRepoUrl else {
+            errorMessage = "Couldn't find this extension in any of your repositories."
+            isMissingPlugin = false
+            return
+        }
+
+        do {
+            try await RepoManager.shared.installPackage(pkg, repositoryUrl: url)
+
+            // Retry loading
+            isMissingPlugin = false
+            await loadRunnerAndItem()
+
+        } catch {
+            errorMessage = "Failed to install extension: \(error.localizedDescription)"
+            isMissingPlugin = false
+        }
+    }
+
     private func loadRunnerAndItem() async {
         do {
             switch item.effectiveType {
@@ -695,6 +778,8 @@ struct DeferredPluginView: View {
             await MainActor.run { runner = pluginRunner }
 
         } catch is CancellationError {
+        } catch let error as URLError where error.code == .fileDoesNotExist {
+            await MainActor.run { isMissingPlugin = true }
         } catch {
             await MainActor.run { errorMessage = error.localizedDescription }
         }

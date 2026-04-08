@@ -105,6 +105,14 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        // MARK: - v4: App Preferences Key-Value Store
+        migrator.registerMigration("v4") { db in
+            try db.create(table: "appPreference") { t in
+                t.primaryKey("key", .text)
+                t.column("value", .blob).notNull()
+            }
+        }
+
         return migrator
     }
 }

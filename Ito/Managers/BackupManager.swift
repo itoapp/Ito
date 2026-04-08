@@ -137,6 +137,13 @@ public class BackupManager: ObservableObject {
                     backupHistory = []
                 }
 
+                let backupPreferences: [AppPreference]
+                if try backupDb.tableExists("appPreference") {
+                    backupPreferences = try AppPreference.fetchAll(backupDb)
+                } else {
+                    backupPreferences = []
+                }
+
                 // Identify the backup's system category ID for mapping later
                 let backupSystemCatId = backupCategories.first(where: { $0.isSystemCategory })?.id
 
@@ -208,6 +215,14 @@ public class BackupManager: ObservableObject {
                     } else {
                         try entry.save(currentDb)
                     }
+                }
+
+                // 7. Insert AppPreferences
+                if case .wipe = mode {
+                    try AppPreference.deleteAll(currentDb)
+                }
+                for pref in backupPreferences {
+                    try pref.save(currentDb)
                 }
             }
         }
