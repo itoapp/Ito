@@ -26,7 +26,7 @@ Ito is a free, ad-free iOS client for reading and watching anime. It is free for
 * **Discovery:** Discover content powered by indexer like Anilist(more coming soon)
 * **Zero Ads:** 100% free forever with no advertisements.
 * **Progress Tracking:** Sync your library using **AniList** (more coming soon).
-* **Backup & Import:** Export natively or effortlessly migrate libraries locally from other apps (like Aidoku `.aib`) more coming soon.
+* **Backup & Import:** Export natively or migrate your library from **Aidoku** (`.aib`) and **Paperback v0.8** (`.pas4`) with smart plugin resolution.
 * **WASM Plugins:** Dynamic, isolated content sourcing.
 
 ## Showcase

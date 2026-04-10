@@ -14,9 +14,11 @@ public class BackupManager: ObservableObject {
 
     @Published public private(set) var isExporting: Bool = false
     @Published public private(set) var isRestoring: Bool = false
+    @Published public private(set) var lastMigrationReport: MigrationReport?
 
     private let registeredImporters: [BackupImporter] = [
         AidokuImporter(),
+        PaperbackImporter(),
         ItoNativeImporter()
     ]
 
@@ -98,7 +100,7 @@ public class BackupManager: ObservableObject {
         }
     }
 
-    public func restoreBackup(from url: URL, mode: BackupRestoreMode, resolvedConflicts: [String: ConflictResolution] = [:]) async throws {
+    public func restoreBackup(from url: URL, mode: BackupRestoreMode, resolvedConflicts: [String: ConflictResolution] = [:]) async throws -> MigrationReport? {
         isRestoring = true
         defer { isRestoring = false }
 
@@ -200,5 +202,10 @@ public class BackupManager: ObservableObject {
                 try pref.save(currentDb)
             }
         }
+
+        // Surface migration report
+        let report = importedBackup.migrationReport
+        self.lastMigrationReport = report
+        return report
     }
 }

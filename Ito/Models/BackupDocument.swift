@@ -5,10 +5,11 @@ extension UTType {
     /// Custom UTType for Ito Backup Files natively configured.
     nonisolated static let itoBackup = UTType(exportedAs: "moe.itoapp.backup", conformingTo: .data)
     nonisolated static let aidokuBackup = UTType(importedAs: "moe.itoapp.aidoku.backup", conformingTo: .data)
+    nonisolated static let paperbackBackup = UTType(importedAs: "moe.itoapp.paperback.backup", conformingTo: .zip)
 }
 
 struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.itoBackup, .aidokuBackup] }
+    static var readableContentTypes: [UTType] { [.itoBackup, .aidokuBackup, .paperbackBackup] }
 
     var fileURL: URL?
 

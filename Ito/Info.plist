@@ -71,6 +71,23 @@
 				</array>
 			</dict>
 		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Paperback Backup</string>
+			<key>UTTypeIdentifier</key>
+			<string>moe.itoapp.paperback.backup</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>pas4</string>
+				</array>
+			</dict>
+		</dict>
 	</array>
 	<key>UTExportedTypeDeclarations</key>	<array>
 		<dict>

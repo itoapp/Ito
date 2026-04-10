@@ -18,6 +18,9 @@ struct BackupSettingsView: View {
     @State private var alertMessage = ""
     @State private var showAlert = false
 
+    @State private var showMigrationReport = false
+    @State private var activeMigrationReport: MigrationReport?
+
     var body: some View {
         List {
             Section(header: Text("Export")) {
@@ -64,7 +67,7 @@ struct BackupSettingsView: View {
         // File Importer
         .fileImporter(
             isPresented: $isImporting,
-            allowedContentTypes: [.itoBackup, .data],
+            allowedContentTypes: [.itoBackup, .aidokuBackup, .paperbackBackup, .data],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -119,6 +122,15 @@ struct BackupSettingsView: View {
         .alert(isPresented: $showAlert) {
             Alert(title: Text(alertTitle), message: Text(alertMessage), dismissButton: .default(Text("OK")))
         }
+        .sheet(isPresented: $showMigrationReport) {
+            if let report = activeMigrationReport {
+                MigrationReportView(report: report) {
+                    showMigrationReport = false
+                    activeMigrationReport = nil
+                }
+                .interactiveDismissDisabled()
+            }
+        }
     }
 
     private func exportBackup() {
@@ -154,14 +166,20 @@ struct BackupSettingsView: View {
     private func executeFinalImport(url: URL, mode: BackupRestoreMode, resolutions: [String: ConflictResolution] = [:]) {
         Task {
             do {
-                try await backupManager.restoreBackup(from: url, mode: mode, resolvedConflicts: resolutions)
-                alertTitle = "Restore Successful"
-                alertMessage = mode == .wipe ? "Your library has been successfully replaced." : "Your backup has been merged into your library."
-                showAlert = true
+                let report = try await backupManager.restoreBackup(from: url, mode: mode, resolvedConflicts: resolutions)
+
+                if let report = report, report.hasIssues {
+                    // Surface migration report
+                    activeMigrationReport = report
+                    showMigrationReport = true
+                } else {
+                    alertTitle = "Restore Successful"
+                    alertMessage = mode == .wipe ? "Your library has been successfully replaced." : "Your backup has been merged into your library."
+                    showAlert = true
+                }
                 pendingImportURL = nil
             } catch {
                 alertTitle = "Restore Failed"
-                // Explaining HIG revert rules:
                 alertMessage = "An error occurred: \(error.localizedDescription)\n\nYour library was safely reverted and no changes were made."
                 showAlert = true
                 pendingImportURL = nil

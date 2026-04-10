@@ -88,6 +88,10 @@ public struct AidokuImporter: BackupImporter {
         var importedLinks: [ItemCategoryLink] = []
         var importedHistory: [ReadingHistoryRecord] = []
 
+        // Track resolutions per foreign source for the migration report
+        var resolutionCache: [String: PluginResolution] = [:]
+        var sourceItemCounts: [String: Int] = [:]
+
         // 1. Map Categories
         // We track title -> UUID to easily create links
         var categoryHashMap: [String: String] = [:]
@@ -115,7 +119,17 @@ public struct AidokuImporter: BackupImporter {
                 // Find matching manga metadata
                 guard let mangaMeta = aidokuMangas.first(where: { $0.id == libItem.mangaId && $0.sourceId == libItem.sourceId }) else { continue }
 
-                let resolvedPluginId = await MainActor.run { PluginResolver.shared.resolve(foreignId: libItem.sourceId) }
+                // Resolve plugin (cached per source)
+                let resolution: PluginResolution
+                if let cached = resolutionCache[libItem.sourceId] {
+                    resolution = cached
+                } else {
+                    resolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: libItem.sourceId) }
+                    resolutionCache[libItem.sourceId] = resolution
+                }
+                sourceItemCounts[libItem.sourceId, default: 0] += 1
+
+                let resolvedPluginId = resolution.resolvedId
                 let globallyUniqueId = "\(resolvedPluginId)_\(libItem.mangaId)"
 
                 // Synthesize Manga payload
@@ -187,7 +201,14 @@ public struct AidokuImporter: BackupImporter {
         // 3. Map History
         if let aidokuHistory = backup.history {
             for hist in aidokuHistory {
-                let resolvedPluginId = await MainActor.run { PluginResolver.shared.resolve(foreignId: hist.sourceId) }
+                let histResolution: PluginResolution
+                if let cached = resolutionCache[hist.sourceId] {
+                    histResolution = cached
+                } else {
+                    histResolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: hist.sourceId) }
+                    resolutionCache[hist.sourceId] = histResolution
+                }
+                let resolvedPluginId = histResolution.resolvedId
                 let itemGlobalId = "\(resolvedPluginId)_\(hist.mangaId)"
 
                 let record = ReadingHistoryRecord(
@@ -205,12 +226,32 @@ public struct AidokuImporter: BackupImporter {
             }
         }
 
+        // Build migration report
+        let unresolvedPlugins = resolutionCache.compactMap { foreignId, resolution -> MigrationReport.UnresolvedPlugin? in
+            guard resolution.needsAttention else { return nil }
+            return MigrationReport.UnresolvedPlugin(
+                foreignId: foreignId,
+                resolvedId: resolution.resolvedId,
+                confidence: resolution.confidence,
+                isInstalled: resolution.isInstalled,
+                affectedItemCount: sourceItemCounts[foreignId] ?? 0,
+                candidates: resolution.candidates
+            )
+        }
+
+        let report = MigrationReport(
+            unresolvedPlugins: unresolvedPlugins,
+            totalItemsImported: importedItems.count,
+            totalItemsSkipped: 0
+        )
+
         return ImportedBackup(
             categories: importedCategories,
             items: importedItems,
             links: importedLinks,
             history: importedHistory,
-            preferences: [] // Aidoku backups don't carry Ito repo settings
+            preferences: [],
+            migrationReport: report.hasIssues ? report : nil
         )
     }
 
