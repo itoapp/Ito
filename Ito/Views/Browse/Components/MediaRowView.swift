@@ -13,12 +13,7 @@ public struct MediaRowView<M: MediaDisplayable, Destination: View>: View {
     }
 
     public var body: some View {
-        ZStack {
-            NavigationLink(destination: destination()) {
-                EmptyView()
-            }
-            .opacity(0)
-
+        NavigationLink(destination: destination()) {
             HStack(alignment: .top, spacing: 12) {
                 if let coverURL = media.cover, let url = URL(string: coverURL) {
                     LazyImage(url: url) { state in
@@ -66,6 +61,7 @@ public struct MediaRowView<M: MediaDisplayable, Destination: View>: View {
                 Spacer()
             }
         }
+        .buttonStyle(.plain)
         .padding(.vertical, 4)
         .padding(.horizontal)
     }

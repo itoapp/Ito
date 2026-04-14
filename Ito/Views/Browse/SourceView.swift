@@ -14,6 +14,9 @@ struct SourceView: View {
     @State private var searchAnimes: [Anime] = []
     @State private var searchNovels: [Novel] = []
 
+    @State private var settingsSchema: SettingsSchema?
+    @State private var showSettings = false
+
     @State private var isLoaded = false
     @State private var errorMessage: String?
 
@@ -67,6 +70,26 @@ struct SourceView: View {
         }
         .navigationTitle(plugin.info.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if settingsSchema != nil {
+                    Button(action: { showSettings = true }) {
+                        Image(systemName: "gear")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showSettings, onDismiss: {
+            Task {
+                isLoaded = false
+                homeLayout = nil
+                await loadPlugin()
+            }
+        }) {
+            if let schema = settingsSchema {
+                PluginSettingsView(plugin: plugin, schema: schema)
+            }
+        }
         .searchable(text: $searchQuery, prompt: "Search source...")
         .onChange(of: searchQuery) { newValue in
             performSearch(query: newValue)
@@ -96,6 +119,26 @@ struct SourceView: View {
                         Divider().padding(.leading, 72)
                     }
                 }
+            case .mangaChapterList(_, let entries, _):
+                VStack(spacing: 0) {
+                    ForEach(entries.indices, id: \.self) { idx in
+                        let entry = entries[idx]
+                        VStack(spacing: 2) {
+                            MediaRowView(media: entry.manga) { MediaDetailView(runner: pluginRunner, media: entry.manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getMangaUpdate(manga: $0) } }
+                            HStack {
+                                Text(entry.chapter.title ?? "Chapter \(entry.chapter.chapter.map { String(Int($0)) } ?? "—")")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.leading, 88)
+                            .padding(.trailing)
+                            .padding(.bottom, 8)
+                        }
+                        Divider().padding(.leading, 88)
+                    }
+                }
             case .bigScroller(let mangas, _):
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
@@ -121,6 +164,26 @@ struct SourceView: View {
                         Divider().padding(.leading, 72)
                     }
                 }
+            case .animeEpisodeList(_, let entries, _):
+                VStack(spacing: 0) {
+                    ForEach(entries.indices, id: \.self) { idx in
+                        let entry = entries[idx]
+                        VStack(spacing: 2) {
+                            MediaRowView(media: entry.anime) { MediaDetailView(runner: pluginRunner, media: entry.anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) } }
+                            HStack {
+                                Text(entry.episode.title ?? "Episode \(entry.episode.episode.map { String(Int($0)) } ?? "—")")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.leading, 88)
+                            .padding(.trailing)
+                            .padding(.bottom, 8)
+                        }
+                        Divider().padding(.leading, 88)
+                    }
+                }
             case .animeBigScroller(let animes, _):
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
@@ -144,6 +207,47 @@ struct SourceView: View {
                     ForEach(novels, id: \.key) { novel in
                         MediaRowView(media: novel) { MediaDetailView(runner: pluginRunner, media: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
                         Divider().padding(.leading, 72)
+                    }
+                }
+            case .novelChapterList(_, let entries, _):
+                VStack(spacing: 0) {
+                    ForEach(entries.indices, id: \.self) { idx in
+                        let entry = entries[idx]
+                        VStack(spacing: 2) {
+                            MediaRowView(media: entry.novel) { MediaDetailView(runner: pluginRunner, media: entry.novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
+                            HStack {
+                                Text(entry.chapter.title ?? "Chapter \(entry.chapter.chapter.map { String(Int($0)) } ?? "—")")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.leading, 88)
+                            .padding(.trailing)
+                            .padding(.bottom, 8)
+                        }
+                        Divider().padding(.leading, 88)
+                    }
+                }
+            case .links(let links):
+                VStack(spacing: 12) {
+                    ForEach(links.indices, id: \.self) { idx in
+                        let link = links[idx]
+                        Button(action: {
+                            // Link tap handler not directly opening Safari/media in layout unless wrapped in nav link, so this is just UI dummy for now if we don't have routing manager
+                        }) {
+                            HStack {
+                                Text(link.title)
+                                    .font(.body)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                            }
+                            .padding()
+                            .background(Color(.secondarySystemBackground))
+                            .cornerRadius(8)
+                            .padding(.horizontal)
+                        }
+                        .foregroundColor(.primary)
                     }
                 }
             case .novelBigScroller(let novels, _):
@@ -239,8 +343,10 @@ struct SourceView: View {
             _ = try await pluginRunner.loadBundle(from: plugin.url)
             self.runner = pluginRunner
 
+            let schema = try? await pluginRunner.getSettings()
             let layout = try await pluginRunner.getHome()
             await MainActor.run {
+                self.settingsSchema = schema
                 self.homeLayout = layout
                 self.isLoaded = true
             }

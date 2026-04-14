@@ -23,7 +23,13 @@ actor AppNetModule: NetModule {
             let cachedUA = await MainActor.run {
                 CloudflareManager.shared.getCachedUserAgent(for: host)
             }
-            updatedHeaders["User-Agent"] = cachedUA
+            if !cachedUA.isEmpty {
+                // If Cloudflare manager has a specific UA for this host, we must use it
+                updatedHeaders["User-Agent"] = cachedUA
+            } else if updatedHeaders["User-Agent"] == nil && updatedHeaders["user-agent"] == nil {
+                // Default fallback if plugin didn't provide one
+                updatedHeaders["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
         }
 
         if let cookies = HTTPCookieStorage.shared.cookies(for: url), !cookies.isEmpty {
@@ -113,6 +119,11 @@ actor AppNetModule: NetModule {
         var resHeaders: [String: String] = [:]
         for (key, value) in httpResponse.allHeaderFields {
             resHeaders[String(describing: key)] = String(describing: value)
+        }
+
+        // Inject the used User-Agent so plugins know what was sent
+        if let sentUA = urlRequest.value(forHTTPHeaderField: "User-Agent") {
+            resHeaders["X-Used-User-Agent"] = sentUA
         }
 
         return NetResponse(

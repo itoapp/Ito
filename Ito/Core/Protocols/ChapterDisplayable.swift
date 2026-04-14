@@ -30,6 +30,7 @@ nonisolated extension Anime.Episode: ChapterDisplayable {
         guard let ts = dateUpdated else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(ts)).formatted(date: .abbreviated, time: .omitted)
     }
+    public var isPaywalled: Bool { paywalled ?? false }
 }
 
 nonisolated extension Novel.Chapter: ChapterDisplayable {
@@ -38,4 +39,5 @@ nonisolated extension Novel.Chapter: ChapterDisplayable {
         guard let ts = dateUpdated else { return nil }
         return Date(timeIntervalSince1970: TimeInterval(ts)).formatted(date: .abbreviated, time: .omitted)
     }
+    public var isPaywalled: Bool { paywalled ?? false }
 }
