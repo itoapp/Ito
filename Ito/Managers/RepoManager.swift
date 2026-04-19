@@ -95,15 +95,20 @@ public class RepoManager: ObservableObject {
     }
 
     public func addRepository(url: String) async throws {
-        print("🌍 [DEBUG-REPO] Attempting to add repository: \(url)")
+        // Normalize: strip trailing /index.json so the base URL is always stored
+        var normalizedUrl = url
+        if normalizedUrl.hasSuffix("/index.json") {
+            normalizedUrl = String(normalizedUrl.dropLast("/index.json".count))
+        }
+        print("🌍 [DEBUG-REPO] Attempting to add repository: \(normalizedUrl)")
 
         // Prevent duplicates
-        guard !repositories.contains(where: { $0.url == url }) else {
-            print("🌍 [DEBUG-REPO] Repository already exists: \(url)")
+        guard !repositories.contains(where: { $0.url == normalizedUrl }) else {
+            print("🌍 [DEBUG-REPO] Repository already exists: \(normalizedUrl)")
             return
         }
 
-        var repo = Repository(url: url)
+        var repo = Repository(url: normalizedUrl)
         do {
             let fetchedIndex = try await fetchIndex(for: url)
             repo.index = fetchedIndex
@@ -145,7 +150,7 @@ public class RepoManager: ObservableObject {
             print("🌍 [DEBUG-REPO] Invalid URL format: \(urlStr)")
             throw URLError(.badURL)
         }
-        let indexUrl = url.appendingPathComponent("index.json")
+        let indexUrl = url.lastPathComponent == "index.json" ? url : url.appendingPathComponent("index.json")
         print("🌍 [DEBUG-REPO] Downloading from: \(indexUrl.absoluteString)")
 
         var request = URLRequest(url: indexUrl)
