@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		391483262FE4B140002F5EA7 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 391483252FE4B140002F5EA7 /* GRDB */; };
+		397BF7242FE6F4E600EFFFC4 /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 397BF7232FE6F4E600EFFFC4 /* ito-runner */; };
 		3A64EED82F7969F700B76A90 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 3A64EED72F7969F700B76A90 /* GRDB */; };
 		3A7509552F57FFE40057955D /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3A7509542F57FFE40057955D /* ito-runner */; };
 		3AC825702F5FD9300054AD29 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC8256F2F5FD9300054AD29 /* Nuke */; };
@@ -76,6 +78,8 @@
 				3AC825722F5FD9300054AD29 /* NukeUI in Frameworks */,
 				3A64EED82F7969F700B76A90 /* GRDB in Frameworks */,
 				3ADF8E0F2F6CE2E6007A5EA0 /* ito-runner in Frameworks */,
+				391483262FE4B140002F5EA7 /* GRDB in Frameworks */,
+				397BF7242FE6F4E600EFFFC4 /* ito-runner in Frameworks */,
 				3A7509552F57FFE40057955D /* ito-runner in Frameworks */,
 				3AC825702F5FD9300054AD29 /* Nuke in Frameworks */,
 			);
@@ -144,6 +148,8 @@
 				3AC825712F5FD9300054AD29 /* NukeUI */,
 				3ADF8E0E2F6CE2E6007A5EA0 /* ito-runner */,
 				3A64EED72F7969F700B76A90 /* GRDB */,
+				391483252FE4B140002F5EA7 /* GRDB */,
+				397BF7232FE6F4E600EFFFC4 /* ito-runner */,
 			);
 			productName = Ito;
 			productReference = 3A43D87F2F57E4BD008E061E /* Ito.app */;
@@ -203,7 +209,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2620;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 2650;
 				TargetAttributes = {
 					3A43D87E2F57E4BD008E061E = {
 						CreatedOnToolsVersion = 26.2;
@@ -230,8 +236,8 @@
 			packageReferences = (
 				3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */,
 				3AC825732F5FF84D0054AD29 /* XCRemoteSwiftPackageReference "SwiftLintPlugins" */,
-				3ADF8E0D2F6CE2E6007A5EA0 /* XCLocalSwiftPackageReference "projects/ito-runner" */,
-				3A64EED62F7969F700B76A90 /* XCLocalSwiftPackageReference "../GRDB.swift-master" */,
+				391483242FE4B140002F5EA7 /* XCRemoteSwiftPackageReference "GRDB" */,
+				397BF7222FE6F4E600EFFFC4 /* XCLocalSwiftPackageReference "../ito-runner" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3A43D8802F57E4BD008E061E /* Products */;
@@ -370,6 +376,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -427,6 +434,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -634,17 +642,21 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		3A64EED62F7969F700B76A90 /* XCLocalSwiftPackageReference "../GRDB.swift-master" */ = {
+		397BF7222FE6F4E600EFFFC4 /* XCLocalSwiftPackageReference "../ito-runner" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "../GRDB.swift-master";
-		};
-		3ADF8E0D2F6CE2E6007A5EA0 /* XCLocalSwiftPackageReference "projects/ito-runner" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "projects/ito-runner";
+			relativePath = "../ito-runner";
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		391483242FE4B140002F5EA7 /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				branch = master;
+				kind = branch;
+			};
+		};
 		3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/kean/Nuke";
@@ -664,6 +676,15 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		391483252FE4B140002F5EA7 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 391483242FE4B140002F5EA7 /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+		397BF7232FE6F4E600EFFFC4 /* ito-runner */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = "ito-runner";
+		};
 		3A64EED72F7969F700B76A90 /* GRDB */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = GRDB;

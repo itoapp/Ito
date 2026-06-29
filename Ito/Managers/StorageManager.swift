@@ -45,7 +45,7 @@ public class StorageManager: ObservableObject {
                 let config = URLSessionConfiguration.default
                 config.urlCache = nil
                 config.httpAdditionalHeaders = ["User-Agent": CloudflareManager.defaultUserAgent]
-                $0.dataLoader = DataLoader(configuration: config)
+                $0.dataLoader = PluginDataLoader(configuration: config)
             }
         } catch {
             print("Failed to initialize Nuke DataCache: \(error)")

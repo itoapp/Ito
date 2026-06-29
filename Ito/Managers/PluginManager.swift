@@ -47,6 +47,7 @@ public class PluginManager: ObservableObject {
         await runner.setDefaultsModule(DefaultDefaultsModule(pluginId: pluginId))
         await runner.setHtmlModule(DefaultHtmlModule())
         await runner.setJsModule(DefaultJsModule())
+        await runner.setWebviewModule(AppWebviewModule())
 
         print("🔌 [PluginManager] Loading bundle for \(pluginId)...")
         _ = try await runner.loadBundle(from: plugin.url)
