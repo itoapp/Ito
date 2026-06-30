@@ -1,15 +1,16 @@
+import OSLog
 import Foundation
 import WebKit
 import ito_runner
 
 actor AppWebviewModule: WebviewModule {
     func loadUrl(request: WebviewRequest) async throws -> WebviewResponse {
-        print("AppWebviewModule: loadUrl called for \(request.url)")
+        AppLogger.network.debug("AppWebviewModule: loadUrl called for \(request.url)")
         return try await WebviewManager.shared.loadUrl(request: request)
     }
 
     func executeJs(script: String) async throws -> String {
-        print("AppWebviewModule: executeJs called")
+        AppLogger.network.debug("AppWebviewModule: executeJs called")
         return try await WebviewManager.shared.executeJs(script: script)
     }
 }
@@ -50,9 +51,9 @@ class WebviewManager: NSObject, WKNavigationDelegate {
     }
 
     func loadUrl(request: WebviewRequest) async throws -> WebviewResponse {
-        print("WebviewManager: loadUrl requested for \(request.url)")
+        AppLogger.network.debug("WebviewManager: loadUrl requested for \(request.url)")
         if resolveContinuation != nil {
-            print("WebviewManager: cancelling previous continuation")
+            AppLogger.network.debug("WebviewManager: cancelling previous continuation")
             resolveContinuation?.resume(throwing: URLError(.cancelled))
             resolveContinuation = nil
         }
@@ -62,32 +63,32 @@ class WebviewManager: NSObject, WKNavigationDelegate {
             self.setupWebView()
 
             guard let url = URL(string: request.url) else {
-                print("WebviewManager: bad url \(request.url)")
+                AppLogger.network.debug("WebviewManager: bad url \(request.url)")
                 continuation.resume(throwing: URLError(.badURL))
                 self.resolveContinuation = nil
                 return
             }
 
-            print("WebviewManager: loading url request")
+            AppLogger.network.debug("WebviewManager: loading url request")
             self.webView?.load(URLRequest(url: url))
         }
     }
 
     func executeJs(script: String) async throws -> String {
-        print("WebviewManager: executing js script of length \(script.count)")
+        AppLogger.network.debug("WebviewManager: executing js script of length \(script.count)")
         return try await withCheckedThrowingContinuation { continuation in
             guard let wv = webView else {
-                print("WebviewManager: webView is nil")
+                AppLogger.network.debug("WebviewManager: webView is nil")
                 continuation.resume(throwing: URLError(.badURL))
                 return
             }
             wv.evaluateJavaScript(script) { result, error in
                 if let error = error {
-                    print("WebviewManager: evaluateJavaScript error: \(error)")
+                    AppLogger.network.error("WebviewManager: evaluateJavaScript error: \(error)")
                     continuation.resume(throwing: error)
                 } else {
                     let resultStr = String(describing: result ?? "")
-                    print("WebviewManager: evaluateJavaScript success, result length: \(resultStr.count)")
+                    AppLogger.network.debug("WebviewManager: evaluateJavaScript success, result length: \(resultStr.count)")
                     continuation.resume(returning: resultStr)
                 }
             }
@@ -96,10 +97,10 @@ class WebviewManager: NSObject, WKNavigationDelegate {
 
     // MARK: - WKNavigationDelegate
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("WebviewManager: didFinish navigation")
+        AppLogger.network.debug("WebviewManager: didFinish navigation")
         webView.evaluateJavaScript("document.documentElement.outerHTML") { [weak self] htmlResult, _ in
             let html = (htmlResult as? String) ?? ""
-            print("WebviewManager: didFinish grabbed html of length \(html.count)")
+            AppLogger.network.debug("WebviewManager: didFinish grabbed html of length \(html.count)")
             let response = WebviewResponse(url: webView.url?.absoluteString ?? "", html: html)
             self?.resolveContinuation?.resume(returning: response)
             self?.resolveContinuation = nil
@@ -107,7 +108,7 @@ class WebviewManager: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("WebviewManager: didFail navigation error: \(error)")
+        AppLogger.network.error("WebviewManager: didFail navigation error: \(error)")
         self.resolveContinuation?.resume(throwing: error)
         self.resolveContinuation = nil
     }

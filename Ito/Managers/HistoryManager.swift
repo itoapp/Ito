@@ -1,3 +1,4 @@
+import OSLog
 import Combine
 import Foundation
 import GRDB
@@ -50,7 +51,7 @@ public class HistoryManager: ObservableObject {
         observationCancellable = observation.start(
             in: dbPool,
             onError: { error in
-                print("[HistoryManager] Observation error: \(error)")
+                AppLogger.general.error("[HistoryManager] Observation error: \(error)")
             },
             onChange: { [weak self] records in
                 Task { @MainActor in
@@ -123,7 +124,7 @@ public class HistoryManager: ObservableObject {
                     try record.insert(db)
                 }
             } catch {
-                print("[HistoryManager] Failed to insert: \(error)")
+                AppLogger.general.error("[HistoryManager] Failed to insert: \(error)")
             }
         }
     }
@@ -137,7 +138,7 @@ public class HistoryManager: ObservableObject {
                     _ = try ReadingHistoryRecord.deleteOne(db, key: id)
                 }
             } catch {
-                print("[HistoryManager] Failed to remove entry: \(error)")
+                AppLogger.general.error("[HistoryManager] Failed to remove entry: \(error)")
             }
         }
     }
@@ -149,7 +150,7 @@ public class HistoryManager: ObservableObject {
                     _ = try ReadingHistoryRecord.deleteAll(db)
                 }
             } catch {
-                print("[HistoryManager] Failed to clear history: \(error)")
+                AppLogger.general.error("[HistoryManager] Failed to clear history: \(error)")
             }
         }
     }
@@ -188,9 +189,9 @@ public class HistoryManager: ObservableObject {
                 }
                 // Clean up legacy data
                 UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
-                print("[HistoryManager] Migrated \(legacy.count) entries from UserDefaults")
+                AppLogger.general.debug("\("[HistoryManager] Migrated \(legacy.count)") entries from UserDefaults")
             } catch {
-                print("[HistoryManager] Migration failed: \(error)")
+                AppLogger.general.error("[HistoryManager] Migration failed: \(error)")
             }
         }
     }

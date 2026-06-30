@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 
@@ -103,14 +104,14 @@ public class TrackerManager: ObservableObject {
                 do {
                     try await provider.updateProgress(mediaId: mediaId, progress: progress, status: nil)
                 } catch {
-                    print("Failed to update progress on \(provider.name): \(error.localizedDescription)")
+                    AppLogger.auth.error("\("Failed to update progress on \(provider.name)"): \(error.localizedDescription)")
                 }
             } else if provider.identifier == "anilist", let legacyId = LibraryManager.shared.getAnilistId(for: localId) {
                 // Legacy fallback update
                 do {
                     try await provider.updateProgress(mediaId: String(legacyId), progress: progress, status: nil)
                 } catch {
-                    print("Failed to update legacy AniList progress: \(error.localizedDescription)")
+                    AppLogger.auth.error("Failed to update legacy AniList progress: \(error.localizedDescription)")
                 }
             }
         }

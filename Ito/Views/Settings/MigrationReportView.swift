@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import GRDB
 import ito_runner
@@ -327,7 +328,7 @@ struct MigrationReportView: View {
                 // Refresh plugin cache so library picks up the remapped IDs
                 await PluginManager.shared.reloadInstalledPlugins()
             } catch {
-                print("Remap failed for \(foreignId): \(error)")
+                AppLogger.database.error("\("Remap failed for \(foreignId)"): \(error)")
             }
         }
     }

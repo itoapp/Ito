@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import NukeUI
 
@@ -535,7 +536,7 @@ struct TrackerDetailsSheet: View {
                 try await provider.updateProgress(mediaId: media.id, progress: progInt, status: effectiveStatus)
                 savedProgress = progInt
             } catch {
-                print("Failed saving TrackerProgress with status: \(error.localizedDescription)")
+                AppLogger.ui.error("Failed saving TrackerProgress with status: \(error.localizedDescription)")
             }
 
             await MainActor.run {

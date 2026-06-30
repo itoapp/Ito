@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import NukeUI
 import Nuke
@@ -443,7 +444,7 @@ extension ReaderView {
                 let sorted = pages.sorted(by: { $0.index < $1.index })
                 await MainActor.run { prefetchedChapters[next.key] = sorted }
             } catch {
-                print("[Reader] Failed to pre-fetch next chapter: \(error)")
+                AppLogger.ui.error("[Reader] Failed to pre-fetch next chapter: \(error)")
             }
         }
         if let prev = chapterBefore(currentChapter), prefetchedChapters[prev.key] == nil {
@@ -452,7 +453,7 @@ extension ReaderView {
                 let sorted = pages.sorted(by: { $0.index < $1.index })
                 await MainActor.run { prefetchedChapters[prev.key] = sorted }
             } catch {
-                print("[Reader] Failed to pre-fetch previous chapter: \(error)")
+                AppLogger.ui.error("[Reader] Failed to pre-fetch previous chapter: \(error)")
             }
         }
     }
@@ -470,7 +471,7 @@ extension ReaderView {
             }
         } catch {
             await MainActor.run { loadingNextChapter = false }
-            print("[Reader] Failed to load next chapter: \(error)")
+            AppLogger.ui.error("[Reader] Failed to load next chapter: \(error)")
         }
     }
 
@@ -488,7 +489,7 @@ extension ReaderView {
             }
         } catch {
             await MainActor.run { loadingPrevChapter = false }
-            print("[Reader] Failed to load previous chapter: \(error)")
+            AppLogger.ui.error("[Reader] Failed to load previous chapter: \(error)")
         }
     }
 

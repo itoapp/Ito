@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 import ito_runner
@@ -31,16 +32,16 @@ public class PluginManager: ObservableObject {
     @MainActor
     public func getRunner(for pluginId: String) async throws -> ItoRunner {
         if let cached = runnerCache[pluginId] {
-            print("🔌 [PluginManager] Returning cached runner for \(pluginId)")
+            AppLogger.plugin.debug("🔌 [PluginManager] Returning cached runner for \(pluginId)")
             return cached
         }
 
         guard let plugin = installedPlugins[pluginId] else {
-            print("🔌 [PluginManager] Plugin not found: \(pluginId)")
+            AppLogger.plugin.debug("🔌 [PluginManager] Plugin not found: \(pluginId)")
             throw URLError(.fileDoesNotExist) // Plugin not installed
         }
 
-        print("🔌 [PluginManager] Creating new runner for \(pluginId)...")
+        AppLogger.plugin.debug("\("🔌 [PluginManager] Creating new runner for \(pluginId)")...")
         let runner = ItoRunner()
         await runner.setNetModule(AppNetModule())
         await runner.setStdModule(DefaultStdModule())
@@ -49,11 +50,11 @@ public class PluginManager: ObservableObject {
         await runner.setJsModule(DefaultJsModule())
         await runner.setWebviewModule(AppWebviewModule())
 
-        print("🔌 [PluginManager] Loading bundle for \(pluginId)...")
+        AppLogger.plugin.debug("\("🔌 [PluginManager] Loading bundle for \(pluginId)")...")
         _ = try await runner.loadBundle(from: plugin.url)
 
         runnerCache[pluginId] = runner
-        print("🔌 [PluginManager] Runner cached for \(pluginId)")
+        AppLogger.plugin.debug("🔌 [PluginManager] Runner cached for \(pluginId)")
         return runner
     }
 
@@ -62,7 +63,7 @@ public class PluginManager: ObservableObject {
     @MainActor
     public func evictRunner(for pluginId: String) {
         if runnerCache.removeValue(forKey: pluginId) != nil {
-            print("🔌 [PluginManager] Evicted cached runner for \(pluginId)")
+            AppLogger.plugin.debug("🔌 [PluginManager] Evicted cached runner for \(pluginId)")
         }
     }
 
@@ -90,7 +91,7 @@ public class PluginManager: ObservableObject {
                     let extracted = try ItoRunner.extractPluginInfo(from: url)
                     newCache[extracted.manifest.info.id] = InstalledPlugin(url: url, info: extracted.manifest.info, iconData: extracted.icon)
                 } catch {
-                    print("Failed to extract plugin info for \(url.lastPathComponent): \(error)")
+                    AppLogger.plugin.error("\("Failed to extract plugin info for \(url.lastPathComponent)"): \(error)")
                 }
             }
 
@@ -102,15 +103,15 @@ public class PluginManager: ObservableObject {
             for cachedId in runnerCache.keys {
                 if !validIds.contains(cachedId) {
                     runnerCache.removeValue(forKey: cachedId)
-                    print("🔌 [PluginManager] Evicted removed plugin runner: \(cachedId)")
+                    AppLogger.plugin.debug("🔌 [PluginManager] Evicted removed plugin runner: \(cachedId)")
                 }
             }
             // Also evict ALL runners to pick up updated .ito files
             runnerCache.removeAll()
-            print("🔌 [PluginManager] Cleared runner cache (\(newCache.count) plugins loaded)")
+            AppLogger.plugin.debug("\("🔌 [PluginManager] Cleared runner cache (\(newCache.count)") plugins loaded)")
 
         } catch {
-            print("Failed to load installed plugins: \(error)")
+            AppLogger.plugin.error("Failed to load installed plugins: \(error)")
         }
     }
 }

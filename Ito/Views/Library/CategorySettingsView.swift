@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import GRDB
 
@@ -152,7 +153,7 @@ struct EditCategoryView: View {
                             }
                             dismiss()
                         } catch {
-                            print("Error renaming: \(error)")
+                            AppLogger.database.error("Error renaming: \(error)")
                         }
                     }
                 }

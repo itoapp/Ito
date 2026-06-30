@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import Nuke
 import NukeUI
@@ -312,12 +313,12 @@ struct SourceView: View {
             // Debounce
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled, let pluginRunner = self.runner else {
-                print("🔍 [SourceView] Search skipped — cancelled or runner nil")
+                AppLogger.ui.debug("🔍 [SourceView] Search skipped — cancelled or runner nil")
                 return
             }
 
             do {
-                print("🔍 [SourceView] Searching '\(query)' on \(plugin.info.name)")
+                AppLogger.ui.debug("\("🔍 [SourceView] Searching '\(query)")' on \(plugin.info.name)")
                 switch plugin.info.type {
                 case .anime:
                     let result = try await pluginRunner.getSearchAnimeList(query: query, page: 1, filters: [])
@@ -332,11 +333,11 @@ struct SourceView: View {
                     guard !Task.isCancelled else { return }
                     await MainActor.run { self.searchNovels = result.entries }
                 }
-                print("🔍 [SourceView] Search complete for '\(query)'")
+                AppLogger.ui.debug("\("🔍 [SourceView] Search complete for '\(query)")'")
             } catch is CancellationError {
-                print("🔍 [SourceView] Search cancelled for '\(query)'")
+                AppLogger.ui.debug("\("🔍 [SourceView] Search cancelled for '\(query)")'")
             } catch {
-                print("🔍 [SourceView] Search failed: \(error)")
+                AppLogger.ui.error("🔍 [SourceView] Search failed: \(error)")
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     self.errorMessage = "Search error: \(error.localizedDescription)"
@@ -347,39 +348,39 @@ struct SourceView: View {
 
     private func loadPlugin() async {
         guard !isLoaded else {
-            print("📦 [SourceView] loadPlugin skipped — already loaded for \(plugin.info.name)")
+            AppLogger.ui.debug("📦 [SourceView] loadPlugin skipped — already loaded for \(plugin.info.name)")
             return
         }
-        print("📦 [SourceView] loadPlugin START for \(plugin.info.name) (id: \(plugin.id))")
+        AppLogger.ui.debug("\("📦 [SourceView] loadPlugin START for \(plugin.info.name)") (id: \(plugin.id))")
         do {
-            print("📦 [SourceView] Getting cached runner from PluginManager...")
+            AppLogger.ui.debug("📦 [SourceView] Getting cached runner from PluginManager...")
             let pluginRunner = try await PluginManager.shared.getRunner(for: plugin.id)
-            print("📦 [SourceView] Runner obtained")
+            AppLogger.ui.debug("📦 [SourceView] Runner obtained")
 
             guard !Task.isCancelled else {
-                print("📦 [SourceView] Task cancelled after getRunner")
+                AppLogger.ui.debug("📦 [SourceView] Task cancelled after getRunner")
                 return
             }
 
             self.runner = pluginRunner
 
-            print("📦 [SourceView] Fetching settings schema...")
+            AppLogger.ui.debug("📦 [SourceView] Fetching settings schema...")
             let schema = try? await pluginRunner.getSettings()
 
             guard !Task.isCancelled else {
-                print("📦 [SourceView] Task cancelled after getSettings")
+                AppLogger.ui.debug("📦 [SourceView] Task cancelled after getSettings")
                 return
             }
 
-            print("📦 [SourceView] Fetching home layout...")
+            AppLogger.ui.debug("📦 [SourceView] Fetching home layout...")
             let layout = try await pluginRunner.getHome()
 
             guard !Task.isCancelled else {
-                print("📦 [SourceView] Task cancelled after getHome")
+                AppLogger.ui.debug("📦 [SourceView] Task cancelled after getHome")
                 return
             }
 
-            print("📦 [SourceView] loadPlugin SUCCESS — \(layout.components.count) components")
+            AppLogger.ui.debug("\("📦 [SourceView] loadPlugin SUCCESS — \(layout.components.count)") components")
             await MainActor.run {
                 self.settingsSchema = schema
                 self.homeLayout = layout
@@ -387,10 +388,11 @@ struct SourceView: View {
             }
         } catch is CancellationError {
             // Don't mark isLoaded — let a future .task re-attempt
-            print("📦 [SourceView] loadPlugin CANCELLED for \(plugin.info.name)")
+            AppLogger.ui.debug("📦 [SourceView] loadPlugin CANCELLED for \(plugin.info.name)")
         } catch {
-            print("📦 [SourceView] loadPlugin FAILED for \(plugin.info.name): \(error)")
+            AppLogger.ui.error("📦 [SourceView] loadPlugin FAILED for \(self.plugin.info.name): \(error)")
             await MainActor.run {
+                SnackBarManager.shared.showError(error, title: "Failed to load \(self.plugin.info.name)")
                 self.errorMessage = error.localizedDescription
                 self.isLoaded = true
             }

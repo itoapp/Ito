@@ -40,6 +40,12 @@ struct SettingsView: View {
                     }
                 }
 
+                Section(header: Text("Developer")) {
+                    NavigationLink(destination: DebugLogView()) {
+                        Label("Debug Logs", systemImage: "ladybug")
+                    }
+                }
+
                 Section(header: Text("About")) {
                     HStack {
                         Text("Version")

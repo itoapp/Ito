@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 import Nuke
@@ -48,7 +49,7 @@ public class StorageManager: ObservableObject {
                 $0.dataLoader = PluginDataLoader(configuration: config)
             }
         } catch {
-            print("Failed to initialize Nuke DataCache: \(error)")
+            AppLogger.general.error("Failed to initialize Nuke DataCache: \(error)")
             // Fallback to default aggressive cache if custom instantiation fails
             ImagePipeline.shared = ImagePipeline(configuration: .withDataCache)
         }

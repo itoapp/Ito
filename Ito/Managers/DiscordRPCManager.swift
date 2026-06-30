@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 import SwiftUI
@@ -174,11 +175,11 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
             guard let self = self else { return }
             switch result {
             case .failure(let error):
-                print("DiscordRPC WebSocket error: \(error.localizedDescription)")
+                AppLogger.general.error("DiscordRPC WebSocket error: \(error.localizedDescription)")
             case .success(let message):
                 switch message {
                 case .string(let text):
-                    print("DiscordRPC Received: \(text)")
+                    AppLogger.general.debug("DiscordRPC Received: \(text)")
                 case .data:
                     break
                 @unknown default:
@@ -203,12 +204,12 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
                 let message = URLSessionWebSocketTask.Message.string(jsonString)
                 webSocketTask?.send(message) { error in
                     if let error = error {
-                        print("DiscordRPC failed to send handshake: \(error.localizedDescription)")
+                        AppLogger.general.error("DiscordRPC failed to send handshake: \(error.localizedDescription)")
                     }
                 }
             }
         } catch {
-            print("DiscordRPC serialization error: \(error)")
+            AppLogger.general.error("DiscordRPC serialization error: \(error)")
         }
     }
 
@@ -338,12 +339,12 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
                 let message = URLSessionWebSocketTask.Message.string(jsonString)
                 self.webSocketTask?.send(message) { error in
                     if let err = error {
-                        print("DiscordRPC failed to send activity: \(err.localizedDescription)")
+                        AppLogger.general.error("DiscordRPC failed to send activity: \(err.localizedDescription)")
                     }
                 }
             }
         } catch {
-            print("DiscordRPC activity serialization error: \(error)")
+            AppLogger.general.error("DiscordRPC activity serialization error: \(error)")
         }
     }
 }

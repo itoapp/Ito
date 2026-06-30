@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 import NukeUI
@@ -40,8 +41,7 @@ private struct BrowseContentView: View {
     @ObservedObject private var pluginManager = PluginManager.shared
     @ObservedObject private var repoManager = RepoManager.shared
 
-    @State private var errorMessage: String?
-    @State private var showDeleteConfirmation = false
+        @State private var showDeleteConfirmation = false
     @State private var pendingDeleteOffsets: IndexSet?
     @State private var isInstallingUpdate: String? // plugin id currently updating
     @State private var showRepositories = false // Drives programmatic navigation
@@ -83,14 +83,13 @@ private struct BrowseContentView: View {
                 pluginListView
             }
 
-            errorToastView
-        }
+                    }
         .contentShape(Rectangle())
         .onDrop(of: [.item, .fileURL, .ito], isTargeted: nil) { providers in
             handleDrop(providers: providers)
         }
         .onOpenURL { url in
-            print("System routed .onOpenURL trigger with \(url)")
+            AppLogger.ui.debug("System routed .onOpenURL trigger with \(url)")
             Task { await handleOpenURL(url) }
         }
         .navigationTitle("Browse")
@@ -207,40 +206,7 @@ private struct BrowseContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var errorToastView: some View {
-        if let error = errorMessage {
-            VStack {
-                Spacer()
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.white)
-                    Text(error)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            errorMessage = nil
-                        }
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color.red.opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-        }
-    }
-
-    private var repositoriesButton: some View {
+        private var repositoriesButton: some View {
         Button(action: { showRepositories = true }) {
             Image(systemName: "globe")
         }
@@ -258,18 +224,10 @@ private struct BrowseContentView: View {
         } catch {
             await MainActor.run {
                 withAnimation {
-                    errorMessage = "Update failed: \(error.localizedDescription)"
+                    SnackBarManager.shared.showError("Update failed: \(error.localizedDescription)")
                 }
             }
-            // Auto-dismiss error after 4 seconds
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            await MainActor.run {
-                withAnimation {
-                    if errorMessage?.hasPrefix("Update failed") == true {
-                        errorMessage = nil
-                    }
-                }
-            }
+
         }
     }
 
@@ -282,7 +240,7 @@ private struct BrowseContentView: View {
             do {
                 try fileManager.createDirectory(at: pluginsDir, withIntermediateDirectories: true)
             } catch {
-                print("Failed to create plugins directory: \(error)")
+                AppLogger.ui.error("Failed to create plugins directory: \(error)")
                 return nil
             }
         }
@@ -300,7 +258,7 @@ private struct BrowseContentView: View {
                 } catch {
                     await MainActor.run {
                         withAnimation {
-                            errorMessage = "Failed to remove \(plugin.info.name): \(error.localizedDescription)"
+                            SnackBarManager.shared.showError("Failed to remove \(plugin.info.name): \(error.localizedDescription)")
                         }
                     }
                 }
@@ -310,7 +268,7 @@ private struct BrowseContentView: View {
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        print("Received drop with \(providers.count) providers")
+        AppLogger.ui.debug("\("Received drop with \(providers.count)") providers")
         guard let provider = providers.first else { return false }
 
         let itoType = UTType.ito.identifier
@@ -334,14 +292,14 @@ private struct BrowseContentView: View {
         provider.loadFileRepresentation(forTypeIdentifier: typeToLoad) { url, error in
             guard let tempURL = url else {
                 Task { @MainActor in
-                    withAnimation { self.errorMessage = "Failed to load dropped file: \(String(describing: error))" }
+                    SnackBarManager.shared.showError("Failed to load dropped file: \(String(describing: error))")
                 }
                 return
             }
 
             guard tempURL.pathExtension.lowercased() == "ito" else {
                 Task { @MainActor in
-                    withAnimation { self.errorMessage = "Please drop a valid .ito plugin file." }
+                    SnackBarManager.shared.showError("Please drop a valid .ito plugin file.")
                 }
                 return
             }
@@ -349,7 +307,7 @@ private struct BrowseContentView: View {
             let fileManager = FileManager.default
             Task { @MainActor in
                 guard let pluginsDir = self.getPluginsDirectory() else {
-                    withAnimation { self.errorMessage = "Failed to access plugins directory." }
+                    SnackBarManager.shared.showError("Failed to access plugins directory.")
                     return
                 }
                 let destinationURL = pluginsDir.appendingPathComponent(tempURL.lastPathComponent)
@@ -361,7 +319,7 @@ private struct BrowseContentView: View {
                     try fileManager.copyItem(at: tempURL, to: destinationURL)
                     Task { await pluginManager.reloadInstalledPlugins() }
                 } catch {
-                    withAnimation { self.errorMessage = "File copy error: \(error.localizedDescription)" }
+                    SnackBarManager.shared.showError("File copy error: \(error.localizedDescription)")
                 }
             }
         }
@@ -374,7 +332,7 @@ private struct BrowseContentView: View {
 
         let fileManager = FileManager.default
         guard let pluginsDir = getPluginsDirectory() else {
-            await MainActor.run { withAnimation { self.errorMessage = "Failed to access plugins directory." } }
+            await MainActor.run { SnackBarManager.shared.showError("Failed to access plugins directory.") }
             return
         }
         let destinationURL = pluginsDir.appendingPathComponent(url.lastPathComponent)
@@ -386,7 +344,7 @@ private struct BrowseContentView: View {
             try fileManager.copyItem(at: url, to: destinationURL)
             await pluginManager.reloadInstalledPlugins()
         } catch {
-            await MainActor.run { withAnimation { self.errorMessage = "URL Open error: \(error.localizedDescription)" } }
+            await MainActor.run { SnackBarManager.shared.showError("URL Open error: \(error.localizedDescription)") }
         }
     }
 }

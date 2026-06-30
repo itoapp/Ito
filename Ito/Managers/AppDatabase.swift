@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import GRDB
 import Combine
@@ -28,7 +29,7 @@ public final class AppDatabase: Sendable {
         var configuration = Configuration()
         #if DEBUG
         configuration.prepareDatabase { db in
-            db.trace { print($0) }
+            db.trace { AppLogger.database.debug("\($0)") }
         }
         #endif
 

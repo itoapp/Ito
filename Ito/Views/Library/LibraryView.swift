@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import Nuke
 import NukeUI
@@ -105,7 +106,7 @@ struct LibraryView: View {
             ) { result in
                 switch result {
                 case .success(let url):
-                    print("Exported to \(url)")
+                    AppLogger.database.debug("Exported to \(url)")
                 case .failure(let error):
                     backupError = error.localizedDescription
                     showBackupError = true

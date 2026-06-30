@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 import SwiftUI
@@ -95,23 +96,23 @@ public class SearchViewModel: ObservableObject {
             for plugin in searchPlugins {
                 // Bail out if a newer search has started
                 guard !Task.isCancelled, self.searchSessionID == sessionID else {
-                    print("🔍 [Search] Session invalidated, stopping")
+                    AppLogger.ui.debug("🔍 [Search] Session invalidated, stopping")
                     break
                 }
 
                 do {
-                    print("🔍 [Search] Getting runner for \(plugin.info.name)...")
+                    AppLogger.ui.debug("\("🔍 [Search] Getting runner for \(plugin.info.name)")...")
                     let runner = try await PluginManager.shared.getRunner(for: plugin.id)
 
                     guard !Task.isCancelled, self.searchSessionID == sessionID else { break }
 
-                    print("🔍 [Search] Searching \(plugin.info.name) for '\(searchQuery)'...")
+                    AppLogger.ui.debug("\("🔍 [Search] Searching \(plugin.info.name)") for '\(searchQuery)'...")
                     var results: [PluginSearchResult] = []
 
                     switch plugin.info.type {
                     case .manga:
                         let res = try await runner.getSearchMangaList(query: searchQuery, page: 1, filters: nil)
-                        print("🔍 [Search] \(plugin.info.name) WASM returned \(res.entries.count) raw manga entries (hasNextPage: \(res.hasNextPage))")
+                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") WASM returned \(res.entries.count) raw manga entries (hasNextPage: \(res.hasNextPage))")
                         guard !Task.isCancelled else { break }
                         results = res.entries.prefix(25).map { manga in
                             PluginSearchResult(
@@ -125,7 +126,7 @@ public class SearchViewModel: ObservableObject {
                         }
                     case .anime:
                         let res = try await runner.getSearchAnimeList(query: searchQuery, page: 1, filters: nil)
-                        print("🔍 [Search] \(plugin.info.name) WASM returned \(res.entries.count) raw anime entries (hasNextPage: \(res.hasNextPage))")
+                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") WASM returned \(res.entries.count) raw anime entries (hasNextPage: \(res.hasNextPage))")
                         guard !Task.isCancelled else { break }
                         results = res.entries.prefix(25).map { anime in
                             PluginSearchResult(
@@ -139,7 +140,7 @@ public class SearchViewModel: ObservableObject {
                         }
                     case .novel:
                         let res = try await runner.getSearchNovelList(query: searchQuery, page: 1, filters: nil)
-                        print("🔍 [Search] \(plugin.info.name) WASM returned \(res.entries.count) raw novel entries (hasNextPage: \(res.hasNextPage))")
+                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") WASM returned \(res.entries.count) raw novel entries (hasNextPage: \(res.hasNextPage))")
                         guard !Task.isCancelled else { break }
                         results = res.entries.prefix(25).map { novel in
                             PluginSearchResult(
@@ -157,22 +158,22 @@ public class SearchViewModel: ObservableObject {
 
                     let sessionValid = self.searchSessionID == sessionID
                     if sessionValid && !results.isEmpty {
-                        print("🔍 [Search] \(plugin.info.name) → \(results.count) results added to UI")
+                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") → \(results.count) results added to UI")
                         self.searchResults[plugin.info.name] = results
                     } else if !sessionValid {
-                        print("🔍 [Search] \(plugin.info.name) → DROPPED (session expired)")
+                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") → DROPPED (session expired)")
                     } else {
-                        print("🔍 [Search] \(plugin.info.name) → 0 mapped results, skipping")
+                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") → 0 mapped results, skipping")
                     }
                 } catch is CancellationError {
-                    print("🔍 [Search] Cancelled for \(plugin.info.name)")
+                    AppLogger.ui.debug("🔍 [Search] Cancelled for \(plugin.info.name)")
                     break
                 } catch {
-                    print("🔍 [Search] Failed for \(plugin.info.name): \(error)")
+                    AppLogger.ui.error("\("🔍 [Search] Failed for \(plugin.info.name)"): \(error)")
                     // If a WASM trap occurred, the runner state may be corrupted.
                     // Evict it so the next use creates a fresh instance.
                     if "\(error)".contains("wasmTrap") || "\(error)".contains("Trap") {
-                        print("🔍 [Search] Evicting corrupted runner for \(plugin.id)")
+                        AppLogger.ui.debug("🔍 [Search] Evicting corrupted runner for \(plugin.id)")
                         PluginManager.shared.evictRunner(for: plugin.id)
                     }
                 }
@@ -187,7 +188,7 @@ public class SearchViewModel: ObservableObject {
             if self.searchSessionID == sessionID {
                 self.activeTasks.removeAll()
                 self.isSearching = false
-                print("🔍 [Search] All search tasks complete")
+                AppLogger.ui.debug("🔍 [Search] All search tasks complete")
             }
         }
         currentTasks = [task]

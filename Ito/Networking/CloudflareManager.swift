@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import WebKit
 import Combine
@@ -51,7 +52,7 @@ class CloudflareManager: NSObject, ObservableObject {
                 do {
                     try await Task.sleep(nanoseconds: 30_000_000_000)
                     if self.isResolving {
-                        print("[CloudflareManager] Hard timeout reached.")
+                        AppLogger.network.debug("[CloudflareManager] Hard timeout reached.")
                         self.finish(with: URLError(.timedOut))
                     }
                 } catch { }
@@ -62,7 +63,7 @@ class CloudflareManager: NSObject, ObservableObject {
                 do {
                     try await Task.sleep(nanoseconds: 5_000_000_000)
                     if self.isResolving {
-                        print("[CloudflareManager] Falling back to interactive challenge...")
+                        AppLogger.network.debug("[CloudflareManager] Falling back to interactive challenge...")
                         self.presentInteractiveWebView()
                     }
                 } catch { }
@@ -80,7 +81,7 @@ class CloudflareManager: NSObject, ObservableObject {
 
                     let cookies = await self.fetchCookies()
                     if cookies.contains(where: { $0.name == self.clearanceCookieName && $0.domain.contains(baseHost) }) {
-                        print("[CloudflareManager] Polled and found cf_clearance cookie! Domain: \(baseHost)")
+                        AppLogger.network.debug("[CloudflareManager] Polled and found cf_clearance cookie! Domain: \(baseHost)")
                         self.extractClearanceAndComplete()
                         break
                     }
@@ -199,7 +200,7 @@ class CloudflareManager: NSObject, ObservableObject {
 extension CloudflareManager: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // Polling and injected scripts handle the solving
-        print("[CloudflareManager] didFinish navigation.")
+        AppLogger.network.debug("[CloudflareManager] didFinish navigation.")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -207,7 +208,7 @@ extension CloudflareManager: WKNavigationDelegate {
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
             return
         }
-        print("[CloudflareManager] didFail navigation: \(error.localizedDescription)")
+        AppLogger.network.error("[CloudflareManager] didFail navigation: \(error.localizedDescription)")
         finish(with: error)
     }
 
@@ -216,7 +217,7 @@ extension CloudflareManager: WKNavigationDelegate {
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
             return
         }
-        print("[CloudflareManager] didFailProvisionalNavigation: \(error.localizedDescription)")
+        AppLogger.network.error("[CloudflareManager] didFailProvisionalNavigation: \(error.localizedDescription)")
         finish(with: error)
     }
 }

@@ -1,32 +1,67 @@
 import SwiftUI
 import Combine
 
+public struct ToastMessage: Identifiable, Equatable {
+    public let id = UUID()
+    public enum Style {
+        case success
+        case error
+        case info
+    }
+    public var style: Style
+    public var title: String
+    public var message: String?
+
+    // For specific actions like 'Move' after saving
+    public var actionId: String?
+    public var actionTitle: String?
+}
+
+@MainActor
 public class SnackBarManager: ObservableObject {
     public static let shared = SnackBarManager()
 
+    @Published public var currentToast: ToastMessage?
     @Published public var isShowing: Bool = false
-    @Published public var savedItemId: String?
 
     private var hideWorkItem: DispatchWorkItem?
 
     private init() {}
 
-    public func showSaved(itemId: String) {
+    public func show(style: ToastMessage.Style, title: String, message: String? = nil, actionTitle: String? = nil, actionId: String? = nil) {
         // Cancel any pending hide
         hideWorkItem?.cancel()
 
+        let toast = ToastMessage(style: style, title: title, message: message, actionId: actionId, actionTitle: actionTitle)
+
         withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-            self.savedItemId = itemId
+            self.currentToast = toast
             self.isShowing = true
         }
 
         let workItem = DispatchWorkItem { [weak self] in
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                self?.isShowing = false
+            Task { @MainActor in
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                    self?.isShowing = false
+                }
             }
         }
         self.hideWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+        // Errors stay a bit longer so user can read them
+        let duration: TimeInterval = style == .error ? 4.5 : 3.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: workItem)
+    }
+
+    public func showSaved(itemId: String) {
+        show(style: .success, title: "Saved to Uncategorized", actionTitle: "Move", actionId: itemId)
+    }
+
+    public func showError(_ error: Error, title: String = "Error") {
+        show(style: .error, title: title, message: error.localizedDescription)
+    }
+
+    public func showError(_ text: String, title: String = "Error") {
+        show(style: .error, title: title, message: text)
     }
 }
 
@@ -43,39 +78,46 @@ public struct SnackBarOverlay: View {
             Color.clear // Transparent root covering safe area
                 .ignoresSafeArea()
 
-            if manager.isShowing {
+            if manager.isShowing, let toast = manager.currentToast {
                 HStack(spacing: 12) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
+                    icon(for: toast.style)
                         .font(.title3)
 
-                    Text("Saved to Uncategorized")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        // Dynamic Type Safe height handled by padding
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(toast.title)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+
+                        if let msg = toast.message {
+                            Text(msg)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
 
                     Spacer()
 
-                    Button {
-                        if let id = manager.savedItemId {
-                            showingSheetForId = id
+                    if let actionTitle = toast.actionTitle, let actionId = toast.actionId {
+                        Button {
+                            showingSheetForId = actionId
                             withAnimation {
                                 manager.isShowing = false
                             }
+                        } label: {
+                            Text(actionTitle)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.accentColor)
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 44)
                         }
-                    } label: {
-                        Text("Move")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.accentColor)
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 44) // HIG Target
+                        .background(Color.accentColor.opacity(0.15))
+                        .clipShape(Capsule())
                     }
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(Capsule())
                 }
                 .padding(.vertical, 12)
                 .padding(.leading, 16)
-                .padding(.trailing, 8) // Accommodate the pill capsule
+                .padding(.trailing, toast.actionTitle != nil ? 8 : 16)
                 .background(.ultraThinMaterial)
                 .cornerRadius(14)
                 .shadow(color: Color.black.opacity(0.12), radius: 10, x: 0, y: 5)
@@ -85,6 +127,7 @@ public struct SnackBarOverlay: View {
                     ? .opacity
                     : .move(edge: .bottom).combined(with: .opacity)
                 )
+                .id(toast.id) // Ensure transition triggers on change
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -95,6 +138,21 @@ public struct SnackBarOverlay: View {
             set: { showingSheetForId = $0?.id }
         )) { wrapper in
             CategoryAssignmentSheet(itemId: wrapper.id)
+        }
+    }
+
+    @ViewBuilder
+    private func icon(for style: ToastMessage.Style) -> some View {
+        switch style {
+        case .success:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .error:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.red)
+        case .info:
+            Image(systemName: "info.circle.fill")
+                .foregroundColor(.blue)
         }
     }
 }

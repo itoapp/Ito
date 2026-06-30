@@ -214,9 +214,7 @@ struct RepoDetailView: View {
 
     @State private var searchQuery = ""
     @State private var installingPackageId: String?
-    @State private var errorMessage: String?
-
-    var filteredPackages: [RepoPackage] {
+        var filteredPackages: [RepoPackage] {
         guard let index = repository.index else { return [] }
         guard !searchQuery.isEmpty else { return index.packages }
         return index.packages.filter { pkg in
@@ -235,8 +233,7 @@ struct RepoDetailView: View {
                 }
             }
 
-            errorToastView
-        }
+                    }
         .searchable(text: $searchQuery, prompt: "Search packages")
         .navigationTitle(repository.index?.repoName ?? "Repository")
         .navigationBarTitleDisplayMode(.large)
@@ -304,34 +301,6 @@ struct RepoDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var errorToastView: some View {
-        if let error = errorMessage {
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.white)
-                Text(error)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white)
-                Spacer()
-                Button {
-                    withAnimation(.easeOut(duration: 0.2)) { errorMessage = nil }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.white.opacity(0.8))
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.red.opacity(0.92))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-    }
-
     // MARK: - Helpers
 
     enum InstallState {
@@ -362,12 +331,7 @@ struct RepoDetailView: View {
             try await repoManager.installPackage(pkg, repositoryUrl: repository.url)
         } catch {
             await MainActor.run {
-                withAnimation { errorMessage = "Failed to install \(pkg.name): \(error.localizedDescription)" }
-            }
-            // Auto-dismiss after 4s
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            await MainActor.run {
-                withAnimation { errorMessage = nil }
+                SnackBarManager.shared.showError("Failed to install \(pkg.name): \(error.localizedDescription)")
             }
         }
         installingPackageId = nil

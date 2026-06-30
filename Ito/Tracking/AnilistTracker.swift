@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 
@@ -53,7 +54,7 @@ public class AnilistTracker: TrackerProvider {
             do {
                 try await self.fetchAnilistViewer(token: token)
             } catch {
-                print("Failed to fetch viewer: \(error)")
+                AppLogger.auth.error("Failed to fetch viewer: \(error)")
             }
         }
     }
@@ -156,7 +157,7 @@ public class AnilistTracker: TrackerProvider {
                     }
                 }
             } catch {
-                print("Failed to fetch existing entry before updating, proceeding with update.")
+                AppLogger.auth.error("Failed to fetch existing entry before updating, proceeding with update.")
             }
         }
 

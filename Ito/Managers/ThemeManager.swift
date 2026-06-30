@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import GRDB
 import Combine
@@ -24,7 +25,7 @@ public class ThemeManager: ObservableObject {
                 return colors
             }
         } catch {
-            print("Failed to read theme cache: \(error)")
+            AppLogger.general.error("Failed to read theme cache: \(error)")
         }
         return nil
     }
@@ -43,7 +44,7 @@ public class ThemeManager: ObservableObject {
                         try record.save(db)
                     }
                 } catch {
-                    print("Failed to save theme cache: \(error)")
+                    AppLogger.general.error("Failed to save theme cache: \(error)")
                 }
             }
         }

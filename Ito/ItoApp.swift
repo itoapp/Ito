@@ -1,3 +1,4 @@
+import OSLog
 //
 //  ItoApp.swift
 //  Ito
@@ -40,7 +41,7 @@ struct ItoApp: App {
                                 do {
                                     try await RepoManager.shared.addRepository(url: repoUrl)
                                 } catch {
-                                    print("Failed to add repo via deep link: \(error)")
+                                    AppLogger.general.error("Failed to add repo via deep link: \(error)")
                                 }
                             }
                         }
@@ -69,7 +70,7 @@ struct ItoApp: App {
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
-            print("Failed to schedule app refresh: \(error)")
+            AppLogger.general.error("Failed to schedule app refresh: \(error)")
         }
     }
 

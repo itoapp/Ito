@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import UserNotifications
 import UIKit
@@ -22,7 +23,7 @@ public class NotificationManager: ObservableObject {
             self.isAuthorized = granted
             return granted
         } catch {
-            print("Failed to request notification permission: \(error)")
+            AppLogger.general.error("Failed to request notification permission: \(error)")
             return false
         }
     }
@@ -75,7 +76,7 @@ public class NotificationManager: ObservableObject {
         do {
             try await center.add(request)
         } catch {
-            print("Failed to schedule local notification: \(error)")
+            AppLogger.general.error("Failed to schedule local notification: \(error)")
         }
     }
 }

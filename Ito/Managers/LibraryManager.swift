@@ -1,3 +1,4 @@
+import OSLog
 import Combine
 import Foundation
 import GRDB
@@ -61,7 +62,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                 }
             }
         } catch {
-            print("❌ Migration Failed: \(error.localizedDescription)")
+            AppLogger.database.error("❌ Migration Failed: \(error.localizedDescription)")
         }
     }
 
@@ -72,7 +73,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
             try LibraryCategory.order(Column("sortOrder")).fetchAll(db)
         }
         categoryObserver = catObservation.start(in: dbPool, onError: { error in
-            print("Category observation error: \(error)")
+            AppLogger.database.error("Category observation error: \(error)")
         }, onChange: { [weak self] categories in
             Task { @MainActor in
                 self?.categories = categories
@@ -85,7 +86,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
             try LibraryItem.order(Column("title")).fetchAll(db)
         }
         itemObserver = itemObs.start(in: dbPool, onError: { error in
-            print("Item observation error: \(error)")
+            AppLogger.database.error("Item observation error: \(error)")
         }, onChange: { [weak self] items in
             Task { @MainActor in
                 self?.items = items
@@ -98,7 +99,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
             try ItemCategoryLink.fetchAll(db)
         }
         linkObserver = linkObs.start(in: dbPool, onError: { error in
-            print("Link observation error: \(error)")
+            AppLogger.database.error("Link observation error: \(error)")
         }, onChange: { [weak self] links in
             Task { @MainActor in
                 self?.links = links
@@ -131,7 +132,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     }
                 }
             } catch {
-                print("Failed to remove item: \(error)")
+                AppLogger.database.error("Failed to remove item: \(error)")
             }
         }
     }
@@ -158,7 +159,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     }
                 }
             } catch {
-                print("Failed to toggle item: \(error)")
+                AppLogger.database.error("Failed to toggle item: \(error)")
             }
         }
     }
@@ -221,7 +222,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     }
                 }
             } catch {
-                print("Failed to delete category: \(error)")
+                AppLogger.database.error("Failed to delete category: \(error)")
             }
         }
     }
@@ -257,7 +258,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     }
                 }
             } catch {
-                print("Failed to toggle link: \(error)")
+                AppLogger.database.error("Failed to toggle link: \(error)")
             }
         }
     }
@@ -273,7 +274,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     }
                 }
             } catch {
-                print("Failed to reorder: \(error)")
+                AppLogger.database.error("Failed to reorder: \(error)")
             }
         }
     }

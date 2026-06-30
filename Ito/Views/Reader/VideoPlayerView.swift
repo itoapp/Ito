@@ -1,3 +1,4 @@
+import OSLog
 import AVKit
 import SwiftUI
 import ito_runner
@@ -134,7 +135,7 @@ struct VideoPlayerView: View {
 
                                 if videos.count > 1 {
                                     Button(action: {
-                                        print("🎬 [DEBUG] Quality selector tapped. videos count: \(videos.count)")
+                                        AppLogger.ui.debug("🎬 [DEBUG] Quality selector tapped. videos count: \(videos.count)")
                                         showQualitySelector = true
                                     }) {
                                         Text(video.quality)
@@ -161,7 +162,7 @@ struct VideoPlayerView: View {
         .confirmationDialog("Select Quality", isPresented: $showQualitySelector) {
             ForEach(Array(videos.enumerated()), id: \.offset) { _, vid in
                 Button(vid.quality) {
-                    print("🎬 [DEBUG] Selected new quality: \(vid.quality)")
+                    AppLogger.ui.debug("🎬 [DEBUG] Selected new quality: \(vid.quality)")
                     self.selectedVideo = vid
                     self.setupPlayer(for: vid)
                 }
@@ -244,13 +245,13 @@ struct VideoPlayerView: View {
         HistoryManager.shared.addAnime(anime, episodeKey: episode.key, episodeTitle: episodeTitleStr, pluginId: pluginId)
 
         do {
-            print("🎬 [DEBUG] Fetching video list for episode: \(episode.key)")
+            AppLogger.ui.debug("🎬 [DEBUG] Fetching video list for episode: \(episode.key)")
             let fetchedVideos = try await runner.getVideoList(anime: anime, episode: episode)
 
             await MainActor.run {
                 self.videos = fetchedVideos
                 if let first = fetchedVideos.first {
-                    print("🎬 [DEBUG] Selected video URL: \(first.url)")
+                    AppLogger.ui.debug("🎬 [DEBUG] Selected video URL: \(first.url)")
                     self.selectedVideo = first
                     self.selectedAudioTrack = first.audioTracks?.first
                     self.selectedSubtitle =
@@ -258,12 +259,12 @@ struct VideoPlayerView: View {
 
                     self.setupPlayer(for: first)
                 } else {
-                    print("🎬 [DEBUG] Video list returned empty!")
+                    AppLogger.ui.debug("🎬 [DEBUG] Video list returned empty!")
                 }
                 self.isLoaded = true
             }
         } catch {
-            print("🎬 [DEBUG] Error fetching video list: \(error)")
+            AppLogger.ui.error("🎬 [DEBUG] Error fetching video list: \(error)")
             await MainActor.run {
                 self.errorMessage = error.localizedDescription
                 self.isLoaded = true
@@ -273,14 +274,14 @@ struct VideoPlayerView: View {
 
     private func setupPlayer(for video: Anime.Video) {
         guard let url = URL(string: video.url) else {
-            print("🎬 [DEBUG] Invalid URL string: \(video.url)")
+            AppLogger.ui.debug("🎬 [DEBUG] Invalid URL string: \(video.url)")
             return
         }
 
         var options: [String: Any] = [:]
 
         if let headers = video.headers, !headers.isEmpty {
-            print("🎬 [DEBUG] Injecting AVPlayer Headers from plugin: \(headers)")
+            AppLogger.ui.debug("🎬 [DEBUG] Injecting AVPlayer Headers from plugin: \(headers)")
             options["AVURLAssetHTTPHeaderFieldsKey"] = headers
 
             Task {
@@ -316,7 +317,7 @@ struct VideoPlayerView: View {
 
     /// Bypasses AVPlayer's black box to see exactly what the server is returning
     private func diagnoseStreamBlocked(url: URL, headers: [String: String]) async {
-        print("🕵️‍♂️ [DEBUG-NET] Running diagnostic fetch on: \(url.absoluteString)")
+        AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] Running diagnostic fetch on: \(url.absoluteString)")
         var request = URLRequest(url: url)
 
         // Apply the exact same headers
@@ -327,44 +328,44 @@ struct VideoPlayerView: View {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse {
-                print("🕵️‍♂️ [DEBUG-NET] HTTP Status Code: \(httpResponse.statusCode)")
+                AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] HTTP Status Code: \(httpResponse.statusCode)")
             }
 
             if let responseString = String(data: data, encoding: .utf8) {
-                print("🕵️‍♂️ [DEBUG-NET] First 500 chars of response payload:")
-                print(String(responseString.prefix(500)))
+                AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] First 500 chars of response payload:")
+                AppLogger.ui.debug("\(String(responseString.prefix(500)))")
             } else {
-                print("🕵️‍♂️ [DEBUG-NET] Could not decode response payload as UTF-8 string. Byte count: \(data.count)")
+                AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] Could not decode response payload as UTF-8 string. Byte count: \(data.count)")
             }
         } catch {
-            print("🕵️‍♂️ [DEBUG-NET] Diagnostic fetch failed completely: \(error.localizedDescription)")
+            AppLogger.ui.error("🕵️‍♂️ [DEBUG-NET] Diagnostic fetch failed completely: \(error.localizedDescription)")
         }
     }
 
     private func loadSubtitleFile(_ subtitle: Anime.Subtitle) async {
         guard let url = URL(string: subtitle.url) else { return }
-        print("🎬 [DEBUG-SUB] Downloading VTT: \(url)")
+        AppLogger.ui.debug("🎬 [DEBUG-SUB] Downloading VTT: \(url)")
 
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             if let httpResponse = response as? HTTPURLResponse {
-                print("🎬 [DEBUG-SUB] HTTP Status for VTT: \(httpResponse.statusCode)")
+                AppLogger.ui.debug("🎬 [DEBUG-SUB] HTTP Status for VTT: \(httpResponse.statusCode)")
             }
             if let vttString = String(data: data, encoding: .utf8) {
-                print("🎬 [DEBUG-SUB] VTT downloaded, first 200 chars: \(String(vttString.prefix(200)))")
+                AppLogger.ui.debug("🎬 [DEBUG-SUB] VTT downloaded, first 200 chars: \(String(vttString.prefix(200)))")
                 let parsed = Self.parseVTT(vttString)
                 await MainActor.run {
                     self.parsedSubtitles = parsed
-                    print("🎬 [DEBUG-SUB] Successfully parsed \(parsed.count) subtitle blocks.")
+                    AppLogger.ui.debug("\("🎬 [DEBUG-SUB] Successfully parsed \(parsed.count)") subtitle blocks.")
                     if let first = parsed.first {
-                        print("🎬 [DEBUG-SUB] First Subtitle Block: Start: \(first.start), End: \(first.end), Text: \(first.text)")
+                        AppLogger.ui.debug("\("🎬 [DEBUG-SUB] First Subtitle Block: Start: \(first.start)"), End: \(first.end), Text: \(first.text)")
                     }
                 }
             } else {
-                print("🎬 [DEBUG-SUB] Failed to decode VTT data as UTF-8.")
+                AppLogger.ui.error("🎬 [DEBUG-SUB] Failed to decode VTT data as UTF-8.")
             }
         } catch {
-            print("🎬 [DEBUG-SUB] Failed to load VTT: \(error)")
+            AppLogger.ui.error("🎬 [DEBUG-SUB] Failed to load VTT: \(error)")
         }
     }
 
@@ -400,12 +401,12 @@ struct VideoPlayerView: View {
 
         if let current = parsedSubtitles.first(where: { currentTime >= $0.start && currentTime <= $0.end }) {
             if self.currentSubtitleText != current.text {
-                print("🎬 [DEBUG-SUB-TIME] MATCH @ \(currentTime)s: '\(current.text)'")
+                AppLogger.ui.debug("\("🎬 [DEBUG-SUB-TIME] MATCH @ \(currentTime)")s: '\(current.text)'")
                 self.currentSubtitleText = current.text
             }
         } else {
             if self.currentSubtitleText != nil {
-                print("🎬 [DEBUG-SUB-TIME] CLEAR @ \(currentTime)s")
+                AppLogger.ui.debug("\("🎬 [DEBUG-SUB-TIME] CLEAR @ \(currentTime)")s")
                 self.currentSubtitleText = nil
             }
         }
@@ -450,7 +451,7 @@ extension VideoPlayerView {
                     isReadingText = true
 
                     if results.count < 3 {
-                        print("🎬 [DEBUG-SUB] Parsed timestamp line \(index): start='\(startStr)' (\(currentStart)s), end='\(endStr)' (\(currentEnd)s)")
+                        AppLogger.ui.debug("\("🎬 [DEBUG-SUB] Parsed timestamp line \(index)"): start='\(startStr)' (\(currentStart)s), end='\(endStr)' (\(currentEnd)s)")
                     }
                 }
             } else if trimmed.isEmpty {

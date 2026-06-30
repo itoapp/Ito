@@ -1,3 +1,4 @@
+import OSLog
 import Combine
 import Foundation
 import SwiftUI
@@ -31,13 +32,13 @@ public class UpdateManager: ObservableObject {
     @MainActor
     public func checkForUpdates() async {
         guard !isRefreshing else {
-            print("🔄 [UpdateManager] Already refreshing, skipping.")
+            AppLogger.update.debug("🔄 [UpdateManager] Already refreshing, skipping.")
             return
         }
 
         let items = LibraryManager.shared.items
         guard !items.isEmpty else {
-            print("🔄 [UpdateManager] No library items to check.")
+            AppLogger.update.debug("🔄 [UpdateManager] No library items to check.")
             return
         }
 
@@ -50,14 +51,14 @@ public class UpdateManager: ObservableObject {
     public func checkForUpdatesInBackground() async -> [(LibraryItem, Int)] {
         guard !isRefreshing else { return [] }
 
-        print("🔄 [UpdateManager] Starting background update check.")
+        AppLogger.update.debug("🔄 [UpdateManager] Starting background update check.")
         let items: [LibraryItem]
         do {
             items = try await dbPool.read { db in
                 try LibraryItem.fetchAll(db)
             }
         } catch {
-            print("🔄 [UpdateManager] Background error fetching items: \(error)")
+            AppLogger.update.error("🔄 [UpdateManager] Background error fetching items: \(error)")
             return []
         }
 
@@ -66,7 +67,7 @@ public class UpdateManager: ObservableObject {
 
     @MainActor
     private func runSmartUpdate(items: [LibraryItem], isBackground: Bool) async -> [(LibraryItem, Int)] {
-        print("🔄 [UpdateManager] Starting smart update check for \(items.count) total items...")
+        AppLogger.update.debug("\("🔄 [UpdateManager] Starting smart update check for \(items.count)") total items...")
 
         // Wait for PluginManager to finish loading plugins on cold start
         var waitAttempts = 0
@@ -76,7 +77,7 @@ public class UpdateManager: ObservableObject {
         }
 
         guard !PluginManager.shared.installedPlugins.isEmpty else {
-            print("🔄 [UpdateManager] No plugins loaded, aborting.")
+            AppLogger.update.debug("🔄 [UpdateManager] No plugins loaded, aborting.")
             return []
         }
 
@@ -110,18 +111,18 @@ public class UpdateManager: ObservableObject {
         totalItemsToCheck = batchItems.count
         itemsCheckedCurrentRun = 0
 
-        print("🔄 [UpdateManager] Batch size: \(batchItems.count)")
+        AppLogger.update.debug("🔄 [UpdateManager] Batch size: \(batchItems.count)")
 
         // 4. Check Items
         for item in batchItems {
             if Task.isCancelled { break }
 
-            print("🔄 [UpdateManager] Checking: \(item.title)")
+            AppLogger.update.debug("🔄 [UpdateManager] Checking: \(item.title)")
             if let newCount = await checkSingleItem(item) {
                 updatedItemsWithCounts.append((item, newCount))
             }
             itemsCheckedCurrentRun += 1
-            print("🔄 [UpdateManager] Progress: \(itemsCheckedCurrentRun)/\(totalItemsToCheck)")
+            AppLogger.update.debug("🔄 [UpdateManager] Progress: \(self.itemsCheckedCurrentRun)/\(self.totalItemsToCheck)")
 
             // Be gentle on source networks for big manual updates
             if !isBackground {
@@ -129,7 +130,7 @@ public class UpdateManager: ObservableObject {
             }
         }
 
-        print("🔄 [UpdateManager] Finished smart update. Found \(updatedItemsWithCounts.count) new updates.")
+        AppLogger.update.debug("\("🔄 [UpdateManager] Finished smart update. Found \(updatedItemsWithCounts.count)") new updates.")
         isRefreshing = false
         saveState()
         return updatedItemsWithCounts
@@ -190,7 +191,7 @@ public class UpdateManager: ObservableObject {
             let newChapters = isInitialCheck ? 0 : max(0, freshCount - knownCount)
             let finalStatus = newStatus
 
-            print("🔄 [UpdateManager] \(item.title): \(freshCount) total, \(knownCount) known -> \(newChapters) new")
+            AppLogger.update.debug("\("🔄 [UpdateManager] \(item.title)"): \(freshCount) total, \(knownCount) known -> \(newChapters) new")
 
             try await dbPool.write { db in
                 if var dbItem = try LibraryItem.fetchOne(db, key: item.id) {
@@ -218,7 +219,7 @@ public class UpdateManager: ObservableObject {
             return nil
 
         } catch {
-            print("🔄 [UpdateManager] ❌ Failed for \(item.title): \(error)")
+            AppLogger.update.error("\("🔄 [UpdateManager] ❌ Failed for \(item.title)"): \(error)")
             return nil
         }
     }

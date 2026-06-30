@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -59,7 +60,7 @@ struct BackupSettingsView: View {
         ) { result in
             switch result {
             case .success(let url):
-                print("Exported to \(url)")
+                AppLogger.ui.debug("Exported to \(url)")
             case .failure(let error):
                 showError("Export Failed", error.localizedDescription)
             }

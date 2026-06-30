@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import WebKit
 import ito_runner
@@ -62,11 +63,11 @@ actor AppNetModule: NetModule {
         let session = URLSession.shared
 
         if isRetry {
-            print("[AppNetModule] --- RETRY REQUEST INFO ---")
-            print("[AppNetModule] URL: \(urlRequest.url?.absoluteString ?? "")")
-            print("[AppNetModule] Method: \(urlRequest.httpMethod ?? "")")
-            print("[AppNetModule] Headers: \(urlRequest.allHTTPHeaderFields ?? [:])")
-            print("[AppNetModule] -------------------------")
+            AppLogger.network.debug("[AppNetModule] --- RETRY REQUEST INFO ---")
+            AppLogger.network.debug("[AppNetModule] URL: \(urlRequest.url?.absoluteString ?? "")")
+            AppLogger.network.debug("[AppNetModule] Method: \(urlRequest.httpMethod ?? "")")
+            AppLogger.network.debug("[AppNetModule] Headers: \(urlRequest.allHTTPHeaderFields ?? [:])")
+            AppLogger.network.debug("[AppNetModule] -------------------------")
         }
 
         let (data, response) = try await session.data(for: urlRequest)
@@ -85,7 +86,7 @@ actor AppNetModule: NetModule {
             }
 
             if isCloudflare {
-                print("[AppNetModule] Detected Cloudflare challenge for \(url.host ?? ""). Attempting bypass...")
+                AppLogger.network.debug("[AppNetModule] Detected Cloudflare challenge for \(url.host ?? ""). Attempting bypass...")
 
                 // Route to CloudflareManager (which relies on MainActor)
                 let bypassResult = try await CloudflareManager.shared.resolveChallenge(for: url)
@@ -108,9 +109,9 @@ actor AppNetModule: NetModule {
 
                 retriedRequest.headers = retriedHeaders
 
-                print("[AppNetModule] Replaying request with Cloudflare clearance.")
+                AppLogger.network.debug("[AppNetModule] Replaying request with Cloudflare clearance.")
                 let retriedResponse = try await fetchInternal(request: retriedRequest, isRetry: true)
-                print("[AppNetModule] Retry completed with status code: \(retriedResponse.status)")
+                AppLogger.network.debug("[AppNetModule] Retry completed with status code: \(retriedResponse.status)")
                 return retriedResponse
             }
         }

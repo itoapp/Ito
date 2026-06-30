@@ -1,3 +1,4 @@
+import OSLog
 import Foundation
 import Combine
 import CryptoKit
@@ -63,19 +64,19 @@ public class RepoManager: ObservableObject {
             if let pref = try dbPool.read({ db in
                 try AppPreference.fetchOne(db, key: defaultsKey)
             }), let decoded = try? JSONDecoder().decode([Repository].self, from: pref.value) {
-                print("🌍 [DEBUG-REPO] Loaded Repositories from Database AppPreference.")
+                AppLogger.database.debug("🌍 [DEBUG-REPO] Loaded Repositories from Database AppPreference.")
                 self.repositories = decoded
                 return
             }
         } catch {
-            print("🌍 [DEBUG-REPO] Failed to parse SQLite repos: \(error)")
+            AppLogger.database.error("🌍 [DEBUG-REPO] Failed to parse SQLite repos: \(error)")
         }
 
         // Legacy fallback
         if let data = UserDefaults.standard.data(forKey: defaultsKey),
            let decoded = try? JSONDecoder().decode([Repository].self, from: data) {
             self.repositories = decoded
-            print("🌍 [DEBUG-REPO] Loaded Repositories from Legacy UserDefaults. Migrating to SQLite...")
+            AppLogger.database.debug("🌍 [DEBUG-REPO] Loaded Repositories from Legacy UserDefaults. Migrating to SQLite...")
             self.saveRepos() // Propagate to SQLite immediately
         }
     }
@@ -87,9 +88,9 @@ public class RepoManager: ObservableObject {
                 try dbPool.write { db in
                     try AppPreference(key: defaultsKey, value: encoded).save(db)
                 }
-                print("🌍 [DEBUG-REPO] Maintained single source of truth for repos via SQLite.")
+                AppLogger.database.debug("🌍 [DEBUG-REPO] Maintained single source of truth for repos via SQLite.")
             } catch {
-                print("🌍 [DEBUG-REPO] Fatal SQLite Save error: \(error)")
+                AppLogger.database.error("🌍 [DEBUG-REPO] Fatal SQLite Save error: \(error)")
             }
         }
     }
@@ -100,11 +101,11 @@ public class RepoManager: ObservableObject {
         if normalizedUrl.hasSuffix("/index.json") {
             normalizedUrl = String(normalizedUrl.dropLast("/index.json".count))
         }
-        print("🌍 [DEBUG-REPO] Attempting to add repository: \(normalizedUrl)")
+        AppLogger.database.debug("🌍 [DEBUG-REPO] Attempting to add repository: \(normalizedUrl)")
 
         // Prevent duplicates
         guard !repositories.contains(where: { $0.url == normalizedUrl }) else {
-            print("🌍 [DEBUG-REPO] Repository already exists: \(normalizedUrl)")
+            AppLogger.database.debug("🌍 [DEBUG-REPO] Repository already exists: \(normalizedUrl)")
             return
         }
 
@@ -116,42 +117,42 @@ public class RepoManager: ObservableObject {
 
             self.repositories.append(repo)
             self.saveRepos()
-            print("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
+            AppLogger.database.debug("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
         } catch {
-            print("🌍 [DEBUG-REPO] Failed to add repository: \(error)")
+            AppLogger.database.error("🌍 [DEBUG-REPO] Failed to add repository: \(error)")
             throw error
         }
     }
 
     public func removeRepository(url: String) {
-        print("🌍 [DEBUG-REPO] Removing repository: \(url)")
+        AppLogger.database.debug("🌍 [DEBUG-REPO] Removing repository: \(url)")
         repositories.removeAll { $0.url == url }
         saveRepos()
     }
 
     public func refreshAll() async {
-        print("🌍 [DEBUG-REPO] Refreshing all repositories...")
+        AppLogger.database.debug("🌍 [DEBUG-REPO] Refreshing all repositories...")
         for (index, repo) in repositories.enumerated() {
             do {
                 let newIndex = try await fetchIndex(for: repo.url)
                 self.repositories[index].index = newIndex
                 self.repositories[index].lastFetched = Date()
                 self.saveRepos()
-                print("🌍 [DEBUG-REPO] Refreshed: \(newIndex.repoName)")
+                AppLogger.database.debug("🌍 [DEBUG-REPO] Refreshed: \(newIndex.repoName)")
             } catch {
-                print("🌍 [DEBUG-REPO] Failed to refresh \(repo.url): \(error)")
+                AppLogger.database.error("\("🌍 [DEBUG-REPO] Failed to refresh \(repo.url)"): \(error)")
             }
         }
     }
 
     private func fetchIndex(for urlStr: String) async throws -> RepoIndex {
-        print("🌍 [DEBUG-REPO] Fetching index for \(urlStr)")
+        AppLogger.database.debug("🌍 [DEBUG-REPO] Fetching index for \(urlStr)")
         guard let url = URL(string: urlStr) else {
-            print("🌍 [DEBUG-REPO] Invalid URL format: \(urlStr)")
+            AppLogger.database.debug("🌍 [DEBUG-REPO] Invalid URL format: \(urlStr)")
             throw URLError(.badURL)
         }
         let indexUrl = url.lastPathComponent == "index.json" ? url : url.appendingPathComponent("index.json")
-        print("🌍 [DEBUG-REPO] Downloading from: \(indexUrl.absoluteString)")
+        AppLogger.database.debug("🌍 [DEBUG-REPO] Downloading from: \(indexUrl.absoluteString)")
 
         var request = URLRequest(url: indexUrl)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -159,21 +160,21 @@ public class RepoManager: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse {
-            print("🌍 [DEBUG-REPO] HTTP Status Code: \(httpResponse.statusCode)")
+            AppLogger.database.debug("🌍 [DEBUG-REPO] HTTP Status Code: \(httpResponse.statusCode)")
             if !(200...299).contains(httpResponse.statusCode) {
-                print("🌍 [DEBUG-REPO] Server returned error status: \(httpResponse.statusCode)")
+                AppLogger.database.error("🌍 [DEBUG-REPO] Server returned error status: \(httpResponse.statusCode)")
                 throw URLError(URLError.Code(rawValue: httpResponse.statusCode))
             }
         }
 
         do {
             let decoded = try JSONDecoder().decode(RepoIndex.self, from: data)
-            print("🌍 [DEBUG-REPO] Successfully decoded RepoIndex: \(decoded.repoName) with \(decoded.packages.count) packages")
+            AppLogger.database.debug("\("🌍 [DEBUG-REPO] Successfully decoded RepoIndex: \(decoded.repoName)") with \(decoded.packages.count) packages")
             return decoded
         } catch {
-            print("🌍 [DEBUG-REPO] JSON Decoding error: \(error)")
+            AppLogger.database.error("🌍 [DEBUG-REPO] JSON Decoding error: \(error)")
             if let rawString = String(data: data, encoding: .utf8) {
-                print("🌍 [DEBUG-REPO] Raw response data (first 500 chars):\n\(String(rawString.prefix(500)))")
+                AppLogger.database.debug("\("🌍 [DEBUG-REPO] Raw response data (first 500 chars)"):\n\(String(rawString.prefix(500)))")
             }
             throw error
         }
@@ -227,7 +228,7 @@ public class RepoManager: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            print("Server returned \(httpResponse.statusCode) for \(url)")
+            AppLogger.database.debug("\("Server returned \(httpResponse.statusCode)") for \(url)")
             throw URLError(.fileDoesNotExist)
         }
 
@@ -236,7 +237,7 @@ public class RepoManager: ObservableObject {
         let computedHash = digest.compactMap { String(format: "%02x", $0) }.joined()
 
         guard computedHash.lowercased() == pkg.sha256.lowercased() else {
-            print("Hash mismatch! Expected \(pkg.sha256), got \(computedHash)")
+            AppLogger.database.debug("\("Hash mismatch! Expected \(pkg.sha256)"), got \(computedHash)")
             throw URLError(.cannotDecodeRawData) // Or a custom error
         }
 
@@ -254,7 +255,7 @@ public class RepoManager: ObservableObject {
         let destUrl = pluginsDir.appendingPathComponent("\(pkg.id).ito")
         try data.write(to: destUrl)
 
-        print("Successfully installed \(pkg.name)")
+        AppLogger.database.debug("Successfully installed \(pkg.name)")
 
         // Tell the cache to reload
         await PluginManager.shared.reloadInstalledPlugins()

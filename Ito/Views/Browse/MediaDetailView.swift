@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import Combine
 import GRDB
@@ -108,7 +109,7 @@ public class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
                             }
                         }
                     } catch {
-                        print("Failed to update knownChapterCount on appear: \(error)")
+                        AppLogger.ui.error("Failed to update knownChapterCount on appear: \(error)")
                     }
                 }
                 Task { @MainActor in
@@ -116,8 +117,11 @@ public class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
                 }
             }
         } catch {
-            self.errorMessage = error.localizedDescription
-            self.isLoaded = true
+            await MainActor.run {
+                SnackBarManager.shared.showError(error, title: "Failed to load details")
+                self.errorMessage = error.localizedDescription
+                self.isLoaded = true
+            }
         }
     }
 
