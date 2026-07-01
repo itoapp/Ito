@@ -671,15 +671,16 @@ struct NovelReaderSettingsView: View {
                 .padding(.top, 12)
 
             // Core Controls
-            if activeTab == .typography {
-                typographyTab
-            } else if activeTab == .theme {
-                themeTab
-            } else {
-                readingTab
+            VStack {
+                if activeTab == .typography {
+                    typographyTab
+                } else if activeTab == .theme {
+                    themeTab
+                } else {
+                    readingTab
+                }
             }
-
-            Spacer()
+            .frame(height: 170, alignment: .top)
 
             // Bottom Toolbar (Footer)
             HStack {
@@ -919,8 +920,6 @@ struct NovelReaderSettingsView: View {
             .padding()
             .background(Color(UIColor.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            Spacer()
         }
         .padding(.horizontal)
     }

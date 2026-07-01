@@ -389,7 +389,7 @@ class PageContentViewController: UIViewController {
 
         textView.attributedText = attributedString
         AppLogger.ui.debug("[PageContentViewController] set attributedText for index \(self.index)")
-        
+
         // Disable UITextView's built-in double tap to remove selection conflicts,
         // users can still long-press to select text.
         for recognizer in textView.gestureRecognizers ?? [] {
