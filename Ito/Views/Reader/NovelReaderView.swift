@@ -18,6 +18,7 @@ struct NovelReaderView: View {
     @AppStorage("Ito.NovelLineSpacing") private var lineSpacing: Double = 8.0
     @AppStorage("Ito.NovelFontFamily") private var fontFamily: NovelFont = .system
     @AppStorage("Ito.NovelTheme") private var theme: NovelTheme = .system
+    @AppStorage("Ito.NovelIsPaging") private var isPaging: Bool = false
 
     @State private var showUI = true
     @State private var showSettings = false
@@ -54,32 +55,50 @@ struct NovelReaderView: View {
                     .padding()
                 }
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: CGFloat(lineSpacing)) {
-                        Text({
-                            if let num = currentChapter.chapter {
-                                if let title = currentChapter.title, !title.isEmpty {
-                                    return "Chapter \(num.formatted()) - \(title)"
-                                }
-                                return "Chapter \(num.formatted())"
-                            }
-                            return currentChapter.title ?? "Unknown Chapter"
-                        }())
-                            .font(.system(size: CGFloat(fontSize) + 6, weight: .bold, design: fontFamily.fontDesign))
-                            .foregroundColor(theme.textColor)
-                            .padding(.vertical)
-                            .padding(.horizontal)
-
-                        ForEach(pages, id: \.index) { page in
-                            pageText(for: page)
+                let chapterTitleText = {
+                    if let num = currentChapter.chapter {
+                        if let title = currentChapter.title, !title.isEmpty {
+                            return "Chapter \(num.formatted()) - \(title)"
                         }
-
-                        Color.clear.frame(height: safeAreaBottom + 80)
+                        return "Chapter \(num.formatted())"
                     }
-                }
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showUI.toggle()
+                    return currentChapter.title ?? "Unknown Chapter"
+                }()
+
+                if isPaging {
+                    NovelPagingReaderView(
+                        pages: pages,
+                        fontSize: fontSize,
+                        fontFamily: fontFamily,
+                        lineSpacing: lineSpacing,
+                        theme: theme,
+                        chapterTitle: chapterTitleText
+                    )
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showUI.toggle()
+                        }
+                    }
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: CGFloat(lineSpacing)) {
+                            Text(chapterTitleText)
+                                .font(.system(size: CGFloat(fontSize) + 6, weight: .bold, design: fontFamily.fontDesign))
+                                .foregroundColor(theme.textColor)
+                                .padding(.vertical)
+                                .padding(.horizontal)
+
+                            ForEach(pages, id: \.index) { page in
+                                pageText(for: page)
+                            }
+
+                            Color.clear.frame(height: safeAreaBottom + 80)
+                        }
+                    }
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showUI.toggle()
+                        }
                     }
                 }
             }
@@ -138,7 +157,8 @@ struct NovelReaderView: View {
                         fontSize: $fontSize,
                         lineSpacing: $lineSpacing,
                         fontFamily: $fontFamily,
-                        theme: $theme
+                        theme: $theme,
+                        isPaging: $isPaging
                     )
                     .frame(height: 280)
                     .padding(.bottom, safeAreaBottom)
@@ -461,8 +481,8 @@ struct NovelReaderSettingsView: View {
     @Binding var lineSpacing: Double
     @Binding var fontFamily: NovelFont
     @Binding var theme: NovelTheme
+    @Binding var isPaging: Bool
 
-    @AppStorage("Ito.NovelIsPaging") private var isPaging: Bool = false
     @State private var activeTab: SettingsTab = .typography
     @State private var brightness: CGFloat = UIScreen.main.brightness
 
