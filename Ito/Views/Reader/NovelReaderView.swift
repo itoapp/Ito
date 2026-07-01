@@ -81,11 +81,11 @@ struct NovelReaderView: View {
                         },
                         currentChapter: $currentChapter
                     )
-                    .onTapGesture {
+                    .simultaneousGesture(TapGesture().onEnded {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showUI.toggle()
                         }
-                    }
+                    })
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: CGFloat(lineSpacing)) {
@@ -139,11 +139,11 @@ struct NovelReaderView: View {
                             Color.clear.frame(height: safeAreaBottom + 80)
                         }
                     }
-                    .onTapGesture {
+                    .simultaneousGesture(TapGesture().onEnded {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showUI.toggle()
                         }
-                    }
+                    })
                 }
             }
 
@@ -262,11 +262,13 @@ struct NovelReaderView: View {
     private func pageText(for page: Page) -> some View {
         switch page.content {
         case .text(let text):
-            Text(text)
-                .font(fontFamily.swiftUIFont(size: CGFloat(fontSize)))
-                .foregroundColor(theme.textColor)
-                .padding(.horizontal)
-                .padding(.vertical, 4)
+            SelectableTextView(
+                text: text,
+                font: fontFamily.uiFont(size: CGFloat(fontSize)),
+                textColor: UIColor(theme.textColor)
+            )
+            .padding(.horizontal)
+            .padding(.vertical, 4)
         case .url(let urlStr):
             // Fallback if a novel plugin returns an image inline
             MangaImage(urlStr: urlStr, headers: page.headers)
@@ -583,6 +585,69 @@ enum NovelFont: String, CaseIterable, Identifiable {
         case .nunito: return .custom(weight == .bold ? "Nunito-Bold" : "Nunito-Regular", size: size)
         case .merriweather: return .custom(weight == .bold ? "Merriweather-Bold" : "Merriweather-Regular", size: size)
         }
+    }
+
+    func uiFont(size: CGFloat, isBold: Bool = false) -> UIFont {
+        let fallback = isBold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size)
+        switch self {
+        case .system, .rounded: return fallback
+        case .serif: return UIFont(name: isBold ? "TimesNewRomanPS-BoldMT" : "TimesNewRomanPSMT", size: size) ?? fallback
+        case .monospaced: return UIFont(name: isBold ? "Menlo-Bold" : "Menlo", size: size) ?? fallback
+        case .lora: return UIFont(name: isBold ? "Lora-Bold" : "Lora-Regular", size: size) ?? fallback
+        case .karla: return UIFont(name: isBold ? "Karla-Bold" : "Karla-Regular", size: size) ?? fallback
+        case .rubik: return UIFont(name: isBold ? "Rubik-Bold" : "Rubik-Regular", size: size) ?? fallback
+        case .cardo: return UIFont(name: isBold ? "Cardo-Bold" : "Cardo-Regular", size: size) ?? fallback
+        case .nunito: return UIFont(name: isBold ? "Nunito-Bold" : "Nunito-Regular", size: size) ?? fallback
+        case .merriweather: return UIFont(name: isBold ? "Merriweather-Bold" : "Merriweather-Regular", size: size) ?? fallback
+        }
+    }
+}
+
+struct SelectableTextView: UIViewRepresentable {
+    let text: String
+    let font: UIFont
+    let textColor: UIColor
+
+    class SelfSizingTextView: UITextView {
+        override var intrinsicContentSize: CGSize {
+            let size = sizeThatFits(CGSize(width: bounds.width > 0 ? bounds.width : UIScreen.main.bounds.width, height: .greatestFiniteMagnitude))
+            return size
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            if bounds.size != intrinsicContentSize {
+                invalidateIntrinsicContentSize()
+            }
+        }
+    }
+
+    func makeUIView(context: Context) -> SelfSizingTextView {
+        let textView = SelfSizingTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        // Disable UITextView's built-in double tap to remove selection conflicts,
+        // users can still long-press to select text.
+        for recognizer in textView.gestureRecognizers ?? [] {
+            if let tapRecognizer = recognizer as? UITapGestureRecognizer, tapRecognizer.numberOfTapsRequired == 2 {
+                tapRecognizer.isEnabled = false
+            }
+        }
+
+        return textView
+    }
+
+    func updateUIView(_ uiView: SelfSizingTextView, context: Context) {
+        if uiView.text != text { uiView.text = text }
+        if uiView.font != font { uiView.font = font }
+        if uiView.textColor != textColor { uiView.textColor = textColor }
+        uiView.invalidateIntrinsicContentSize()
     }
 }
 

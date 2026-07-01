@@ -362,27 +362,41 @@ class PageContentViewController: UIViewController {
     var attributedString: NSAttributedString?
     var maxWidth: CGFloat = 0
 
-    private let label = UILabel()
+    private let textView = UITextView()
 
     override func viewDidLoad() {
         super.viewDidLoad()
         AppLogger.ui.debug("[PageContentViewController] viewDidLoad for index \(self.index)")
         view.backgroundColor = .clear
 
-        label.numberOfLines = 0
-        label.lineBreakMode = .byWordWrapping
-        label.backgroundColor = .clear
-        label.translatesAutoresizingMaskIntoConstraints = false
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = .zero
+        textView.textContainer.lineFragmentPadding = 0
+        textView.showsVerticalScrollIndicator = false
+        textView.showsHorizontalScrollIndicator = false
+        textView.translatesAutoresizingMaskIntoConstraints = false
 
-        view.addSubview(label)
+        view.addSubview(textView)
         NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: view.topAnchor, constant: 20),
-            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
+            textView.topAnchor.constraint(equalTo: view.topAnchor, constant: 20),
+            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -20)
         ])
 
-        label.attributedText = attributedString
+        textView.attributedText = attributedString
         AppLogger.ui.debug("[PageContentViewController] set attributedText for index \(self.index)")
+        
+        // Disable UITextView's built-in double tap to remove selection conflicts,
+        // users can still long-press to select text.
+        for recognizer in textView.gestureRecognizers ?? [] {
+            if let tapRecognizer = recognizer as? UITapGestureRecognizer, tapRecognizer.numberOfTapsRequired == 2 {
+                tapRecognizer.isEnabled = false
+            }
+        }
     }
 }
 
