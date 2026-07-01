@@ -4,14 +4,22 @@ import os
 import ito_runner
 
 struct NovelPagingReaderView: View {
-    let pages: [Page]
+    let loadedChapters: [NovelReaderView.LoadedChapter]
     let fontSize: Double
     let fontFamily: NovelFont
     let lineSpacing: Double
     let theme: NovelTheme
-    let chapterTitle: String
+    let prefetchChapters: Bool
+    let onLoadNextChapter: () -> Void
+    @Binding var currentChapter: Novel.Chapter
 
-    @State private var pageStrings: [NSAttributedString] = []
+    struct PagedItem {
+        let chapter: Novel.Chapter
+        let string: NSAttributedString
+    }
+
+    @State private var paginatedCache: [UUID: [NSAttributedString]] = [:]
+    @State private var flattenedPages: [PagedItem] = []
     @State private var currentPageIndex: Int = 0
     @State private var pageSize: CGSize = .zero
 
@@ -20,14 +28,27 @@ struct NovelPagingReaderView: View {
             let size = geo.size
 
             ZStack {
-                if pageStrings.isEmpty {
+                if flattenedPages.isEmpty {
                     ProgressView("Paginating...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     PageViewController(
-                        pages: pageStrings,
+                        pages: flattenedPages.map { $0.string },
                         currentPage: $currentPageIndex,
-                        maxWidth: max(0, size.width - 32)
+                        maxWidth: max(0, size.width - 32),
+                        onPageChanged: { newIndex in
+                            if newIndex >= 0 && newIndex < flattenedPages.count {
+                                let newChap = flattenedPages[newIndex].chapter
+                                if newChap.key != currentChapter.key {
+                                    currentChapter = newChap
+                                }
+
+                                // Prefetch trigger
+                                if prefetchChapters && newIndex >= flattenedPages.count - 3 {
+                                    onLoadNextChapter()
+                                }
+                            }
+                        }
                     )
 
                     // Footer Overlays (Battery & Page Counter)
@@ -39,7 +60,7 @@ struct NovelPagingReaderView: View {
 
                             Spacer()
 
-                            Text("\(currentPageIndex + 1)/\(pageStrings.count)")
+                            Text("\(currentPageIndex + 1)/\(flattenedPages.count)")
                                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                                 .foregroundColor(theme.textColor.opacity(0.5))
                                 .padding(.trailing, 16)
@@ -59,23 +80,31 @@ struct NovelPagingReaderView: View {
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: size) triggered: \(String(describing: newSize))")
                 if newSize != pageSize {
                     pageSize = newSize
+                    paginatedCache.removeAll()
                     DispatchQueue.main.async { paginate(size: newSize) }
                 }
             }
+            .onChange(of: loadedChapters) { _ in
+                DispatchQueue.main.async { paginate(size: pageSize) }
+            }
             .onChange(of: fontSize) { newSize in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: fontSize) to \(newSize)")
+                paginatedCache.removeAll()
                 DispatchQueue.main.async { paginate(size: pageSize, overrideFontSize: newSize) }
             }
             .onChange(of: fontFamily) { newFam in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: fontFamily) to \(String(describing: newFam))")
+                paginatedCache.removeAll()
                 DispatchQueue.main.async { paginate(size: pageSize, overrideFontFamily: newFam) }
             }
             .onChange(of: lineSpacing) { newSpace in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: lineSpacing) to \(newSpace)")
+                paginatedCache.removeAll()
                 DispatchQueue.main.async { paginate(size: pageSize, overrideLineSpacing: newSpace) }
             }
             .onChange(of: theme) { newTheme in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: theme) to \(String(describing: newTheme))")
+                paginatedCache.removeAll()
                 DispatchQueue.main.async { paginate(size: pageSize, overrideTheme: newTheme) }
             }
         }
@@ -98,7 +127,8 @@ struct NovelPagingReaderView: View {
             return
         }
 
-        let fullString = NSMutableAttributedString()
+        let usableSize = CGSize(width: size.width - 32, height: size.height - 80)
+        AppLogger.ui.debug("[NovelPagingReaderView] Usable text container size: \(String(describing: usableSize))")
 
         // Setup Fonts
         let titleFont: UIFont
@@ -120,7 +150,6 @@ struct NovelPagingReaderView: View {
             .font: titleFont,
             .foregroundColor: UIColor(currentTheme.textColor)
         ]
-        fullString.append(NSAttributedString(string: chapterTitle + "\n\n", attributes: titleAttrs))
 
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = CGFloat(currentLineSpacing)
@@ -131,59 +160,85 @@ struct NovelPagingReaderView: View {
             .paragraphStyle: paragraphStyle
         ]
 
-        for page in pages {
-            if case .text(let text) = page.content {
-                fullString.append(NSAttributedString(string: text + "\n\n", attributes: bodyAttrs))
+        for loadedChapter in loadedChapters {
+            if paginatedCache[loadedChapter.id] != nil {
+                continue // Already paginated
+            }
+
+            AppLogger.ui.debug("[NovelPagingReaderView] Paginating new chapter: \(loadedChapter.chapter.title ?? loadedChapter.chapter.key)")
+
+            let fullString = NSMutableAttributedString()
+
+            // Format title
+            let chapterTitleText = {
+                if let num = loadedChapter.chapter.chapter {
+                    if let title = loadedChapter.chapter.title, !title.isEmpty {
+                        return "Chapter \(num.formatted()) - \(title)"
+                    }
+                    return "Chapter \(num.formatted())"
+                }
+                return loadedChapter.chapter.title ?? "Unknown Chapter"
+            }()
+
+            fullString.append(NSAttributedString(string: chapterTitleText + "\n\n", attributes: titleAttrs))
+
+            for page in loadedChapter.pages {
+                if case .text(let text) = page.content {
+                    fullString.append(NSAttributedString(string: text + "\n\n", attributes: bodyAttrs))
+                }
+            }
+
+            // Use TextKit to compute page breaks
+            let storage = NSTextStorage(attributedString: fullString)
+            let manager = NSLayoutManager()
+            storage.addLayoutManager(manager)
+
+            var containers: [NSTextContainer] = []
+            var glyphRange = NSRange(location: 0, length: 0)
+
+            repeat {
+                let container = NSTextContainer(size: usableSize)
+                container.lineFragmentPadding = 0
+                manager.addTextContainer(container)
+                containers.append(container)
+
+                glyphRange = manager.glyphRange(for: container)
+
+                if containers.count > 1000 {
+                    AppLogger.ui.debug("[NovelPagingReaderView] SAFETY BREAK: Exceeded 1000 containers!")
+                    break
+                }
+                if glyphRange.length == 0 {
+                    break
+                }
+            } while NSMaxRange(glyphRange) < manager.numberOfGlyphs
+
+            var extractedPages: [NSAttributedString] = []
+            for container in containers {
+                let gRange = manager.glyphRange(for: container)
+                let charRange = manager.characterRange(forGlyphRange: gRange, actualGlyphRange: nil)
+                if charRange.length > 0 {
+                    extractedPages.append(storage.attributedSubstring(from: charRange))
+                }
+            }
+
+            paginatedCache[loadedChapter.id] = extractedPages
+        }
+
+        // Rebuild flattened array preserving order of loadedChapters
+        var newFlattened: [PagedItem] = []
+        for loadedChapter in loadedChapters {
+            if let extracted = paginatedCache[loadedChapter.id] {
+                for str in extracted {
+                    newFlattened.append(PagedItem(chapter: loadedChapter.chapter, string: str))
+                }
             }
         }
 
-        // Use TextKit to compute page breaks
-        let storage = NSTextStorage(attributedString: fullString)
-        let manager = NSLayoutManager()
-        storage.addLayoutManager(manager)
+        AppLogger.ui.debug("[NovelPagingReaderView] Pagination complete. Total pages: \(newFlattened.count)")
 
-        let usableSize = CGSize(width: size.width - 32, height: size.height - 80)
-        AppLogger.ui.debug("[NovelPagingReaderView] Usable text container size: \(String(describing: usableSize))")
-
-        var containers: [NSTextContainer] = []
-        var glyphRange = NSRange(location: 0, length: 0)
-
-        AppLogger.ui.debug("[NovelPagingReaderView] Beginning layout loop. Total string length: \(fullString.length)")
-
-        repeat {
-            let container = NSTextContainer(size: usableSize)
-            container.lineFragmentPadding = 0
-            manager.addTextContainer(container)
-            containers.append(container)
-
-            glyphRange = manager.glyphRange(for: container)
-
-            if containers.count > 1000 {
-                AppLogger.ui.debug("[NovelPagingReaderView] SAFETY BREAK: Exceeded 1000 containers!")
-                break
-            }
-            if glyphRange.length == 0 {
-                AppLogger.ui.debug("[NovelPagingReaderView] BREAK: Glyph range length is 0 at container \(containers.count)")
-                break
-            }
-        } while NSMaxRange(glyphRange) < manager.numberOfGlyphs
-
-        // Extract each page's text as a standalone NSAttributedString
-        var extractedPages: [NSAttributedString] = []
-        for (index, container) in containers.enumerated() {
-            let gRange = manager.glyphRange(for: container)
-            let charRange = manager.characterRange(forGlyphRange: gRange, actualGlyphRange: nil)
-            if charRange.length > 0 {
-                let substring = storage.attributedSubstring(from: charRange)
-                AppLogger.ui.debug("[NovelPagingReaderView] Extracted page \(index): length = \(substring.length)")
-                extractedPages.append(substring)
-            }
-        }
-
-        AppLogger.ui.debug("[NovelPagingReaderView] Pagination complete. Total pages: \(extractedPages.count)")
-
-        self.pageStrings = extractedPages
-        self.currentPageIndex = min(currentPageIndex, max(0, extractedPages.count - 1))
+        self.flattenedPages = newFlattened
+        self.currentPageIndex = min(currentPageIndex, max(0, newFlattened.count - 1))
     }
 }
 
@@ -193,6 +248,7 @@ struct PageViewController: UIViewControllerRepresentable {
     let pages: [NSAttributedString]
     @Binding var currentPage: Int
     let maxWidth: CGFloat
+    let onPageChanged: (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -277,6 +333,7 @@ struct PageViewController: UIViewControllerRepresentable {
             if completed,
                let vc = pageViewController.viewControllers?.first as? PageContentViewController {
                 parent.currentPage = vc.index
+                parent.onPageChanged(vc.index)
             }
         }
     }

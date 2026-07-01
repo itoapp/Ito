@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 import ito_runner
 
 struct NovelReaderView: View {
@@ -9,8 +10,19 @@ struct NovelReaderView: View {
 
     @EnvironmentObject var progressManager: ReadProgressManager
 
-    @State private var pages: [Page] = []
+    struct LoadedChapter: Identifiable, Equatable {
+        let id = UUID()
+        let chapter: Novel.Chapter
+        let pages: [Page]
+
+        static func == (lhs: LoadedChapter, rhs: LoadedChapter) -> Bool {
+            lhs.id == rhs.id
+        }
+    }
+
+    @State private var loadedChapters: [LoadedChapter] = []
     @State private var isLoaded = false
+    @State private var isLoadingNext = false
     @State private var errorMessage: String?
 
     // Appearance settings
@@ -19,6 +31,7 @@ struct NovelReaderView: View {
     @AppStorage("Ito.NovelFontFamily") private var fontFamily: NovelFont = .system
     @AppStorage("Ito.NovelTheme") private var theme: NovelTheme = .system
     @AppStorage("Ito.NovelIsPaging") private var isPaging: Bool = false
+    @AppStorage("Ito.NovelPrefetchChapters") private var prefetchChapters: Bool = true
 
     @State private var showUI = true
     @State private var showSettings = false
@@ -50,29 +63,23 @@ struct NovelReaderView: View {
                     Button("Try Again") {
                         isLoaded = false
                         errorMessage = nil
-                        Task { await loadPages() }
+                        Task { await loadInitialChapter() }
                     }
                     .padding()
                 }
             } else {
-                let chapterTitleText = {
-                    if let num = currentChapter.chapter {
-                        if let title = currentChapter.title, !title.isEmpty {
-                            return "Chapter \(num.formatted()) - \(title)"
-                        }
-                        return "Chapter \(num.formatted())"
-                    }
-                    return currentChapter.title ?? "Unknown Chapter"
-                }()
-
                 if isPaging {
                     NovelPagingReaderView(
-                        pages: pages,
+                        loadedChapters: loadedChapters,
                         fontSize: fontSize,
                         fontFamily: fontFamily,
                         lineSpacing: lineSpacing,
                         theme: theme,
-                        chapterTitle: chapterTitleText
+                        prefetchChapters: prefetchChapters,
+                        onLoadNextChapter: {
+                            Task { await loadNextChapter() }
+                        },
+                        currentChapter: $currentChapter
                     )
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -82,14 +89,51 @@ struct NovelReaderView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: CGFloat(lineSpacing)) {
-                            Text(chapterTitleText)
-                                .font(.system(size: CGFloat(fontSize) + 6, weight: .bold, design: fontFamily.fontDesign))
-                                .foregroundColor(theme.textColor)
-                                .padding(.vertical)
-                                .padding(.horizontal)
+                            ForEach(loadedChapters) { loadedChapter in
+                                let chapterTitleText = {
+                                    if let num = loadedChapter.chapter.chapter {
+                                        if let title = loadedChapter.chapter.title, !title.isEmpty {
+                                            return "Chapter \(num.formatted()) - \(title)"
+                                        }
+                                        return "Chapter \(num.formatted())"
+                                    }
+                                    return loadedChapter.chapter.title ?? "Unknown Chapter"
+                                }()
 
-                            ForEach(pages, id: \.index) { page in
-                                pageText(for: page)
+                                Text(chapterTitleText)
+                                    .font(.system(size: CGFloat(fontSize) + 6, weight: .bold, design: fontFamily.fontDesign))
+                                    .foregroundColor(theme.textColor)
+                                    .padding(.vertical)
+                                    .padding(.horizontal)
+                                    .onAppear {
+                                        // Update HUD & History when scrolling to this chapter's title
+                                        if currentChapter.key != loadedChapter.chapter.key {
+                                            currentChapter = loadedChapter.chapter
+                                            updateTracking(for: loadedChapter.chapter)
+                                        }
+                                    }
+
+                                let pagesArray = loadedChapter.pages
+                                ForEach(Array(pagesArray.enumerated()), id: \.element.index) { idx, page in
+                                    pageText(for: page)
+                                        .onAppear {
+                                            // Seamless reading trigger (fetch when within 5 paragraphs of the end)
+                                            if prefetchChapters, 
+                                               loadedChapter.id == loadedChapters.last?.id, 
+                                               idx >= pagesArray.count - 5 {
+                                                Task { await loadNextChapter() }
+                                            }
+                                        }
+                                }
+                            }
+
+                            if isLoadingNext {
+                                HStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .padding()
+                                    Spacer()
+                                }
                             }
 
                             Color.clear.frame(height: safeAreaBottom + 80)
@@ -158,7 +202,8 @@ struct NovelReaderView: View {
                         lineSpacing: $lineSpacing,
                         fontFamily: $fontFamily,
                         theme: $theme,
-                        isPaging: $isPaging
+                        isPaging: $isPaging,
+                        prefetchChapters: $prefetchChapters
                     )
                     .frame(height: 280)
                     .padding(.bottom, safeAreaBottom)
@@ -174,7 +219,7 @@ struct NovelReaderView: View {
         .navigationBarHidden(true)
         .statusBarHidden(!showUI)
         .task {
-            await loadPages()
+            await loadInitialChapter()
         }
         .onAppear {
             let anilistId = TrackerManager.shared.getMediaId(for: novel.key, providerId: "anilist")
@@ -232,33 +277,14 @@ struct NovelReaderView: View {
 
 // MARK: - Helpers & Actions
 extension NovelReaderView {
-    func loadPages() async {
+    func loadInitialChapter() async {
         guard !isLoaded else { return }
         do {
             let pageResult = try await runner.getChapterContent(novel: novel, chapter: currentChapter)
             await MainActor.run {
-                self.pages = pageResult.sorted(by: { $0.index < $1.index })
+                self.loadedChapters = [LoadedChapter(chapter: currentChapter, pages: pageResult.sorted(by: { $0.index < $1.index }))]
                 self.isLoaded = true
-
-                let chapterTitleStr = currentChapter.title ?? currentChapter.key
-                HistoryManager.shared.addNovel(novel, chapterKey: currentChapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
-                self.progressManager.markAsRead(mangaId: novel.key, chapterId: currentChapter.key, chapterNum: currentChapter.chapter)
-
-                // Track progress
-                Task {
-                    if let chapterFloat = currentChapter.chapter {
-                        await TrackerManager.shared.updateProgress(localId: novel.key, progress: Int(chapterFloat))
-                    } else {
-                        let titleOrFallback = currentChapter.title ?? currentChapter.key
-                        let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
-                        if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                            let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                            if let chapNum = Int(numbersOnly) {
-                                await TrackerManager.shared.updateProgress(localId: novel.key, progress: chapNum)
-                            }
-                        }
-                    }
-                }
+                self.updateTracking(for: currentChapter)
             }
         } catch {
             await MainActor.run {
@@ -268,52 +294,122 @@ extension NovelReaderView {
         }
     }
 
+    func loadNextChapter() async {
+        guard let lastLoaded = loadedChapters.last?.chapter else { return }
+        guard let next = getNextChapter(after: lastLoaded) else {
+            AppLogger.ui.debug("[NovelReaderView] loadNextChapter: nextChapter is nil (end of novel?)")
+            return
+        }
+        guard !isLoadingNext else {
+            return
+        }
+        AppLogger.ui.debug("[NovelReaderView] loadNextChapter: triggering fetch for \(next.title ?? next.key)")
+        isLoadingNext = true
+        do {
+            let pageResult = try await runner.getChapterContent(novel: novel, chapter: next)
+            await MainActor.run {
+                AppLogger.ui.debug("[NovelReaderView] loadNextChapter: success, appending \(pageResult.count) pages.")
+                let newChapter = LoadedChapter(chapter: next, pages: pageResult.sorted(by: { $0.index < $1.index }))
+                self.loadedChapters.append(newChapter)
+                
+                self.isLoadingNext = false
+            }
+        } catch {
+            await MainActor.run {
+                AppLogger.ui.debug("[NovelReaderView] loadNextChapter: failed with error: \(error.localizedDescription)")
+                self.isLoadingNext = false
+            }
+        }
+    }
+
+    private func updateTracking(for chap: Novel.Chapter) {
+        let chapterTitleStr = chap.title ?? chap.key
+        HistoryManager.shared.addNovel(novel, chapterKey: chap.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
+        self.progressManager.markAsRead(mangaId: novel.key, chapterId: chap.key, chapterNum: chap.chapter)
+
+        // Track progress
+        Task {
+            if let chapterFloat = chap.chapter {
+                await TrackerManager.shared.updateProgress(localId: novel.key, progress: Int(chapterFloat))
+            } else {
+                let titleOrFallback = chap.title ?? chap.key
+                let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
+                if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
+                    let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                    if let chapNum = Int(numbersOnly) {
+                        await TrackerManager.shared.updateProgress(localId: novel.key, progress: chapNum)
+                    }
+                }
+            }
+        }
+    }
+
     func goToChapter(_ nextChap: Novel.Chapter) {
         currentChapter = nextChap
         isLoaded = false
-        pages = []
+        loadedChapters = []
         Task {
-            await loadPages()
+            await loadInitialChapter()
         }
     }
 
     var nextChapter: Novel.Chapter? {
-        guard let chapters = novel.chapters,
-              let currentIndex = chapters.firstIndex(where: { $0.key == currentChapter.key })
-        else { return nil }
-
-        let currentNum = currentChapter.chapter ?? -10000
-
-        var targetIndex = currentIndex - 1
-        while targetIndex >= 0 {
-            let candidate = chapters[targetIndex]
-            let candNum = candidate.chapter ?? -10000
-
-            if candNum > currentNum + 0.0001 {
-                return candidate
-            }
-            targetIndex -= 1
-        }
-        return nil
+        getNextChapter(after: currentChapter)
     }
 
     var previousChapter: Novel.Chapter? {
-        guard let chapters = novel.chapters,
-              let currentIndex = chapters.firstIndex(where: { $0.key == currentChapter.key })
-        else { return nil }
+        getPreviousChapter(before: currentChapter)
+    }
 
-        let currentNum = currentChapter.chapter ?? -10000
-
-        var targetIndex = currentIndex + 1
-        while targetIndex < chapters.count {
-            let candidate = chapters[targetIndex]
-            let candNum = candidate.chapter ?? -10000
-
-            if candNum < currentNum - 0.0001 {
-                return candidate
+    func getNextChapter(after chap: Novel.Chapter) -> Novel.Chapter? {
+        guard let chapters = novel.chapters else { return nil }
+        
+        if let currentNum = chap.chapter {
+            // Find the closest chapter with a higher number
+            let candidates = chapters.filter { ($0.chapter ?? -10000) > currentNum + 0.0001 }
+            if let next = candidates.min(by: { ($0.chapter ?? -10000) < ($1.chapter ?? -10000) }) {
+                return next
             }
-            targetIndex += 1
         }
+        
+        // Fallback: array index
+        guard let currentIndex = chapters.firstIndex(where: { $0.key == chap.key }) else { return nil }
+        
+        // Try looking at previous index (descending order assumption)
+        if currentIndex - 1 >= 0 {
+            return chapters[currentIndex - 1]
+        }
+        // Try looking at next index (ascending order assumption)
+        if currentIndex + 1 < chapters.count {
+            return chapters[currentIndex + 1]
+        }
+        
+        return nil
+    }
+
+    func getPreviousChapter(before chap: Novel.Chapter) -> Novel.Chapter? {
+        guard let chapters = novel.chapters else { return nil }
+        
+        if let currentNum = chap.chapter {
+            // Find the closest chapter with a lower number
+            let candidates = chapters.filter { ($0.chapter ?? -10000) < currentNum - 0.0001 }
+            if let prev = candidates.max(by: { ($0.chapter ?? -10000) < ($1.chapter ?? -10000) }) {
+                return prev
+            }
+        }
+        
+        // Fallback: array index
+        guard let currentIndex = chapters.firstIndex(where: { $0.key == chap.key }) else { return nil }
+        
+        // Try looking at next index (descending order assumption)
+        if currentIndex + 1 < chapters.count {
+            return chapters[currentIndex + 1]
+        }
+        // Try looking at previous index (ascending order assumption)
+        if currentIndex - 1 >= 0 {
+            return chapters[currentIndex - 1]
+        }
+        
         return nil
     }
 
@@ -457,6 +553,7 @@ enum NovelTheme: String, CaseIterable, Identifiable {
 enum SettingsTab {
     case typography
     case theme
+    case reading
 }
 
 enum NovelFont: String, CaseIterable, Identifiable {
@@ -482,6 +579,7 @@ struct NovelReaderSettingsView: View {
     @Binding var fontFamily: NovelFont
     @Binding var theme: NovelTheme
     @Binding var isPaging: Bool
+    @Binding var prefetchChapters: Bool
 
     @State private var activeTab: SettingsTab = .typography
     @State private var brightness: CGFloat = UIScreen.main.brightness
@@ -497,8 +595,10 @@ struct NovelReaderSettingsView: View {
             // Core Controls
             if activeTab == .typography {
                 typographyTab
-            } else {
+            } else if activeTab == .theme {
                 themeTab
+            } else {
+                readingTab
             }
 
             Spacer()
@@ -521,6 +621,15 @@ struct NovelReaderSettingsView: View {
                         .font(.title2)
                         .frame(width: 60, height: 44)
                         .foregroundColor(activeTab == .theme ? .primary : Color(UIColor.tertiaryLabel))
+                }
+
+                Spacer()
+
+                Button(action: { activeTab = .reading }) {
+                    Image(systemName: "book.fill")
+                        .font(.title2)
+                        .frame(width: 60, height: 44)
+                        .foregroundColor(activeTab == .reading ? .primary : Color(UIColor.tertiaryLabel))
                 }
 
                 Spacer()
@@ -712,6 +821,28 @@ struct NovelReaderSettingsView: View {
             .onAppear {
                 brightness = UIScreen.main.brightness
             }
+        }
+        .padding(.horizontal)
+    }
+
+    private var readingTab: some View {
+        VStack(spacing: 20) {
+            Toggle(isOn: $prefetchChapters) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Seamless Reading")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    Text("Automatically fetch and append the next chapter as you approach the end of the current one.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .tint(Color.primary)
+            .padding()
+            .background(Color(UIColor.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+            Spacer()
         }
         .padding(.horizontal)
     }
