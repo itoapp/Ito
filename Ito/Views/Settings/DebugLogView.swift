@@ -27,10 +27,10 @@ public class DebugLogViewModel: ObservableObject {
                 let store = try OSLogStore(scope: .currentProcessIdentifier)
                 // Fetch logs from the last 24 hours
                 let position = store.position(date: Date().addingTimeInterval(-86400))
-                
+
                 let entries = try store.getEntries(at: position)
                 var fetchedLogs: [LogEntry] = []
-                
+
                 for entry in entries {
                     if let log = entry as? OSLogEntryLog {
                         // Filter to only our subsystems to avoid system noise
@@ -45,7 +45,7 @@ public class DebugLogViewModel: ObservableObject {
                         }
                     }
                 }
-                
+
                 let reversed = Array(fetchedLogs.reversed())
                 await MainActor.run {
                     self.logs = reversed
