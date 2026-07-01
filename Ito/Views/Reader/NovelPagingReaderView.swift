@@ -62,19 +62,19 @@ struct NovelPagingReaderView: View {
                     DispatchQueue.main.async { paginate(size: newSize) }
                 }
             }
-            .onChange(of: fontSize) { newSize in 
+            .onChange(of: fontSize) { newSize in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: fontSize) to \(newSize)")
                 DispatchQueue.main.async { paginate(size: pageSize, overrideFontSize: newSize) }
             }
-            .onChange(of: fontFamily) { newFam in 
+            .onChange(of: fontFamily) { newFam in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: fontFamily) to \(String(describing: newFam))")
                 DispatchQueue.main.async { paginate(size: pageSize, overrideFontFamily: newFam) }
             }
-            .onChange(of: lineSpacing) { newSpace in 
+            .onChange(of: lineSpacing) { newSpace in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: lineSpacing) to \(newSpace)")
                 DispatchQueue.main.async { paginate(size: pageSize, overrideLineSpacing: newSpace) }
             }
-            .onChange(of: theme) { newTheme in 
+            .onChange(of: theme) { newTheme in
                 AppLogger.ui.debug("[NovelPagingReaderView] onChange(of: theme) to \(String(describing: newTheme))")
                 DispatchQueue.main.async { paginate(size: pageSize, overrideTheme: newTheme) }
             }
@@ -82,7 +82,7 @@ struct NovelPagingReaderView: View {
     }
 
     private func paginate(
-        size: CGSize, 
+        size: CGSize,
         overrideFontSize: Double? = nil,
         overrideFontFamily: NovelFont? = nil,
         overrideLineSpacing: Double? = nil,
