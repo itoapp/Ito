@@ -357,6 +357,12 @@ struct PackageRowView: View {
                 Text("v\(pkg.version) • \(pkg.pluginType.capitalized)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if pkg.isArchived {
+                    Label("Archived", systemImage: "archivebox.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.top, 2)
+                }
             }
 
             Spacer()

@@ -4,6 +4,17 @@ import Nuke
 import NukeUI
 import ito_runner
 
+extension PluginInfo {
+    public var isArchived: Bool { archived ?? false }
+
+    public var archiveNotice: String {
+        if let reason = archivedReason {
+            return "This plugin is no longer maintained.\nReason: \(reason)"
+        }
+        return "This plugin is no longer maintained."
+    }
+}
+
 struct SourceView: View {
     let plugin: InstalledPlugin
 
@@ -23,6 +34,7 @@ struct SourceView: View {
 
     @State private var searchQuery: String = ""
     @State private var searchTask: Task<Void, Never>?
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
@@ -34,6 +46,60 @@ struct SourceView: View {
                 if let layout = homeLayout, searchQuery.isEmpty {
                     ScrollView {
                         VStack(spacing: 16) {
+                            if plugin.info.isArchived {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack {
+                                        Label {
+                                            Text("Archived Plugin")
+                                                .font(.headline)
+                                                .foregroundColor(.primary)
+                                        } icon: {
+                                            Image(systemName: "archivebox.fill")
+                                                .foregroundStyle(.orange)
+                                        }
+                                        Spacer()
+                                        if let dateStr = plugin.info.archivedDate {
+                                            Text(dateStr)
+                                                .font(.subheadline)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+
+                                    Text(.init(plugin.info.archiveNotice))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .tint(.accentColor)
+                                        .fixedSize(horizontal: false, vertical: true)
+
+                                    Button(role: .destructive) {
+                                        Task {
+                                            do {
+                                                try FileManager.default.removeItem(at: plugin.url)
+                                            } catch {
+                                                await MainActor.run {
+                                                    withAnimation {
+                                                        SnackBarManager.shared.showError("Failed to remove \(plugin.info.name): \(error.localizedDescription)")
+                                                    }
+                                                }
+                                            }
+                                            await PluginManager.shared.reloadInstalledPlugins()
+                                            await MainActor.run {
+                                                dismiss()
+                                            }
+                                        }
+                                    } label: {
+                                        Label("Remove Plugin", systemImage: "trash")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.large)
+                                }
+                                .padding()
+                                .background(Color(.secondarySystemBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .padding(.horizontal)
+                            }
+
                             ForEach(layout.components.indices, id: \.self) { index in
                                 let component = layout.components[index]
                                 Section(header:

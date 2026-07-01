@@ -13,6 +13,9 @@ public struct RepoPackage: Codable, Identifiable, Hashable, Sendable {
     public let iconUrl: String?
     public let sha256: String
     public let pluginType: String
+    public let archived: Bool?
+    public let archivedReason: String?
+    public let archivedDate: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, version, minAppVersion = "min_app_version"
@@ -20,7 +23,14 @@ public struct RepoPackage: Codable, Identifiable, Hashable, Sendable {
         case iconUrl = "icon_url"
         case sha256
         case pluginType = "type"
+        case archived
+        case archivedReason = "archived_reason"
+        case archivedDate = "archived_date"
     }
+}
+
+extension RepoPackage {
+    public var isArchived: Bool { archived ?? false }
 }
 
 public struct RepoIndex: Codable, Equatable, Sendable {

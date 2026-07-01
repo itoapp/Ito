@@ -426,6 +426,12 @@ struct PluginRowView: View {
                 Text("v\(plugin.info.version) • \(plugin.info.author ?? "Unknown")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if plugin.info.archived ?? false {
+                    Label("Archived", systemImage: "archivebox.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.top, 2)
+                }
             }
 
             Spacer()
