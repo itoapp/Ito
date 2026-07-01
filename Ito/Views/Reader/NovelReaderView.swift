@@ -101,7 +101,7 @@ struct NovelReaderView: View {
                                 }()
 
                                 Text(chapterTitleText)
-                                    .font(.system(size: CGFloat(fontSize) + 6, weight: .bold, design: fontFamily.fontDesign))
+                                    .font(fontFamily.swiftUIFont(size: CGFloat(fontSize) + 6, weight: .bold))
                                     .foregroundColor(theme.textColor)
                                     .padding(.vertical)
                                     .padding(.horizontal)
@@ -118,8 +118,8 @@ struct NovelReaderView: View {
                                     pageText(for: page)
                                         .onAppear {
                                             // Seamless reading trigger (fetch when within 5 paragraphs of the end)
-                                            if prefetchChapters, 
-                                               loadedChapter.id == loadedChapters.last?.id, 
+                                            if prefetchChapters,
+                                               loadedChapter.id == loadedChapters.last?.id,
                                                idx >= pagesArray.count - 5 {
                                                 Task { await loadNextChapter() }
                                             }
@@ -263,7 +263,7 @@ struct NovelReaderView: View {
         switch page.content {
         case .text(let text):
             Text(text)
-                .font(.system(size: CGFloat(fontSize), design: fontFamily.fontDesign))
+                .font(fontFamily.swiftUIFont(size: CGFloat(fontSize)))
                 .foregroundColor(theme.textColor)
                 .padding(.horizontal)
                 .padding(.vertical, 4)
@@ -311,7 +311,7 @@ extension NovelReaderView {
                 AppLogger.ui.debug("[NovelReaderView] loadNextChapter: success, appending \(pageResult.count) pages.")
                 let newChapter = LoadedChapter(chapter: next, pages: pageResult.sorted(by: { $0.index < $1.index }))
                 self.loadedChapters.append(newChapter)
-                
+
                 self.isLoadingNext = false
             }
         } catch {
@@ -363,7 +363,7 @@ extension NovelReaderView {
 
     func getNextChapter(after chap: Novel.Chapter) -> Novel.Chapter? {
         guard let chapters = novel.chapters else { return nil }
-        
+
         if let currentNum = chap.chapter {
             // Find the closest chapter with a higher number
             let candidates = chapters.filter { ($0.chapter ?? -10000) > currentNum + 0.0001 }
@@ -371,10 +371,10 @@ extension NovelReaderView {
                 return next
             }
         }
-        
+
         // Fallback: array index
         guard let currentIndex = chapters.firstIndex(where: { $0.key == chap.key }) else { return nil }
-        
+
         // Try looking at previous index (descending order assumption)
         if currentIndex - 1 >= 0 {
             return chapters[currentIndex - 1]
@@ -383,13 +383,13 @@ extension NovelReaderView {
         if currentIndex + 1 < chapters.count {
             return chapters[currentIndex + 1]
         }
-        
+
         return nil
     }
 
     func getPreviousChapter(before chap: Novel.Chapter) -> Novel.Chapter? {
         guard let chapters = novel.chapters else { return nil }
-        
+
         if let currentNum = chap.chapter {
             // Find the closest chapter with a lower number
             let candidates = chapters.filter { ($0.chapter ?? -10000) < currentNum - 0.0001 }
@@ -397,10 +397,10 @@ extension NovelReaderView {
                 return prev
             }
         }
-        
+
         // Fallback: array index
         guard let currentIndex = chapters.firstIndex(where: { $0.key == chap.key }) else { return nil }
-        
+
         // Try looking at next index (descending order assumption)
         if currentIndex + 1 < chapters.count {
             return chapters[currentIndex + 1]
@@ -409,7 +409,7 @@ extension NovelReaderView {
         if currentIndex - 1 >= 0 {
             return chapters[currentIndex - 1]
         }
-        
+
         return nil
     }
 
@@ -561,14 +561,27 @@ enum NovelFont: String, CaseIterable, Identifiable {
     case serif = "Serif"
     case monospaced = "Monospace"
     case rounded = "Rounded"
+    case lora = "Lora"
+    case karla = "Karla"
+    case rubik = "Rubik"
+    case cardo = "Cardo"
+    case nunito = "Nunito"
+    case merriweather = "Merriweather"
+
     var id: String { rawValue }
 
-    var fontDesign: Font.Design {
+    func swiftUIFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
         switch self {
-        case .system: return .default
-        case .serif: return .serif
-        case .monospaced: return .monospaced
-        case .rounded: return .rounded
+        case .system: return .system(size: size, weight: weight, design: .default)
+        case .serif: return .system(size: size, weight: weight, design: .serif)
+        case .monospaced: return .system(size: size, weight: weight, design: .monospaced)
+        case .rounded: return .system(size: size, weight: weight, design: .rounded)
+        case .lora: return .custom(weight == .bold ? "Lora-Bold" : "Lora-Regular", size: size)
+        case .karla: return .custom(weight == .bold ? "Karla-Bold" : "Karla-Regular", size: size)
+        case .rubik: return .custom(weight == .bold ? "Rubik-Bold" : "Rubik-Regular", size: size)
+        case .cardo: return .custom(weight == .bold ? "Cardo-Bold" : "Cardo-Regular", size: size)
+        case .nunito: return .custom(weight == .bold ? "Nunito-Bold" : "Nunito-Regular", size: size)
+        case .merriweather: return .custom(weight == .bold ? "Merriweather-Bold" : "Merriweather-Regular", size: size)
         }
     }
 }

@@ -141,6 +141,24 @@ struct NovelPagingReaderView: View {
         case .monospaced:
             titleFont = UIFont(name: "Menlo-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
             bodyFont = UIFont(name: "Menlo", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
+        case .lora:
+            titleFont = UIFont(name: "Lora-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
+            bodyFont = UIFont(name: "Lora-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
+        case .karla:
+            titleFont = UIFont(name: "Karla-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
+            bodyFont = UIFont(name: "Karla-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
+        case .rubik:
+            titleFont = UIFont(name: "Rubik-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
+            bodyFont = UIFont(name: "Rubik-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
+        case .cardo:
+            titleFont = UIFont(name: "Cardo-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
+            bodyFont = UIFont(name: "Cardo-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
+        case .nunito:
+            titleFont = UIFont(name: "Nunito-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
+            bodyFont = UIFont(name: "Nunito-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
+        case .merriweather:
+            titleFont = UIFont(name: "Merriweather-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
+            bodyFont = UIFont(name: "Merriweather-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
         default:
             titleFont = .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
             bodyFont = .systemFont(ofSize: CGFloat(currentFontSize))

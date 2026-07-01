@@ -172,5 +172,20 @@
 			</dict>
 		</dict>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Lora-Regular.ttf</string>
+		<string>Lora-Bold.ttf</string>
+		<string>Karla-Regular.ttf</string>
+		<string>Karla-Bold.ttf</string>
+		<string>Rubik-Regular.ttf</string>
+		<string>Rubik-Bold.ttf</string>
+		<string>Cardo-Regular.ttf</string>
+		<string>Cardo-Bold.ttf</string>
+		<string>Nunito-Regular.ttf</string>
+		<string>Nunito-Bold.ttf</string>
+		<string>Merriweather-Regular.ttf</string>
+		<string>Merriweather-Bold.ttf</string>
+	</array>
 </dict>
 </plist>
