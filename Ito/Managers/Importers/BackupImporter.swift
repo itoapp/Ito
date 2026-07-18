@@ -9,8 +9,10 @@ public struct MigrationReport: Sendable {
         public let resolvedId: String
         public let confidence: Int
         public let isInstalled: Bool
-        public let affectedItemCount: Int
+        public let affectedItemIds: [String]
         public let candidates: [(id: String, score: Int)]
+
+        public var affectedItemCount: Int { affectedItemIds.count }
     }
 
     public let unresolvedPlugins: [UnresolvedPlugin]
@@ -18,6 +20,31 @@ public struct MigrationReport: Sendable {
     public let totalItemsSkipped: Int
 
     public var hasIssues: Bool { !unresolvedPlugins.isEmpty }
+
+    nonisolated func retargetingAffectedItemIds(
+        using persistedTargetIdsByImportedItemId: [String: String]
+    ) -> MigrationReport {
+        MigrationReport(
+            unresolvedPlugins: unresolvedPlugins.map { plugin in
+                var seen = Set<String>()
+                let affectedItemIds: [String] = plugin.affectedItemIds.compactMap { importedItemId in
+                    let targetId = persistedTargetIdsByImportedItemId[importedItemId] ?? importedItemId
+                    guard seen.insert(targetId).inserted else { return nil }
+                    return targetId
+                }
+                return UnresolvedPlugin(
+                    foreignId: plugin.foreignId,
+                    resolvedId: plugin.resolvedId,
+                    confidence: plugin.confidence,
+                    isInstalled: plugin.isInstalled,
+                    affectedItemIds: affectedItemIds,
+                    candidates: plugin.candidates
+                )
+            },
+            totalItemsImported: totalItemsImported,
+            totalItemsSkipped: totalItemsSkipped
+        )
+    }
 }
 
 // MARK: - Imported Backup

@@ -281,47 +281,25 @@ struct MigrationReportView: View {
     }
 
     private func applyRemap(foreignId: String, newPluginId: String) {
-        // 1. Persist the user alias for future imports
-        PluginResolver.shared.saveUserAlias(foreignId: foreignId, itoPluginId: newPluginId)
-
-        // 2. Find all affected items and the old resolved ID
         guard let plugin = report.unresolvedPlugins.first(where: { $0.foreignId == foreignId }) else { return }
-        let oldPluginId = plugin.resolvedId
 
-        // 3. Batch update all LibraryItems in the database
         Task {
             do {
-                try await AppDatabase.shared.dbPool.write { db in
-                    let items = try LibraryItem.filter(Column("pluginId") == oldPluginId).fetchAll(db)
-                    for var item in items {
-                        let mangaKey = item.id.replacingOccurrences(of: "\(oldPluginId)_", with: "")
-                        let newId = "\(newPluginId)_\(mangaKey)"
-
-                        try LibraryItem.deleteOne(db, key: item.id)
-
-                        try db.execute(
-                            sql: "UPDATE itemCategoryLink SET itemId = ? WHERE itemId = ?",
-                            arguments: [newId, item.id]
+                let remapper = LibrarySourceRemapper(dbPool: AppDatabase.shared.dbPool)
+                let result = try await remapper.remapAndPersistAlias(
+                    foreignId: foreignId,
+                    oldPluginId: plugin.resolvedId,
+                    newPluginId: newPluginId,
+                    affectedItemIds: plugin.affectedItemIds
+                ) { foreignId, newPluginId in
+                    await MainActor.run {
+                        PluginResolver.shared.saveUserAlias(
+                            foreignId: foreignId,
+                            itoPluginId: newPluginId
                         )
-
-                        try db.execute(
-                            sql: "UPDATE readingHistoryRecord SET libraryItemId = ?, mediaKey = ?, pluginId = ? WHERE pluginId = ? AND libraryItemId = ?",
-                            arguments: [newId, newId, newPluginId, oldPluginId, item.id]
-                        )
-
-                        item = LibraryItem(
-                            id: newId,
-                            title: item.title,
-                            coverUrl: item.coverUrl,
-                            pluginId: newPluginId,
-                            isAnime: item.isAnime,
-                            pluginType: item.pluginType,
-                            rawPayload: item.rawPayload,
-                            anilistId: item.anilistId
-                        )
-                        try item.insert(db)
                     }
                 }
+                AppLogger.database.info("Remapped \(result.remappedItemCount) items from \(plugin.resolvedId) to \(newPluginId), moving \(result.movedLinkCount) links and \(result.movedHistoryCount) history rows")
                 await MainActor.run {
                     _ = withAnimation { resolvedSources.insert(foreignId) }
                 }
@@ -329,6 +307,10 @@ struct MigrationReportView: View {
                 await PluginManager.shared.reloadInstalledPlugins()
             } catch {
                 AppLogger.database.error("\("Remap failed for \(foreignId)"): \(error)")
+                await MainActor.run {
+                    installError = error.localizedDescription
+                    showInstallError = true
+                }
             }
         }
     }

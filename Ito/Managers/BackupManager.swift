@@ -1,11 +1,405 @@
 import Foundation
 import Combine
 import GRDB
+import OSLog
 import SystemConfiguration
 
-public enum BackupRestoreMode: Sendable, Equatable {
+nonisolated public enum BackupRestoreMode: Sendable, Equatable {
     case wipe
     case merge
+}
+
+nonisolated enum BackupMergeError: Error, Equatable {
+    case ambiguousLocalIdentity(
+        pluginId: String,
+        canonicalMediaId: String,
+        localItemIds: [String]
+    )
+    case invalidReplacementCategoryReference(
+        itemId: String,
+        categoryId: String
+    )
+}
+
+nonisolated struct BackupMergeResult: Sendable, Equatable {
+    let insertedItemCount: Int
+    let insertedHistoryCount: Int
+    let skippedUnassociatedOrAmbiguousHistoryCount: Int
+    let skippedByPolicyHistoryCount: Int
+    let skippedDuplicateHistoryCount: Int
+    let persistedTargetIdsByImportedItemId: [String: String]
+
+    var consideredHistoryCount: Int {
+        insertedHistoryCount
+            + skippedUnassociatedOrAmbiguousHistoryCount
+            + skippedByPolicyHistoryCount
+            + skippedDuplicateHistoryCount
+    }
+
+    func retargetedMigrationReport(_ report: MigrationReport?) -> MigrationReport? {
+        report?.retargetingAffectedItemIds(using: persistedTargetIdsByImportedItemId)
+    }
+}
+
+nonisolated struct BackupMergeOperation: Sendable {
+    nonisolated private struct ItemDisposition: Sendable {
+        let importedItem: LibraryItem
+        let targetId: String
+        let isPreexisting: Bool
+    }
+
+    nonisolated private struct DispositionIndex: Sendable {
+        let dispositions: [ItemDisposition]
+        private let direct: [String: [Int]]
+        private let aliases: [String: [Int]]
+        private let canonical: [ImportedMediaIdentity.Key: [Int]]
+
+        init(_ dispositions: [ItemDisposition]) {
+            self.dispositions = dispositions
+            var direct: [String: [Int]] = [:]
+            var aliases: [String: [Int]] = [:]
+            var canonical: [ImportedMediaIdentity.Key: [Int]] = [:]
+
+            for (index, disposition) in dispositions.enumerated() {
+                let item = disposition.importedItem
+                let key = ImportedMediaIdentity.key(itemId: item.id, pluginId: item.pluginId)
+                direct[item.id, default: []].append(index)
+                canonical[key, default: []].append(index)
+                for alias in Set([item.id, key.canonicalMediaId, "\(item.pluginId)_\(key.canonicalMediaId)"]) {
+                    aliases[alias, default: []].append(index)
+                }
+            }
+
+            self.direct = direct
+            self.aliases = aliases
+            self.canonical = canonical
+        }
+
+        func disposition(for identifier: String) -> ItemDisposition? {
+            if let directMatches = direct[identifier], directMatches.count == 1 {
+                return dispositions[directMatches[0]]
+            }
+            guard let matches = aliases[identifier], matches.count == 1 else { return nil }
+            return dispositions[matches[0]]
+        }
+
+        func disposition(for history: ReadingHistoryRecord) -> ItemDisposition? {
+            var matches = Set<Int>()
+            for identifier in [history.libraryItemId, history.mediaKey].compactMap({ $0 }) {
+                let key = ImportedMediaIdentity.key(itemId: identifier, pluginId: history.pluginId)
+                matches.formUnion(canonical[key] ?? [])
+            }
+            guard matches.count == 1, let match = matches.first else { return nil }
+            return dispositions[match]
+        }
+    }
+
+    nonisolated private struct LibraryItemIdentityIndex: Sendable {
+        private let itemsByIdentity: [ImportedMediaIdentity.Key: [LibraryItem]]
+
+        init(_ items: [LibraryItem]) {
+            itemsByIdentity = Dictionary(grouping: items) {
+                ImportedMediaIdentity.key(itemId: $0.id, pluginId: $0.pluginId)
+            }
+        }
+
+        func uniqueIdentity(for history: ReadingHistoryRecord) -> ImportedMediaIdentity.Key? {
+            var itemIds = Set<String>()
+            var identityByItemId: [String: ImportedMediaIdentity.Key] = [:]
+            for identifier in [history.libraryItemId, history.mediaKey].compactMap({ $0 }) {
+                let key = ImportedMediaIdentity.key(itemId: identifier, pluginId: history.pluginId)
+                for item in itemsByIdentity[key] ?? [] {
+                    itemIds.insert(item.id)
+                    identityByItemId[item.id] = key
+                }
+            }
+            guard itemIds.count == 1, let itemId = itemIds.first else { return nil }
+            return identityByItemId[itemId]
+        }
+    }
+
+    nonisolated private struct HistorySemanticKey: Hashable {
+        let mediaIdentity: ImportedMediaIdentity.Key
+        let chapterKey: String
+        let readAt: Date
+    }
+
+    let dbPool: DatabasePool
+
+    func analyze(_ importedBackup: ImportedBackup) async throws -> [MergeConflict] {
+        try await dbPool.read { db in
+            let localCategories = try LibraryCategory.fetchAll(db)
+            let localLinks = try ItemCategoryLink.fetchAll(db)
+            let localItems = try LibraryItem.fetchAll(db)
+            let localHistory = try ReadingHistoryRecord.fetchAll(db)
+            let dispositions = try makeDispositions(
+                importedItems: importedBackup.items,
+                localItems: localItems
+            )
+            let dispositionIndex = DispositionIndex(dispositions)
+            let localItemsById = Dictionary(uniqueKeysWithValues: localItems.map { ($0.id, $0) })
+            let localCategoriesById = Dictionary(uniqueKeysWithValues: localCategories.map { ($0.id, $0) })
+            let backupCategoriesById = Dictionary(uniqueKeysWithValues: importedBackup.categories.map { ($0.id, $0) })
+            let localLinksByItemId = Dictionary(grouping: localLinks, by: \.itemId)
+            let backupLinksByTargetId = Dictionary(grouping: importedBackup.links.compactMap { link in
+                dispositionIndex.disposition(for: link.itemId).map { ($0.targetId, link) }
+            }, by: { $0.0 })
+            let localHistoryCounts = Dictionary(grouping: localHistory.compactMap { history in
+                dispositionIndex.disposition(for: history)?.targetId
+            }, by: { $0 }).mapValues(\.count)
+            let backupHistoryCounts = Dictionary(grouping: importedBackup.history.compactMap { history in
+                dispositionIndex.disposition(for: history)?.targetId
+            }, by: { $0 }).mapValues(\.count)
+
+            return dispositions.compactMap { disposition in
+                guard disposition.isPreexisting,
+                      let localItem = localItemsById[disposition.targetId]
+                else { return nil }
+
+                let localLink = localLinksByItemId[disposition.targetId]?.first
+                let backupLink = backupLinksByTargetId[disposition.targetId]?.first?.1
+                let localCategory = localLink.flatMap { localCategoriesById[$0.categoryId]?.name }
+                let backupCategory = backupLink.flatMap { backupCategoriesById[$0.categoryId]?.name }
+                let localHistoryCount = localHistoryCounts[disposition.targetId] ?? 0
+                let backupHistoryCount = backupHistoryCounts[disposition.targetId] ?? 0
+
+                guard localCategory != backupCategory || localHistoryCount != backupHistoryCount else {
+                    return nil
+                }
+                return MergeConflict(
+                    item: localItem,
+                    localCategoryName: localCategory,
+                    backupCategoryName: backupCategory,
+                    localHistoryCount: localHistoryCount,
+                    backupHistoryCount: backupHistoryCount
+                )
+            }
+        }
+    }
+
+    func restore(
+        _ importedBackup: ImportedBackup,
+        mode: BackupRestoreMode,
+        resolvedConflicts: [String: ConflictResolution] = [:]
+    ) async throws -> BackupMergeResult {
+        try await dbPool.write { db in
+            let localItems = try LibraryItem.fetchAll(db)
+            let dispositions = try makeDispositions(
+                importedItems: importedBackup.items,
+                localItems: mode == .merge ? localItems : []
+            )
+            let dispositionIndex = DispositionIndex(dispositions)
+            let currentSystemId = try LibraryCategory
+                .filter(Column("isSystemCategory") == true)
+                .fetchOne(db)?.id
+            let backupSystemId = importedBackup.categories.first(where: \.isSystemCategory)?.id
+
+            if mode == .wipe {
+                try ReadingHistoryRecord.deleteAll(db)
+                try ItemCategoryLink.deleteAll(db)
+                try LibraryItem.deleteAll(db)
+                try LibraryCategory.filter(Column("isSystemCategory") == false).deleteAll(db)
+            }
+
+            for category in importedBackup.categories where !category.isSystemCategory {
+                if mode == .merge {
+                    if try LibraryCategory.fetchOne(db, key: category.id) == nil {
+                        try category.insert(db)
+                    }
+                } else {
+                    try category.save(db)
+                }
+            }
+
+            let groupedLinks = Dictionary(grouping: importedBackup.links.compactMap { link -> (ItemDisposition, ItemCategoryLink)? in
+                guard let disposition = dispositionIndex.disposition(for: link.itemId) else { return nil }
+                let categoryId = link.categoryId == backupSystemId ? (currentSystemId ?? link.categoryId) : link.categoryId
+                return (
+                    disposition,
+                    ItemCategoryLink(itemId: disposition.targetId, categoryId: categoryId, addedAt: link.addedAt)
+                )
+            }, by: { $0.0.targetId })
+            let validCategoryIds = Set(try String.fetchAll(db, sql: "SELECT id FROM libraryCategory"))
+
+            for (targetId, linkEntries) in groupedLinks {
+                guard linkEntries.first?.0.isPreexisting == true,
+                      keepsBackup(resolvedConflicts[targetId])
+                else { continue }
+                for (_, link) in linkEntries where !validCategoryIds.contains(link.categoryId) {
+                    throw BackupMergeError.invalidReplacementCategoryReference(
+                        itemId: targetId,
+                        categoryId: link.categoryId
+                    )
+                }
+            }
+
+            var insertedItemCount = 0
+            for disposition in dispositions {
+                if disposition.isPreexisting {
+                    if keepsBackup(resolvedConflicts[disposition.targetId]) {
+                        try retarget(disposition.importedItem, to: disposition.targetId).update(db)
+                    }
+                } else {
+                    try retarget(disposition.importedItem, to: disposition.targetId).insert(db)
+                    insertedItemCount += 1
+                }
+            }
+
+            var existingCategoryIdsByItemId: [String: Set<String>] = [:]
+            for link in try ItemCategoryLink.fetchAll(db) {
+                existingCategoryIdsByItemId[link.itemId, default: []].insert(link.categoryId)
+            }
+
+            for (targetId, linkEntries) in groupedLinks {
+                guard let disposition = linkEntries.first?.0 else { continue }
+                if disposition.isPreexisting {
+                    guard keepsBackup(resolvedConflicts[targetId]) else { continue }
+                    try ItemCategoryLink.filter(Column("itemId") == targetId).deleteAll(db)
+                    existingCategoryIdsByItemId[targetId] = []
+                }
+                for (_, link) in linkEntries {
+                    guard validCategoryIds.contains(link.categoryId) else { continue }
+                    if existingCategoryIdsByItemId[link.itemId, default: []]
+                        .insert(link.categoryId).inserted {
+                        try link.insert(db)
+                    }
+                }
+            }
+
+            var existingHistoryIds = Set(try String.fetchAll(
+                db,
+                sql: "SELECT id FROM readingHistory"
+            ))
+            let persistedHistory = try ReadingHistoryRecord.fetchAll(db)
+            let localItemIdentityIndex = LibraryItemIdentityIndex(localItems)
+            var semanticKeys = Set(persistedHistory.map { history in
+                let identity = localItemIdentityIndex.uniqueIdentity(for: history)
+                    ?? ImportedMediaIdentity.key(itemId: history.mediaKey, pluginId: history.pluginId)
+                return HistorySemanticKey(
+                    mediaIdentity: identity,
+                    chapterKey: history.chapterKey,
+                    readAt: history.readAt
+                )
+            })
+            var insertedHistoryCount = 0
+            var skippedUnassociatedOrAmbiguousHistoryCount = 0
+            var skippedByPolicyHistoryCount = 0
+            var skippedDuplicateHistoryCount = 0
+
+            for history in importedBackup.history {
+                if mode == .wipe {
+                    var rewritten = history
+                    if let disposition = dispositionIndex.disposition(for: history) {
+                        rewritten.libraryItemId = disposition.targetId
+                        rewritten.mediaKey = disposition.targetId
+                    }
+                    try rewritten.save(db)
+                    insertedHistoryCount += 1
+                    continue
+                }
+                guard let disposition = dispositionIndex.disposition(for: history) else {
+                    skippedUnassociatedOrAmbiguousHistoryCount += 1
+                    continue
+                }
+                if disposition.isPreexisting,
+                   !keepsBackup(resolvedConflicts[disposition.targetId]) {
+                    skippedByPolicyHistoryCount += 1
+                    continue
+                }
+
+                let semanticKey = HistorySemanticKey(
+                    mediaIdentity: ImportedMediaIdentity.key(
+                        itemId: disposition.importedItem.id,
+                        pluginId: disposition.importedItem.pluginId
+                    ),
+                    chapterKey: history.chapterKey,
+                    readAt: history.readAt
+                )
+                guard !existingHistoryIds.contains(history.id), !semanticKeys.contains(semanticKey) else {
+                    skippedDuplicateHistoryCount += 1
+                    continue
+                }
+
+                var rewritten = history
+                rewritten.libraryItemId = disposition.targetId
+                rewritten.mediaKey = disposition.targetId
+                try rewritten.insert(db)
+                existingHistoryIds.insert(rewritten.id)
+                semanticKeys.insert(semanticKey)
+                insertedHistoryCount += 1
+            }
+
+            if mode == .wipe {
+                try AppPreference.deleteAll(db)
+            }
+            for preference in importedBackup.preferences {
+                try preference.save(db)
+            }
+
+            let result = BackupMergeResult(
+                insertedItemCount: insertedItemCount,
+                insertedHistoryCount: insertedHistoryCount,
+                skippedUnassociatedOrAmbiguousHistoryCount: skippedUnassociatedOrAmbiguousHistoryCount,
+                skippedByPolicyHistoryCount: skippedByPolicyHistoryCount,
+                skippedDuplicateHistoryCount: skippedDuplicateHistoryCount,
+                persistedTargetIdsByImportedItemId: dispositions.reduce(into: [:]) { mapping, disposition in
+                    mapping[disposition.importedItem.id] = disposition.targetId
+                }
+            )
+            precondition(result.consideredHistoryCount == importedBackup.history.count)
+            return result
+        }
+    }
+
+    private func makeDispositions(
+        importedItems: [LibraryItem],
+        localItems: [LibraryItem]
+    ) throws -> [ItemDisposition] {
+        let localIndex = Dictionary(grouping: localItems) {
+            ImportedMediaIdentity.key(itemId: $0.id, pluginId: $0.pluginId)
+        }
+        return try importedItems.map { importedItem in
+            let identity = ImportedMediaIdentity.key(
+                itemId: importedItem.id,
+                pluginId: importedItem.pluginId
+            )
+            let matches = localIndex[identity] ?? []
+            guard matches.count <= 1 else {
+                throw BackupMergeError.ambiguousLocalIdentity(
+                    pluginId: identity.pluginId,
+                    canonicalMediaId: identity.canonicalMediaId,
+                    localItemIds: matches.map(\.id).sorted()
+                )
+            }
+            return ItemDisposition(
+                importedItem: importedItem,
+                targetId: matches.first?.id ?? importedItem.id,
+                isPreexisting: !matches.isEmpty
+            )
+        }
+    }
+
+    private func retarget(_ item: LibraryItem, to id: String) -> LibraryItem {
+        LibraryItem(
+            id: id,
+            title: item.title,
+            coverUrl: item.coverUrl,
+            pluginId: item.pluginId,
+            isAnime: item.isAnime,
+            pluginType: item.pluginType,
+            rawPayload: item.rawPayload,
+            anilistId: item.anilistId,
+            status: item.status,
+            lastCheckedAt: item.lastCheckedAt,
+            lastUpdatedAt: item.lastUpdatedAt,
+            knownChapterCount: item.knownChapterCount
+        )
+    }
+
+    private func keepsBackup(_ resolution: ConflictResolution?) -> Bool {
+        if case .keepBackup = resolution { return true }
+        return false
+    }
 }
 
 @MainActor
@@ -62,42 +456,8 @@ public class BackupManager: ObservableObject {
 
     public func analyzeMerge(from url: URL) async throws -> [MergeConflict] {
         let importedBackup = try await parseBackup(url: url)
-        let currentPool = AppDatabase.shared.dbPool
-
-        return try await currentPool.read { currentDb in
-            var conflicts: [MergeConflict] = []
-
-            let localCategories = try LibraryCategory.fetchAll(currentDb)
-            let localLinks = try ItemCategoryLink.fetchAll(currentDb)
-            let localItems = try LibraryItem.fetchAll(currentDb)
-
-            let localHistory = try ReadingHistoryRecord.fetchAll(currentDb)
-
-            for backupItem in importedBackup.items {
-                guard let localItem = localItems.first(where: { $0.id == backupItem.id }) else { continue }
-
-                let localLink = localLinks.first(where: { $0.itemId == localItem.id })
-                let backupLink = importedBackup.links.first(where: { $0.itemId == backupItem.id })
-
-                let localCategory = localCategories.first(where: { $0.id == localLink?.categoryId })?.name
-                let backupCategory = importedBackup.categories.first(where: { $0.id == backupLink?.categoryId })?.name
-
-                let localHistCount = localHistory.filter({ $0.mediaKey == localItem.id }).count
-                let backupHistCount = importedBackup.history.filter({ $0.mediaKey == backupItem.id }).count
-
-                if localCategory != backupCategory || localHistCount != backupHistCount {
-                    conflicts.append(MergeConflict(
-                        item: localItem,
-                        localCategoryName: localCategory,
-                        backupCategoryName: backupCategory,
-                        localHistoryCount: localHistCount,
-                        backupHistoryCount: backupHistCount
-                    ))
-                }
-            }
-
-            return conflicts
-        }
+        return try await BackupMergeOperation(dbPool: AppDatabase.shared.dbPool)
+            .analyze(importedBackup)
     }
 
     public func restoreBackup(from url: URL, mode: BackupRestoreMode, resolvedConflicts: [String: ConflictResolution] = [:]) async throws -> MigrationReport? {
@@ -105,106 +465,17 @@ public class BackupManager: ObservableObject {
         defer { isRestoring = false }
 
         let importedBackup = try await parseBackup(url: url)
-        let currentPool = AppDatabase.shared.dbPool
-
-        try await currentPool.write { currentDb in
-            // Discover our system category identity mapping
-            let currentSystemCat = try LibraryCategory.filter(Column("isSystemCategory") == true).fetchOne(currentDb)
-            let currentSystemId = currentSystemCat?.id
-
-            // 1. If mode is WIPE, clear existing tables
-            if case .wipe = mode {
-                try ReadingHistoryRecord.deleteAll(currentDb)
-                try ItemCategoryLink.deleteAll(currentDb)
-                try LibraryItem.deleteAll(currentDb)
-                try LibraryCategory.filter(Column("isSystemCategory") == false).deleteAll(currentDb)
-            }
-
-            // Identify the backup's system category ID for mapping later
-            let backupSystemCatId = importedBackup.categories.first(where: { $0.isSystemCategory })?.id
-
-            // 3. Insert or Update Categories
-            for category in importedBackup.categories {
-                // Prevent inserting duplicate system categories
-                if category.isSystemCategory { continue }
-
-                if case .merge = mode {
-                    if try LibraryCategory.fetchOne(currentDb, key: category.id) == nil {
-                        try category.insert(currentDb)
-                    }
-                } else {
-                    try category.save(currentDb)
-                }
-            }
-
-            // 4. Insert or Update Library Items
-            for item in importedBackup.items {
-                if case .merge = mode {
-                    let resolution = resolvedConflicts[item.id] ?? .keepLocal
-                    if try LibraryItem.fetchOne(currentDb, key: item.id) == nil {
-                        try item.insert(currentDb)
-                    } else if case .keepBackup = resolution {
-                        try item.update(currentDb)
-                    }
-                } else {
-                    try item.save(currentDb)
-                }
-            }
-
-            // 5. Insert Links (With strict consistency checks)
-            for var link in importedBackup.links {
-                // Automatically remap the system category if it points to the old UUID!
-                if link.categoryId == backupSystemCatId, let activeSystemId = currentSystemId {
-                    link = ItemCategoryLink(itemId: link.itemId, categoryId: activeSystemId, addedAt: link.addedAt)
-                }
-
-                // Make sure both sides exist before inserting the strict FK
-                if try LibraryItem.fetchOne(currentDb, key: link.itemId) != nil,
-                   try LibraryCategory.fetchOne(currentDb, key: link.categoryId) != nil {
-
-                    if case .merge = mode {
-                        let resolution = resolvedConflicts[link.itemId] ?? .keepLocal
-                        let linkExists = try ItemCategoryLink.fetchOne(currentDb, key: ["itemId": link.itemId, "categoryId": link.categoryId]) != nil
-
-                        if !linkExists {
-                            if try ItemCategoryLink.filter(Column("itemId") == link.itemId).fetchCount(currentDb) == 0 {
-                                try link.insert(currentDb)
-                            } else if case .keepBackup = resolution {
-                                try ItemCategoryLink.filter(Column("itemId") == link.itemId).deleteAll(currentDb)
-                                try link.insert(currentDb)
-                            }
-                        }
-                    } else {
-                        try link.save(currentDb)
-                    }
-                }
-            }
-
-            // 6. Insert History
-            for entry in importedBackup.history {
-                if case .merge = mode {
-                    let resolution = resolvedConflicts[entry.mediaKey] ?? .keepLocal
-                    if try ReadingHistoryRecord.fetchOne(currentDb, key: entry.id) == nil {
-                        if case .keepBackup = resolution {
-                            try entry.insert(currentDb)
-                        }
-                    }
-                } else {
-                    try entry.save(currentDb)
-                }
-            }
-
-            // 7. Insert AppPreferences
-            if case .wipe = mode {
-                try AppPreference.deleteAll(currentDb)
-            }
-            for pref in importedBackup.preferences {
-                try pref.save(currentDb)
-            }
-        }
+        let result = try await BackupMergeOperation(dbPool: AppDatabase.shared.dbPool).restore(
+            importedBackup,
+            mode: mode,
+            resolvedConflicts: resolvedConflicts
+        )
+        AppLogger.database.info(
+            "Backup restore: items=\(result.insertedItemCount) historyInserted=\(result.insertedHistoryCount) historyUnassociated=\(result.skippedUnassociatedOrAmbiguousHistoryCount) historyPolicy=\(result.skippedByPolicyHistoryCount) historyDuplicate=\(result.skippedDuplicateHistoryCount)"
+        )
 
         // Surface migration report
-        let report = importedBackup.migrationReport
+        let report = result.retargetedMigrationReport(importedBackup.migrationReport)
         self.lastMigrationReport = report
         return report
     }

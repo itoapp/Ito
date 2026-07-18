@@ -4,6 +4,9 @@
 build/
 DerivedData/
 
+# ai tooling
+.omx
+
 scripts
 projects
 

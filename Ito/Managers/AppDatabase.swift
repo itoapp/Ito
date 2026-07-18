@@ -35,10 +35,10 @@ public final class AppDatabase: Sendable {
 
         dbPool = try DatabasePool(path: databaseURL.path, configuration: configuration)
 
-        try migrator.migrate(dbPool)
+        try Self.makeMigrator().migrate(dbPool)
     }
 
-    private var migrator: DatabaseMigrator {
+    nonisolated static func makeMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1") { db in

@@ -122,7 +122,7 @@ public struct PaperbackImporter: BackupImporter {
 
         // Track resolutions per foreign source for the migration report
         var resolutionCache: [String: PluginResolution] = [:]
-        var sourceItemCounts: [String: Int] = [:]
+        var sourceItemIds: [String: [String]] = [:]
 
         var categoryHashMap: [String: String] = [:]
 
@@ -142,10 +142,9 @@ public struct PaperbackImporter: BackupImporter {
                 resolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: src.sourceId) }
                 resolutionCache[src.sourceId] = resolution
             }
-            sourceItemCounts[src.sourceId, default: 0] += 1
-
             let resolvedPluginId = resolution.resolvedId
             let globallyUniqueId = src.mangaId
+            sourceItemIds[src.sourceId, default: []].append(globallyUniqueId)
 
             // Map status
             var targetStatus: Manga.Status = .Unknown
@@ -271,7 +270,7 @@ public struct PaperbackImporter: BackupImporter {
                 resolvedId: resolution.resolvedId,
                 confidence: resolution.confidence,
                 isInstalled: resolution.isInstalled,
-                affectedItemCount: sourceItemCounts[foreignId] ?? 0,
+                affectedItemIds: sourceItemIds[foreignId] ?? [],
                 candidates: resolution.candidates
             )
         }

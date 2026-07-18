@@ -21,10 +21,16 @@ public class UpdateManager: ObservableObject {
 
     private let defaultsKey = "Ito.NewChapterCounts"
 
-    private let dbPool = AppDatabase.shared.dbPool
+    private let dbPool: DatabasePool
 
-    private init() {
-        loadState()
+    internal init(
+        dbPool: DatabasePool = AppDatabase.shared.dbPool,
+        loadsPersistedState: Bool = true
+    ) {
+        self.dbPool = dbPool
+        if loadsPersistedState {
+            loadState()
+        }
     }
 
     // MARK: - Core Refresh Flow
@@ -165,61 +171,93 @@ public class UpdateManager: ObservableObject {
         do {
             let runner = try await PluginManager.shared.getRunner(for: item.pluginId)
 
-            var freshCount = 0
-            var newStatus: String?
-
-            switch item.effectiveType {
-            case .manga:
-                let baseManga = try JSONDecoder().decode(Manga.self, from: item.rawPayload)
-                let fullManga = try await runner.getMangaUpdate(manga: baseManga)
-                freshCount = fullManga.chapters?.count ?? 0
-                newStatus = String(describing: fullManga.status)
-            case .anime:
-                let baseAnime = try JSONDecoder().decode(Anime.self, from: item.rawPayload)
-                let fullAnime = try await runner.getAnimeUpdate(anime: baseAnime, needsDetails: false, needsEpisodes: true)
-                freshCount = fullAnime.episodes?.count ?? 0
-                newStatus = String(describing: fullAnime.status)
-            case .novel:
-                let baseNovel = try JSONDecoder().decode(Novel.self, from: item.rawPayload)
-                let fullNovel = try await runner.getNovelUpdate(novel: baseNovel)
-                freshCount = fullNovel.chapters?.count ?? 0
-                newStatus = String(describing: fullNovel.status)
-            }
-
-            let isInitialCheck = item.knownChapterCount == nil
-            let knownCount = item.knownChapterCount ?? freshCount
-            let newChapters = isInitialCheck ? 0 : max(0, freshCount - knownCount)
-            let finalStatus = newStatus
-
-            AppLogger.update.debug("\("🔄 [UpdateManager] \(item.title)"): \(freshCount) total, \(knownCount) known -> \(newChapters) new")
-
-            try await dbPool.write { db in
-                if var dbItem = try LibraryItem.fetchOne(db, key: item.id) {
-                    dbItem.lastCheckedAt = Date()
-                    if newChapters > 0 {
-                        dbItem.lastUpdatedAt = Date()
-                    }
-                    if let status = finalStatus {
-                        dbItem.status = status
-                    }
-                    try dbItem.update(db)
-
-                    // Also trigger the LibraryManager list refresh by modifying the active payload?
-                    // Actually, LibraryManager reacts to database changes via ValueObservation
+            let delta = await processUpdate(for: item) {
+                switch item.effectiveType {
+                case .manga:
+                    let baseManga = try JSONDecoder().decode(Manga.self, from: item.rawPayload)
+                    let fullManga = try await runner.getMangaUpdate(manga: baseManga)
+                    return SuccessfulUpdate(
+                        freshCount: fullManga.chapters?.count ?? 0,
+                        status: String(describing: fullManga.status)
+                    )
+                case .anime:
+                    let baseAnime = try JSONDecoder().decode(Anime.self, from: item.rawPayload)
+                    let fullAnime = try await runner.getAnimeUpdate(
+                        anime: baseAnime,
+                        needsDetails: false,
+                        needsEpisodes: true
+                    )
+                    return SuccessfulUpdate(
+                        freshCount: fullAnime.episodes?.count ?? 0,
+                        status: String(describing: fullAnime.status)
+                    )
+                case .novel:
+                    let baseNovel = try JSONDecoder().decode(Novel.self, from: item.rawPayload)
+                    let fullNovel = try await runner.getNovelUpdate(novel: baseNovel)
+                    return SuccessfulUpdate(
+                        freshCount: fullNovel.chapters?.count ?? 0,
+                        status: String(describing: fullNovel.status)
+                    )
                 }
             }
 
-            if newChapters > 0 {
-                newChapterCounts[item.id] = newChapters
-                return newChapters
-            } else {
-                newChapterCounts.removeValue(forKey: item.id)
-            }
-
-            return nil
+            guard let delta, delta > 0 else { return nil }
+            return delta
 
         } catch {
             AppLogger.update.error("\("🔄 [UpdateManager] ❌ Failed for \(item.title)"): \(error)")
+            return nil
+        }
+    }
+
+    internal struct SuccessfulUpdate: Sendable {
+        let freshCount: Int
+        let status: String?
+    }
+
+    /// Persists a fetched update and derives badge state only from committed database state.
+    internal func processUpdate(
+        for item: LibraryItem,
+        checkedAt: Date = Date(),
+        fetchUpdate: () async throws -> SuccessfulUpdate
+    ) async -> Int? {
+        do {
+            let update = try await fetchUpdate()
+            let committed = try await dbPool.write { db -> (oldCount: Int?, delta: Int)? in
+                guard var dbItem = try LibraryItem.fetchOne(db, key: item.id) else {
+                    return nil
+                }
+
+                let oldCount = dbItem.knownChapterCount
+                let delta = oldCount.map { max(0, update.freshCount - $0) } ?? 0
+                dbItem.knownChapterCount = update.freshCount
+                dbItem.lastCheckedAt = checkedAt
+                if delta > 0 {
+                    dbItem.lastUpdatedAt = checkedAt
+                }
+                if let status = update.status {
+                    dbItem.status = status
+                }
+                try dbItem.update(db)
+                return (oldCount, delta)
+            }
+
+            guard let committed else {
+                newChapterCounts.removeValue(forKey: item.id)
+                return nil
+            }
+
+            AppLogger.update.debug(
+                "🔄 [UpdateManager] \(item.title): \(String(describing: committed.oldCount)) known, \(update.freshCount) fresh/persisted -> \(committed.delta) new"
+            )
+            if committed.delta > 0 {
+                newChapterCounts[item.id] = committed.delta
+            } else {
+                newChapterCounts.removeValue(forKey: item.id)
+            }
+            return committed.delta
+        } catch {
+            AppLogger.update.error("🔄 [UpdateManager] ❌ Failed for \(item.title): \(error)")
             return nil
         }
     }

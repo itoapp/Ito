@@ -90,7 +90,7 @@ public struct AidokuImporter: BackupImporter {
 
         // Track resolutions per foreign source for the migration report
         var resolutionCache: [String: PluginResolution] = [:]
-        var sourceItemCounts: [String: Int] = [:]
+        var sourceItemIds: [String: [String]] = [:]
 
         // 1. Map Categories
         // We track title -> UUID to easily create links
@@ -127,10 +127,9 @@ public struct AidokuImporter: BackupImporter {
                     resolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: libItem.sourceId) }
                     resolutionCache[libItem.sourceId] = resolution
                 }
-                sourceItemCounts[libItem.sourceId, default: 0] += 1
-
                 let resolvedPluginId = resolution.resolvedId
                 let globallyUniqueId = libItem.mangaId
+                sourceItemIds[libItem.sourceId, default: []].append(globallyUniqueId)
 
                 // Synthesize Manga payload
                 let syntheticManga = Manga(
@@ -234,7 +233,7 @@ public struct AidokuImporter: BackupImporter {
                 resolvedId: resolution.resolvedId,
                 confidence: resolution.confidence,
                 isInstalled: resolution.isInstalled,
-                affectedItemCount: sourceItemCounts[foreignId] ?? 0,
+                affectedItemIds: sourceItemIds[foreignId] ?? [],
                 candidates: resolution.candidates
             )
         }
