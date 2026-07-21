@@ -44,7 +44,7 @@ public protocol TrackerProvider: ObservableObject {
     var username: String? { get }
 
     func authenticate(using oauthManager: OAuthManager) async throws
-    func logout()
+    func logout() async throws
 
     func searchMedia(title: String, isAnime: Bool) async throws -> [TrackerMedia]
     func updateProgress(mediaId: String, progress: Int?, status: String?) async throws

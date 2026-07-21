@@ -2,6 +2,7 @@ import OSLog
 import Foundation
 import Combine
 
+@MainActor
 public class AnilistTracker: TrackerProvider {
     public let identifier = "anilist"
     public let name = "AniList"
@@ -13,14 +14,27 @@ public class AnilistTracker: TrackerProvider {
         return anilistToken != nil
     }
 
-    private let tokenKey = "anilist_access_token"
     private let usernameKey = "anilist_username"
     private let clientId = "36931"
     private let callbackScheme = "ito"
+    private let credentialRepository: AniListCredentialRepository
+    private let usernameDefaults: UserDefaults
 
-    public init() {
-        self.anilistToken = UserDefaults.standard.string(forKey: tokenKey)
-        self.username = UserDefaults.standard.string(forKey: usernameKey)
+    init(
+        credentialRepository: AniListCredentialRepository,
+        usernameDefaults: UserDefaults
+    ) {
+        self.credentialRepository = credentialRepository
+        self.usernameDefaults = usernameDefaults
+        self.anilistToken = nil
+        self.username = usernameDefaults.string(forKey: usernameKey)
+    }
+
+    @discardableResult
+    func bootstrapCredentials() async throws -> AniListCredentialRepository.BootstrapOutcome {
+        try await credentialRepository.bootstrap { [weak self] token in
+            self?.anilistToken = token
+        }
     }
 
     @MainActor
@@ -47,8 +61,7 @@ public class AnilistTracker: TrackerProvider {
             throw URLError(.userAuthenticationRequired)
         }
 
-        self.anilistToken = token
-        UserDefaults.standard.set(token, forKey: self.tokenKey)
+        try await persistAuthenticatedToken(token)
 
         Task {
             do {
@@ -59,11 +72,19 @@ public class AnilistTracker: TrackerProvider {
         }
     }
 
-    public func logout() {
-        self.anilistToken = nil
-        self.username = nil
-        UserDefaults.standard.removeObject(forKey: tokenKey)
-        UserDefaults.standard.removeObject(forKey: usernameKey)
+    func persistAuthenticatedToken(_ token: String) async throws {
+        try await credentialRepository.persistOAuthToken(token) { [weak self] verifiedToken in
+            self?.anilistToken = verifiedToken
+        }
+    }
+
+    public func logout() async throws {
+        try await credentialRepository.logout { [weak self] _ in
+            guard let self else { return }
+            self.anilistToken = nil
+            self.username = nil
+            self.usernameDefaults.removeObject(forKey: self.usernameKey)
+        }
     }
 
     public func searchMedia(title: String, isAnime: Bool) async throws -> [TrackerMedia] {
@@ -310,10 +331,9 @@ public class AnilistTracker: TrackerProvider {
            let viewer = dataDict["Viewer"] as? [String: Any],
            let name = viewer["name"] as? String {
 
-            await MainActor.run {
-                self.username = name
-                UserDefaults.standard.set(name, forKey: self.usernameKey)
-            }
+            guard anilistToken == token else { return }
+            username = name
+            usernameDefaults.set(name, forKey: usernameKey)
         } else {
             throw URLError(.cannotParseResponse)
         }

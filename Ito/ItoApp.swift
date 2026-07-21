@@ -12,6 +12,7 @@ import BackgroundTasks
 @main
 struct ItoApp: App {
     @StateObject private var appearanceManager = AppearanceManager.shared
+    private let trackerCredentialLifecycle = TrackerCredentialLifecycle()
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -47,8 +48,17 @@ struct ItoApp: App {
                         }
                     }
                 }
+                .task {
+                    await trackerCredentialLifecycle.appDidLaunch()
+                }
         }
         .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                Task {
+                    await trackerCredentialLifecycle.appDidBecomeActive()
+                }
+            }
+
             if phase == .background {
                 ItoApp.scheduleAppRefresh()
             }

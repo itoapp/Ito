@@ -1,9 +1,30 @@
 import SwiftUI
 
+enum TrackerSettingsCredentialState: Equatable {
+    case loading
+    case deferred
+    case ready
+    case unavailable
+
+    init(_ bootstrapState: TrackerManager.CredentialBootstrapState) {
+        switch bootstrapState {
+        case .notStarted, .inFlight:
+            self = .loading
+        case .retryableProtectedDataFailure:
+            self = .deferred
+        case .ready, .conflict:
+            self = .ready
+        case .recoverableVerificationFailure, .permanentFailure:
+            self = .unavailable
+        }
+    }
+}
+
 struct TrackerSettingsView: View {
     @StateObject private var trackerManager = TrackerManager.shared
     @State private var authenticatingProvider: String?
     @State private var authError: String?
+    @State private var errorProvider: String?
 
     // Force a view refresh after auth changes
     @State private var refreshTrigger = false
@@ -12,7 +33,20 @@ struct TrackerSettingsView: View {
         List {
             ForEach(trackerManager.providers, id: \.identifier) { provider in
                 Section(header: Text(provider.name), footer: Text("Sync your progress automatically with \(provider.name).")) {
-                    if provider.isAuthenticated {
+                    switch TrackerSettingsCredentialState(trackerManager.credentialBootstrapState) {
+                    case .loading:
+                        HStack {
+                            ProgressView()
+                                .padding(.trailing, 8)
+                            Text("Checking saved credentials…")
+                        }
+                    case .deferred:
+                        Label("Saved credentials will be checked when protected data is available.", systemImage: "lock.fill")
+                            .foregroundColor(.secondary)
+                    case .unavailable:
+                        Label("Saved credentials are currently unavailable.", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                    case .ready where provider.isAuthenticated:
                         HStack {
                             Image(systemName: "person.crop.circle.fill")
                                 .foregroundColor(.blue)
@@ -25,13 +59,12 @@ struct TrackerSettingsView: View {
                         }
 
                         Button(action: {
-                            provider.logout()
-                            refreshTrigger.toggle()
+                            logout(provider: provider)
                         }) {
                             Text("Log Out")
                                 .foregroundColor(.red)
                         }
-                    } else {
+                    case .ready:
                         Button(action: {
                             authenticate(provider: provider)
                         }) {
@@ -47,7 +80,7 @@ struct TrackerSettingsView: View {
                         .disabled(authenticatingProvider != nil)
                     }
 
-                    if let error = authError, authenticatingProvider == provider.identifier {
+                    if let error = authError, errorProvider == provider.identifier {
                         Text(error)
                             .font(.caption)
                             .foregroundColor(.red)
@@ -70,20 +103,33 @@ struct TrackerSettingsView: View {
     private func authenticate(provider: any TrackerProvider) {
         authenticatingProvider = provider.identifier
         authError = nil
+        errorProvider = nil
 
         Task {
+            defer { authenticatingProvider = nil }
             do {
                 try await provider.authenticate(using: OAuthManager.shared)
-                await MainActor.run {
-                    refreshTrigger.toggle()
-                }
+                refreshTrigger.toggle()
             } catch {
-                await MainActor.run {
-                    authError = "Authentication failed: \(error.localizedDescription)"
-                }
+                authError = "Authentication failed: \(error.localizedDescription)"
+                errorProvider = provider.identifier
             }
-            await MainActor.run {
-                authenticatingProvider = nil
+        }
+    }
+
+    private func logout(provider: any TrackerProvider) {
+        authenticatingProvider = provider.identifier
+        authError = nil
+        errorProvider = nil
+
+        Task {
+            defer { authenticatingProvider = nil }
+            do {
+                try await provider.logout()
+                refreshTrigger.toggle()
+            } catch {
+                authError = "Logout failed: \(error.localizedDescription)"
+                errorProvider = provider.identifier
             }
         }
     }
