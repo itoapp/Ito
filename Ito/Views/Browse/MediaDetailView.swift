@@ -51,24 +51,22 @@ public enum ChapterFilterOption: String, CaseIterable {
 }
 
 @MainActor
-public class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
-    public let objectWillChange = PassthroughSubject<Void, Never>()
-
-    public var media: M { willSet { objectWillChange.send() } }
-    public var isLoaded = false { willSet { objectWillChange.send() } }
-    public var errorMessage: String? { willSet { objectWillChange.send() } }
-    public var sortOrder: ChapterSortOrder = .descending { willSet { objectWillChange.send() } }
-    public var filterOption: ChapterFilterOption = .all { willSet { objectWillChange.send() } }
-    public var selectedGroup: String? { willSet { objectWillChange.send() } }
+public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
+    @Published public var media: M
+    @Published public var isLoaded = false
+    @Published public var errorMessage: String?
+    @Published public var sortOrder: ChapterSortOrder = .descending
+    @Published public var filterOption: ChapterFilterOption = .all
+    @Published public var selectedGroup: String?
 
     public let pluginId: String
     private let loader: (M) async throws -> M
 
     // Re-link state for imported items with mismatched content keys
-    public var relinkSearchResults: [M] = [] { willSet { objectWillChange.send() } }
-    public var isRelinkSearching = false { willSet { objectWillChange.send() } }
-    public var relinkError: String? { willSet { objectWillChange.send() } }
-    public var didRelink = false { willSet { objectWillChange.send() } }
+    @Published public var relinkSearchResults: [M] = []
+    @Published public var isRelinkSearching = false
+    @Published public var relinkError: String?
+    @Published public var didRelink = false
 
     public init(media: M, pluginId: String, loader: @escaping (M) async throws -> M) {
         self.media = media
@@ -270,6 +268,8 @@ public class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
 
         return !currentlySaved
     }
+
+    nonisolated deinit {}
 }
 
 public struct MediaDetailView<M: MediaDisplayable>: View {
