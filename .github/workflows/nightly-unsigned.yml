@@ -1,0 +1,209 @@
+name: Publish nightly unsigned IPA
+
+on:
+  schedule:
+    # 02:15 America/Phoenix (09:15 UTC). GitHub cron schedules use UTC.
+    - cron: '15 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ito-pages-publication
+  cancel-in-progress: false
+
+env:
+  PROJECT: Ito.xcodeproj
+  SCHEME: Ito
+  BUNDLE_ID: moe.itoapp.ito
+  NIGHTLY_RELEASES_TO_KEEP: '14'
+
+jobs:
+  nightly:
+    name: Test, package, and publish nightly
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          path: Ito
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read pinned ito-runner revision
+        id: runner
+        shell: bash
+        run: echo "ref=$(tr -d '[:space:]' < Ito/.github/ito-runner.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout ito-runner
+        uses: actions/checkout@v7
+        with:
+          repository: itoapp/ito-runner
+          ref: ${{ steps.runner.outputs.ref }}
+          path: ito-runner
+          persist-credentials: false
+
+      
+      - name: Read pinned WasmKit revision
+        id: wasmkit_ref
+        shell: bash
+        run: echo "ref=$(tr -d '[:space:]' < Ito/.github/wasmkit.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout WasmKit
+        uses: actions/checkout@v7
+        with:
+          repository: kunihir0/WasmKit
+          ref: ${{ steps.wasmkit_ref.outputs.ref }}
+          path: WasmKit
+          persist-credentials: false
+
+      - name: Show build environment
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Resolve Swift packages
+        working-directory: Ito
+        run: |
+          set -o pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -skipPackagePluginValidation \
+            | tee resolve-packages.log
+
+      - name: Resolve nightly metadata
+        id: nightly
+        working-directory: Ito
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION="$({
+            xcodebuild -showBuildSettings \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -skipPackagePluginValidation \
+              CODE_SIGNING_ALLOWED=NO \
+              DEVELOPMENT_TEAM=
+          } | awk -F ' = ' '/ MARKETING_VERSION = / {print $2; exit}')"
+
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "MARKETING_VERSION must be numeric X.Y.Z; got: $BASE_VERSION" >&2
+            exit 1
+          fi
+
+          DATE_UTC="$(date -u +'%Y%m%d')"
+          DISPLAY_VERSION="${BASE_VERSION}-nightly.${DATE_UTC}.${GITHUB_RUN_NUMBER}"
+          TAG="nightly-${DATE_UTC}-${GITHUB_RUN_NUMBER}"
+
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "display_version=$DISPLAY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "build=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        working-directory: Ito
+        shell: bash
+        run: echo "id=$(python3 scripts/select_simulator.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests before nightly publication
+        working-directory: Ito
+        run: |
+          set -o pipefail
+          rm -rf TestResults.xcresult
+          xcodebuild test \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
+            -only-testing:ItoTests \
+            -resultBundlePath TestResults.xcresult \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee test.log
+
+      - name: Build unsigned nightly IPA
+        id: ipa
+        working-directory: Ito
+        env:
+          MARKETING_VERSION: ${{ steps.nightly.outputs.base_version }}
+          ARTIFACT_VERSION: ${{ steps.nightly.outputs.display_version }}
+          BUILD_NUMBER: ${{ steps.nightly.outputs.build }}
+          CHANNEL: nightly
+        run: scripts/build_unsigned_ipa.sh build/nightly
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Ito-${{ steps.nightly.outputs.display_version }}-unsigned
+          path: |
+            Ito/${{ steps.ipa.outputs.ipa_path }}
+            Ito/${{ steps.ipa.outputs.checksum_path }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Create nightly prerelease
+        working-directory: Ito
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.nightly.outputs.tag }}
+          DISPLAY_VERSION: ${{ steps.nightly.outputs.display_version }}
+          SHA_SHORT: ${{ steps.nightly.outputs.sha_short }}
+          IPA_PATH: ${{ steps.ipa.outputs.ipa_path }}
+          CHECKSUM_PATH: ${{ steps.ipa.outputs.checksum_path }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$IPA_PATH" "$CHECKSUM_PATH" --clobber
+          else
+            gh release create "$TAG" "$IPA_PATH" "$CHECKSUM_PATH" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Ito nightly $DISPLAY_VERSION" \
+              --notes "Automated unsigned nightly from main at commit $SHA_SHORT. This build is for testing and may be unstable."
+          fi
+
+      - name: Publish nightly AltStore and SideStore source
+        working-directory: Ito
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.nightly.outputs.tag }}
+          CHANNEL: nightly
+          VERSION: ${{ steps.nightly.outputs.display_version }}
+          BUILD_NUMBER: ${{ steps.nightly.outputs.build }}
+          IPA_PATH: ${{ steps.ipa.outputs.ipa_path }}
+          IPA_NAME: ${{ steps.ipa.outputs.ipa_name }}
+          BUNDLE_ID: ${{ env.BUNDLE_ID }}
+          MAX_VERSIONS: ${{ env.NIGHTLY_RELEASES_TO_KEEP }}
+          RELEASE_NOTES: Automated unsigned nightly from main at ${{ steps.nightly.outputs.sha_short }}. This build may be unstable.
+        run: scripts/publish_altstore_source.sh
+
+      - name: Prune old nightly releases and tags
+        working-directory: Ito
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ env.NIGHTLY_RELEASES_TO_KEEP }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.prerelease == true and (.tag_name | startswith("nightly-"))) | [.created_at, (.id | tostring), .tag_name] | @tsv' \
+            | sort -r \
+            | tail -n "+$((KEEP + 1))" \
+            | while IFS=$'\t' read -r _created release_id tag; do
+                [[ -n "$release_id" ]] || continue
+                echo "Deleting old nightly release $tag"
+                gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+                gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" || true
+              done

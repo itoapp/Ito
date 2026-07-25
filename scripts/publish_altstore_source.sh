@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${GH_TOKEN:?GH_TOKEN is required}"
+: "${TAG:?TAG is required}"
+: "${CHANNEL:?CHANNEL is required}"
+: "${VERSION:?VERSION is required}"
+: "${BUILD_NUMBER:?BUILD_NUMBER is required}"
+: "${IPA_PATH:?IPA_PATH is required}"
+: "${IPA_NAME:?IPA_NAME is required}"
+: "${BUNDLE_ID:?BUNDLE_ID is required}"
+
+RELEASE_NOTES="${RELEASE_NOTES:-Unsigned Ito ${VERSION} build.}"
+MAX_VERSIONS="${MAX_VERSIONS:-50}"
+
+case "$CHANNEL" in
+  stable) SOURCE_FILE="apps.json" ;;
+  beta) SOURCE_FILE="apps-beta.json" ;;
+  nightly) SOURCE_FILE="apps-nightly.json" ;;
+  *) echo "Unsupported channel: $CHANNEL" >&2; exit 1 ;;
+esac
+
+OWNER="${GITHUB_REPOSITORY_OWNER}"
+REPO="${GITHUB_REPOSITORY#*/}"
+SOURCE_URL="https://${OWNER}.github.io/${REPO}"
+DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${IPA_NAME}"
+PAGES_DIR="${RUNNER_TEMP}/ito-pages"
+RELEASE_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+IPA_SIZE="$(stat -f '%z' "$IPA_PATH")"
+
+rm -rf "$PAGES_DIR"
+if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+  git clone --depth=1 --branch gh-pages "https://github.com/${GITHUB_REPOSITORY}.git" "$PAGES_DIR"
+else
+  mkdir -p "$PAGES_DIR"
+  git -C "$PAGES_DIR" init
+  git -C "$PAGES_DIR" checkout --orphan gh-pages
+  git -C "$PAGES_DIR" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+fi
+
+python3 scripts/update_altstore_source.py \
+  --file "$PAGES_DIR/$SOURCE_FILE" \
+  --source-url "$SOURCE_URL" \
+  --channel "$CHANNEL" \
+  --bundle-id "$BUNDLE_ID" \
+  --version "$VERSION" \
+  --build-version "$BUILD_NUMBER" \
+  --date "$RELEASE_DATE" \
+  --download-url "$DOWNLOAD_URL" \
+  --size "$IPA_SIZE" \
+  --release-notes "$RELEASE_NOTES" \
+  --max-versions "$MAX_VERSIONS"
+
+cp Ito/Assets.xcassets/AppIcon.appiconset/app.png "$PAGES_DIR/icon.png"
+cat > "$PAGES_DIR/index.html" <<EOF_HTML
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ito build channels</title>
+<h1>Ito AltStore / SideStore Sources</h1>
+<ul>
+  <li>Stable: <code>${SOURCE_URL}/apps.json</code></li>
+  <li>Beta and RC: <code>${SOURCE_URL}/apps-beta.json</code></li>
+  <li>Nightly: <code>${SOURCE_URL}/apps-nightly.json</code></li>
+</ul>
+<p>All current channels use the same app bundle identifier, so installing one channel replaces another.</p>
+EOF_HTML
+touch "$PAGES_DIR/.nojekyll"
+
+git -C "$PAGES_DIR" config user.name "github-actions[bot]"
+git -C "$PAGES_DIR" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+git -C "$PAGES_DIR" add "$SOURCE_FILE" icon.png index.html .nojekyll
+git -C "$PAGES_DIR" commit -m "chore: publish Ito ${CHANNEL} ${VERSION}" || exit 0
+git -C "$PAGES_DIR" remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+git -C "$PAGES_DIR" push origin HEAD:gh-pages
