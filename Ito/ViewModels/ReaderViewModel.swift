@@ -3,14 +3,14 @@ import Combine
 import ito_runner
 
 @MainActor
-public class ReaderViewModel<M: MediaDisplayable, C: ChapterDisplayable>: ObservableObject {
-    public let objectWillChange = PassthroughSubject<Void, Never>()
-
-    public var media: M { willSet { objectWillChange.send() } }
-    public var currentChapter: C { willSet { objectWillChange.send() } }
+public final class ReaderViewModel<M: MediaDisplayable, C: ChapterDisplayable>: ObservableObject {
+    @Published public var media: M
+    @Published public var currentChapter: C
 
     public let pluginId: String
     private let progressManager = ReadProgressManager.shared
+
+    nonisolated deinit {}
 
     public init(media: M, currentChapter: C, pluginId: String) {
         self.media = media
