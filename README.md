@@ -1,52 +1,101 @@
 <div align="center">
-  <img src="Ito/Assets.xcassets/AppIcon.appiconset/app.png" alt="Ito Logo" width="150" />
+  <img src="Ito/Assets.xcassets/AppIcon.appiconset/app.png" alt="Ito app icon" width="144" />
+
   <h1>Ito</h1>
-  <p><strong>All in One app for Anime, Manga, and Novels.</strong></p>
+
+  <p><strong>Anime, manga, and novels in one native iOS app.</strong></p>
+  <p>Discover, read, watch, and track without ads.</p>
+
+  <p>
+    <img src="https://img.shields.io/badge/iOS-15.4%2B-black?style=flat-square&logo=apple&logoColor=white" alt="iOS 15.4 or later" />
+    <img src="https://img.shields.io/badge/Swift-6.2-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.2" />
+    <a href="LICENSE">
+      <img src="https://img.shields.io/badge/License-MPL--2.0-blue?style=flat-square" alt="MPL 2.0 license" />
+    </a>
+    <a href="https://discord.gg/Es5qTB9BcN">
+      <img src="https://img.shields.io/discord/1475329802532552869?color=5865F2&label=Discord&logo=discord&logoColor=white&style=flat-square" alt="Discord" />
+    </a>
+  </p>
 </div>
 
 ---
-> [!WARNING]
-> **Legal Disclaimer**  
-> We do not hold any responsibility for any illegal usage of the codebase. Please refer to your local laws about DMCA and other related laws.
 
-<div align="center">
-    <img src="https://count.getloli.com/get/@itoapp?theme=rule34" /><br>
-</div>
-
-<div align="center">
-    <a target="_blank" href="https://discord.gg/Es5qTB9BcN">
-        <img alt="Discord" src="https://img.shields.io/discord/1475329802532552869?color=%23738ADB&label=Discord&logo=discord&logoColor=white&style=flat-square"/>
-    </a>
-</div>
-
-Ito is a free, ad-free iOS client for reading and watching anime. It is free forever and powered by a secure WebAssembly (WASM) plugin architecture.
+Ito is a free, open-source client for iPhone and iPad. It combines dedicated readers, native video playback, AniList integration, and an extensible WebAssembly plugin system in a single app.
 
 ## Features
-* **Manga, Novel & Anime:** Read and watch natively in a single app.
-* **Discovery:** Discover content powered by indexer like Anilist(more coming soon)
-* **Zero Ads:** 100% free forever with no advertisements.
-* **Progress Tracking:** Sync your library using **AniList** (more coming soon).
-* **Backup & Import:** Export natively or migrate your library from **Aidoku** (`.aib`) and **Paperback v0.8** (`.pas4`) with smart plugin resolution.
-* **WASM Plugins:** Dynamic, isolated content sourcing.
+
+* **Anime, manga, and novels** — Keep different media types together in one library.
+* **Native reading** — Dedicated manga and novel readers designed for iOS.
+* **Native video playback** — Select available video quality, audio tracks, and subtitles.
+* **AniList discovery** — Browse, search, and filter titles using AniList.
+* **Progress tracking** — Connect AniList to track what you read and watch.
+* **WASM plugins** — Install `.ito` plugins from user-added repositories. Downloaded packages are SHA-256 verified before installation.
+* **Backup and migration** — Export native `.itobackup` files or import libraries from Aidoku and Paperback.
+* **On-device storage** — Library data and history are stored locally, with tracker credentials protected by Keychain.
+* **No advertisements** — Ito is free and ad-free.
 
 ## Showcase
+
 <p align="center">
-  <img src="assets/screenshots/details.png" alt="Details View" width="23%" />
-  &nbsp;&nbsp;
-  <img src="assets/screenshots/reader.png" alt="Reader View" width="23%" />
-  &nbsp;&nbsp;
-  <img src="assets/screenshots/discover.png" alt="Reader View" width="23%" />
-  &nbsp;&nbsp;
-  <img src="assets/screenshots/library.png" alt="Reader View" width="23%" />
+  <img src="assets/screenshots/details.png" alt="Media details" width="23%" />
+  &nbsp;
+  <img src="assets/screenshots/reader.png" alt="Manga reader" width="23%" />
+  &nbsp;
+  <img src="assets/screenshots/discover.png" alt="Discover view" width="23%" />
+  &nbsp;
+  <img src="assets/screenshots/library.png" alt="Library view" width="23%" />
 </p>
 
-## Development
-**Requirements:** Xcode 15+, iOS 15.4+, Swift Package Manager.
+## Supported imports
 
-1. Clone the repository.
-2. Open `Ito.xcodeproj` in Xcode.
-3. Allow SPM to resolve dependencies.
-4. Select your target and build (Cmd + R).
+| Source         | Formats         |
+| -------------- | --------------- |
+| Ito            | `.itobackup`    |
+| Aidoku         | `.aib`, `.json` |
+| Paperback v0.8 | `.pas4`, `.zip` |
+
+Backups can replace the existing library or be merged with it. Imported sources are matched against installed Ito plugins when possible.
+
+## Build from source
+
+### Requirements
+
+* Xcode 26.2 or later
+* Swift 6.2
+* iOS or iPadOS 15.4 deployment target
+* Swift Package Manager
+
+Ito uses `ito-runner` as a local Swift package. Both repositories must be placed in the same parent directory:
+
+```text
+ito-dev/
+├── Ito/
+└── ito-runner/
+```
+
+Clone and open the project:
+
+```sh
+mkdir ito-dev
+cd ito-dev
+
+git clone https://github.com/itoapp/ito-runner.git
+git clone https://github.com/itoapp/Ito.git
+
+open Ito/Ito.xcodeproj
+```
+
+Allow Swift Package Manager to resolve the remaining dependencies, select a signing team and target device, then build with `⌘R`.
 
 ## Contributing
-Contributions to the app are welcome via pull requests.
+
+Pull requests are welcome. Keep changes focused, follow the existing SwiftLint configuration, and include tests for behavioral changes where practical.
+
+## License
+
+Ito is licensed under the [Mozilla Public License 2.0](LICENSE).
+
+## Content and legal notice
+
+> [!WARNING]
+> Ito is a client and does not include or host media sources. Users are responsible for the repositories and plugins they install and for complying with applicable laws, licenses, and service terms. The maintainers do not endorse copyright infringement or other unlawful use.
