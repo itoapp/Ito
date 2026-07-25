@@ -47,7 +47,21 @@ jobs:
           path: ito-runner
           persist-credentials: false
 
-      - name: Show build environment
+      
+      - name: Read pinned WasmKit revision
+        id: wasmkit_ref
+        shell: bash
+        run: echo "ref=$(tr -d '[:space:]' < Ito/.github/wasmkit.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout WasmKit
+        uses: actions/checkout@v7
+        with:
+          repository: kunihir0/WasmKit
+          ref: ${{ steps.wasmkit_ref.outputs.ref }}
+          path: WasmKit
+          persist-credentials: false
+
+- name: Show build environment
         run: |
           set -euxo pipefail
           xcodebuild -version
