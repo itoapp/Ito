@@ -163,16 +163,12 @@ jobs:
           xcodebuild test \
             -project "$PROJECT" \
             -scheme "$SCHEME" \
-            -configuration Release \
+            -configuration Debug \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
             -only-testing:ItoTests \
             -resultBundlePath TestResults.xcresult \
             -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            DEVELOPMENT_TEAM= \
             COMPILER_INDEX_STORE_ENABLE=NO \
-            ENABLE_TESTABILITY=YES \
             | tee test.log
 
       - name: Build unsigned IPA
