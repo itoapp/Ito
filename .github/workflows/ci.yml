@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'release/**'
+      - 'hotfix/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: Ito.xcodeproj
+  SCHEME: Ito
+
+jobs:
+  build-and-test:
+    name: Build and unit test
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Ito
+        uses: actions/checkout@v7
+        with:
+          path: Ito
+          persist-credentials: false
+
+      # Ito.xcodeproj currently references ../ito-runner as a local Swift package.
+      # Keep the repositories side by side until the Xcode project is changed to a
+      # pinned remote package dependency.
+      - name: Read pinned ito-runner revision
+        id: runner
+        shell: bash
+        run: echo "ref=$(tr -d '[:space:]' < Ito/.github/ito-runner.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout ito-runner
+        uses: actions/checkout@v7
+        with:
+          repository: itoapp/ito-runner
+          ref: ${{ steps.runner.outputs.ref }}
+          path: ito-runner
+          persist-credentials: false
+
+      - name: Show build environment
+        run: |
+          set -euxo pipefail
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Resolve Swift packages
+        working-directory: Ito
+        run: |
+          set -o pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -skipPackagePluginValidation \
+            | tee resolve-packages.log
+
+      - name: Build for iOS Simulator
+        working-directory: Ito
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee build.log
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        working-directory: Ito
+        shell: bash
+        run: echo "id=$(python3 scripts/select_simulator.py)" >> "$GITHUB_OUTPUT"
+
+      - name: Run unit tests
+        working-directory: Ito
+        run: |
+          set -o pipefail
+          rm -rf TestResults.xcresult
+          xcodebuild test \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.id }}' \
+            -only-testing:ItoTests \
+            -resultBundlePath TestResults.xcresult \
+            -skipPackagePluginValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | tee test.log
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-diagnostics-${{ github.run_id }}
+          path: |
+            Ito/*.log
+            Ito/TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
