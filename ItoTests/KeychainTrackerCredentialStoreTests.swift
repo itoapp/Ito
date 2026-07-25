@@ -3,6 +3,7 @@ import Security
 import Testing
 @testable import Ito
 
+@Suite(.serialized)
 struct KeychainTrackerCredentialStoreTests {
     @Test func systemAddQueryUsesOnlyExactDeviceLocalGenericPasswordAttributes() throws {
         let data = Data("fixture-token".utf8)
@@ -27,6 +28,9 @@ struct KeychainTrackerCredentialStoreTests {
     @Test func realKeychainCRUDUsesOneExactGenericPasswordItem() async throws {
         let service = "moe.itoapp.ito.tests.\(UUID().uuidString)"
         let providerID = "anilist-\(UUID().uuidString)"
+        
+        deleteItem(service: service, account: providerID)
+        
         let store = KeychainTrackerCredentialStore(service: service)
         defer { deleteItem(service: service, account: providerID) }
 
