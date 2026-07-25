@@ -127,8 +127,6 @@ jobs:
             -only-testing:ItoTests \
             -resultBundlePath TestResults.xcresult \
             -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM= \
             COMPILER_INDEX_STORE_ENABLE=NO \
             ENABLE_TESTABILITY=YES \
