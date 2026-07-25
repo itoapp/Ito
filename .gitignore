@@ -7,7 +7,7 @@ DerivedData/
 # ai tooling
 .omx
 
-scripts
+
 projects
 
 ## Various settings
@@ -36,7 +36,6 @@ playground.xcworkspace
 
 # Swift Package Manager
 .swiftpm/
-Package.resolved
 
 # CocoaPods
 Pods/
