@@ -11,3 +11,4 @@ This revision replaces the original pure trunk-based release policy with:
 - automatic retention of the newest 14 nightly releases;
 - numeric iOS `MARKETING_VERSION` separated from prerelease artifact labels;
 - corrected `actions/upload-artifact` usage.
+- retained iOS 15.4 support by pinning a custom WasmKit fork.
