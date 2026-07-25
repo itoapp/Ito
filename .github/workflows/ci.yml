@@ -89,8 +89,6 @@ jobs:
             -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM= \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | tee build.log
@@ -114,8 +112,6 @@ jobs:
             -only-testing:ItoTests \
             -resultBundlePath TestResults.xcresult \
             -skipPackagePluginValidation \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM= \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | tee test.log
