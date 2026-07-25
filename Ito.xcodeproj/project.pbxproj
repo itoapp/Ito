@@ -648,8 +648,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/groue/GRDB.swift";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.0.0;
+				kind = revision;
+				revision = b83108d10f42680d78f23fe4d4d80fc88dab3212;
 			};
 		};
 		3AC8256E2F5FD9300054AD29 /* XCRemoteSwiftPackageReference "Nuke" */ = {
