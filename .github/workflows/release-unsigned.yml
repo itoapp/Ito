@@ -133,7 +133,7 @@ jobs:
           path: WasmKit
           persist-credentials: false
 
-- name: Show build environment
+      - name: Show build environment
         run: |
           set -euxo pipefail
           xcodebuild -version
