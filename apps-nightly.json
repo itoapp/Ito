@@ -1,0 +1,45 @@
+{
+  "name": "Ito Nightly",
+  "identifier": "moe.itoapp.source.nightly",
+  "subtitle": "Automated nightly builds from main",
+  "description": "Ito IPAs built without an App Store signing identity. AltStore and SideStore re-sign downloads with the user's Apple account.",
+  "website": "https://github.com/itoapp/Ito",
+  "sourceURL": "https://itoapp.github.io/Ito/apps-nightly.json",
+  "iconURL": "https://itoapp.github.io/Ito/icon.png",
+  "tintColor": "6C5CE7",
+  "apps": [
+    {
+      "name": "Ito Nightly",
+      "bundleIdentifier": "moe.itoapp.ito",
+      "developerName": "Ito contributors",
+      "subtitle": "Unstable nightly channel",
+      "localizedDescription": "An unsigned Ito build for installation through AltStore, SideStore, TrollStore-compatible setups, or jailbreak tooling.",
+      "iconURL": "https://itoapp.github.io/Ito/icon.png",
+      "tintColor": "6C5CE7",
+      "category": "entertainment",
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {}
+      },
+      "versions": [
+        {
+          "version": "1.0.0-nightly.20260725.8",
+          "buildVersion": "8",
+          "date": "2026-07-25T23:51:54Z",
+          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260725-8/Ito-1.0.0-nightly.20260725.8-unsigned.ipa",
+          "size": 9083498,
+          "localizedDescription": "Automated unsigned nightly from main at 4f787dc. This build may be unstable.",
+          "minOSVersion": "15.4"
+        }
+      ],
+      "version": "1.0.0-nightly.20260725.8",
+      "buildVersion": "8",
+      "date": "2026-07-25T23:51:54Z",
+      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260725-8/Ito-1.0.0-nightly.20260725.8-unsigned.ipa",
+      "size": 9083498,
+      "minOSVersion": "15.4",
+      "versionDescription": "Automated unsigned nightly from main at 4f787dc. This build may be unstable."
+    }
+  ],
+  "news": []
+}
