@@ -50,6 +50,7 @@ public actor DiscoverService {
           Media(id: $id) {
             id
             title { english romaji native }
+            synonyms
             coverImage { large extraLarge }
             bannerImage
             format status
@@ -64,6 +65,7 @@ public actor DiscoverService {
                 mediaRecommendation {
                   id
                   title { english romaji native }
+                  synonyms
                   coverImage { large extraLarge }
                   bannerImage
                   format status
@@ -114,6 +116,7 @@ public actor DiscoverService {
                   isAdult: $isAdult) {
               id
               title { english romaji native }
+              synonyms
               coverImage { large extraLarge }
               bannerImage
               format status
@@ -172,6 +175,7 @@ public actor DiscoverService {
         let romaji = titleObj?["romaji"] as? String
         let native = titleObj?["native"] as? String
         let title = english ?? romaji ?? native ?? "Unknown"
+        let synonyms = dict["synonyms"] as? [String] ?? []
 
         let coverObj = dict["coverImage"] as? [String: String]
         let cover = coverObj?["extraLarge"] ?? coverObj?["large"]
@@ -192,7 +196,10 @@ public actor DiscoverService {
         return DiscoverMedia(
             id: id,
             title: title,
+            titleEnglish: english,
             titleRomaji: romaji,
+            titleNative: native,
+            synonyms: synonyms,
             coverImage: cover,
             bannerImage: dict["bannerImage"] as? String,
             format: dict["format"] as? String,

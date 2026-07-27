@@ -2,8 +2,11 @@ import Foundation
 
 public struct DiscoverMedia: Identifiable, Codable, Hashable, Sendable {
     public let id: Int
-    public let title: String
-    public let titleRomaji: String?
+    public nonisolated let title: String
+    public nonisolated let titleEnglish: String?
+    public nonisolated let titleRomaji: String?
+    public nonisolated let titleNative: String?
+    public nonisolated let synonyms: [String]
     public let coverImage: String?
     public let bannerImage: String?
     public let format: String?
@@ -17,7 +20,7 @@ public struct DiscoverMedia: Identifiable, Codable, Hashable, Sendable {
     public let season: String?
     public let seasonYear: Int?
     public let type: String
-    public let recommendations: [DiscoverMedia]?
+    public nonisolated let recommendations: [DiscoverMedia]?
 }
 
 public struct DiscoverTag: Identifiable, Codable, Hashable, Sendable {
