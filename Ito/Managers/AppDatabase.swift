@@ -114,6 +114,37 @@ public final class AppDatabase: Sendable {
             }
         }
 
+        // MARK: - v5: Source Mapping
+        migrator.registerMigration("v5") { db in
+            try db.create(table: "sourceMapping") { t in
+                t.column("canonicalProvider", .text).notNull()
+                t.column("canonicalMediaId", .text).notNull()
+                t.column("mediaType", .text).notNull()
+                t.column("pluginId", .text).notNull()
+                t.column("pluginMediaKey", .text).notNull()
+
+                t.column("decision", .text).notNull()
+                t.column("matchMethod", .text).notNull()
+                t.column("confidence", .double).notNull()
+                t.column("titleSnapshot", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+
+                t.column("coverURLSnapshot", .text)
+                t.column("encodedPayload", .blob)
+                t.column("payloadVersion", .integer)
+                t.column("pluginVersion", .text)
+                t.column("lastVerifiedAt", .datetime)
+
+                t.primaryKey(["canonicalProvider", "canonicalMediaId", "mediaType", "pluginId", "pluginMediaKey"])
+
+                t.check(sql: "mediaType IN ('manga', 'anime')")
+            }
+
+            try db.create(index: "idx_sourceMapping_canonical", on: "sourceMapping", columns: ["canonicalProvider", "canonicalMediaId", "mediaType", "decision"])
+            try db.create(index: "idx_sourceMapping_plugin", on: "sourceMapping", columns: ["pluginId", "pluginMediaKey"])
+        }
+
         return migrator
     }
 }
