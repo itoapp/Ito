@@ -4,6 +4,19 @@ import WebKit
 import ito_runner
 
 actor AppNetModule: NetModule {
+    private let urlSession: URLSession
+
+    init() {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        self.urlSession = URLSession(configuration: config)
+    }
+    deinit {
+        urlSession.invalidateAndCancel()
+    }
+
+
     func fetch(request: NetRequest) async throws -> NetResponse {
         return try await fetchInternal(request: request, isRetry: false)
     }
@@ -60,7 +73,7 @@ actor AppNetModule: NetModule {
             urlRequest.httpBody = Data(body)
         }
 
-        let session = URLSession.shared
+        let session = self.urlSession
 
         if isRetry {
             AppLogger.network.debug("[AppNetModule] --- RETRY REQUEST INFO ---")
