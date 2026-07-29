@@ -15,7 +15,7 @@ private struct DetailNavTitleKey: PreferenceKey {
 struct DiscoverDetailView: View {
     @State var media: DiscoverMedia
 
-    @StateObject private var pluginManager = PluginManager.shared
+    @EnvironmentObject private var pluginManager: PluginManager
     @State private var isDescriptionExpanded = false
     @State private var showNavTitle = false
 
@@ -305,7 +305,7 @@ struct DiscoverDetailView: View {
 
         Task {
             do {
-                let runner = try await PluginManager.shared.getRunner(for: plugin.id)
+                let runner = try await pluginManager.getRunner(for: plugin.id)
                 let searchTitle = media.titleRomaji ?? media.title
                 let pluginId = plugin.url.deletingPathExtension().lastPathComponent
 

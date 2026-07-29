@@ -10,10 +10,13 @@ public class BrowseViewModel: ObservableObject {
     @Published public var pendingDeleteOffsets: IndexSet?
     @Published public var isInstallingUpdate: String?
 
-    public let pluginManager = PluginManager.shared
-    public let repoManager = RepoManager.shared
+    public let pluginManager: PluginManager
+    public let repoManager: RepoManager
 
-    public init() {}
+    public init(repoManager: RepoManager, pluginManager: PluginManager) {
+        self.repoManager = repoManager
+        self.pluginManager = pluginManager
+    }
 
     public var sortedPlugins: [InstalledPlugin] {
         pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }

@@ -1,7 +1,6 @@
 import OSLog
 import SwiftUI
 import Combine
-import GRDB
 import ito_runner
 
 private struct NavTitleVisibilityKey: PreferenceKey {
@@ -95,27 +94,6 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
             self.isLoaded = true
             self.errorMessage = nil
 
-            // Advance baseline and clear badge if the item is in the library
-            let isSaved = LibraryManager.shared.isSaved(id: media.key)
-            if isSaved {
-                let count = updated.chapterList?.count ?? 0
-                let currentMediaKey = media.key
-                Task {
-                    do {
-                        try await AppDatabase.shared.dbPool.write { db in
-                            if var dbItem = try LibraryItem.fetchOne(db, key: currentMediaKey) {
-                                dbItem.knownChapterCount = count
-                                try dbItem.update(db)
-                            }
-                        }
-                    } catch {
-                        AppLogger.ui.error("Failed to update knownChapterCount on appear: \(error)")
-                    }
-                }
-                Task { @MainActor in
-                    UpdateManager.shared.clearBadge(for: currentMediaKey)
-                }
-            }
         } catch {
             await MainActor.run {
                 SnackBarManager.shared.showError(error, title: "Failed to load details")
@@ -150,7 +128,10 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
         isRelinkSearching = false
     }
 
-    public func performRelink(with selectedMedia: M) async {
+    public func performRelink(
+        with selectedMedia: M,
+        remapper: LibrarySourceRemapper
+    ) async {
         let oldKey = media.key
         let newKey = selectedMedia.key
 
@@ -166,46 +147,15 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
             let hydratedTitle = hydrated.title
             let hydratedCover = hydrated.cover
 
-            // 3. Update the database
-            try await AppDatabase.shared.dbPool.write { db in
-                // Find the existing item under either ID format
-                var existingItemId: String?
-                var existingItem: LibraryItem?
-
-                for id in possibleOldIds {
-                    if let item = try LibraryItem.fetchOne(db, key: id) {
-                        existingItemId = id
-                        existingItem = item
-                        break
-                    }
-                }
-
-                guard let oldItemId = existingItemId, let item = existingItem else { return }
-
-                try LibraryItem.deleteOne(db, key: oldItemId)
-
-                try db.execute(
-                    sql: "UPDATE itemCategoryLink SET itemId = ? WHERE itemId = ?",
-                    arguments: [newItemId, oldItemId]
-                )
-
-                try db.execute(
-                    sql: "UPDATE readingHistory SET libraryItemId = ?, mediaKey = ? WHERE libraryItemId = ?",
-                    arguments: [newItemId, newItemId, oldItemId]
-                )
-
-                let newItem = LibraryItem(
-                    id: newItemId,
-                    title: hydratedTitle,
-                    coverUrl: hydratedCover,
-                    pluginId: pluginId,
-                    isAnime: item.isAnime,
-                    pluginType: item.pluginType,
-                    rawPayload: newPayload,
-                    anilistId: item.anilistId
-                )
-                try newItem.insert(db)
-            }
+            // 3. Atomically retarget the library row and every scoped durable state table.
+            _ = try await remapper.relink(
+                pluginId: pluginId,
+                possibleSourceItemIds: possibleOldIds,
+                destinationItemId: newItemId,
+                title: hydratedTitle,
+                coverUrl: hydratedCover,
+                rawPayload: newPayload
+            )
 
             // 4. Update the view model
             self.media = hydrated
@@ -219,6 +169,7 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
 
     public func displayedChapters(progressManager: ReadProgressManager) -> [M.Chapter] {
         guard let chapters = media.chapterList else { return [] }
+        let identity = MediaIdentity(pluginId: pluginId, itemId: media.key)
 
         // Filter
         let filtered: [M.Chapter]
@@ -226,9 +177,13 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
         case .all:
             filtered = chapters
         case .unread:
-            filtered = chapters.filter { !progressManager.isRead(mangaId: media.key, chapterId: $0.key, chapterNum: $0.chapterNumber) }
+            filtered = chapters.filter {
+                !progressManager.isRead(media: identity, chapterId: $0.key, chapterNum: $0.chapterNumber)
+            }
         case .read:
-            filtered = chapters.filter { progressManager.isRead(mangaId: media.key, chapterId: $0.key, chapterNum: $0.chapterNumber) }
+            filtered = chapters.filter {
+                progressManager.isRead(media: identity, chapterId: $0.key, chapterNum: $0.chapterNumber)
+            }
         }
 
         // Sort
@@ -246,9 +201,10 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
 
     public func resumeChapter(progressManager: ReadProgressManager) -> M.Chapter? {
         guard let chapters = media.chapterList, !chapters.isEmpty else { return nil }
+        let identity = MediaIdentity(pluginId: pluginId, itemId: media.key)
         let ascending = chapters.sorted { ($0.chapterNumber ?? Float.infinity) < ($1.chapterNumber ?? Float.infinity) }
         if let firstUnread = ascending.first(where: {
-            !progressManager.isRead(mangaId: media.key, chapterId: $0.key, chapterNum: $0.chapterNumber)
+            !progressManager.isRead(media: identity, chapterId: $0.key, chapterNum: $0.chapterNumber)
         }) {
             return firstUnread
         }
@@ -257,15 +213,15 @@ public final class MediaDetailViewModel<M: MediaDisplayable>: ObservableObject {
 
     /// Returns `true` if a new item was saved (used by the view to decide sheet vs snackbar).
     @discardableResult
-    public func toggleSave() -> Bool {
-        let currentlySaved = LibraryManager.shared.isSaved(id: media.key)
+    public func toggleSave(libraryManager: LibraryManager) -> Bool {
+        let currentlySaved = libraryManager.isSaved(id: media.key)
 
         if let manga = media as? Manga {
-            LibraryManager.shared.toggleSaveManga(manga: manga, pluginId: pluginId)
+            libraryManager.toggleSaveManga(manga: manga, pluginId: pluginId)
         } else if let anime = media as? Anime {
-            LibraryManager.shared.toggleSaveAnime(anime: anime, pluginId: pluginId)
+            libraryManager.toggleSaveAnime(anime: anime, pluginId: pluginId)
         } else if let novel = media as? Novel {
-            LibraryManager.shared.toggleSaveNovel(novel: novel, pluginId: pluginId)
+            libraryManager.toggleSaveNovel(novel: novel, pluginId: pluginId)
         }
 
         return !currentlySaved
@@ -277,9 +233,13 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
     @StateObject var viewModel: MediaDetailViewModel<M>
 
     @EnvironmentObject var progressManager: ReadProgressManager
-    @ObservedObject var libraryManager = LibraryManager.shared
-
-    @AppStorage(UserDefaultsKeys.alwaysShowCategoryPicker) private var alwaysShowCategoryPicker: Bool = false
+    @EnvironmentObject var trackerManager: TrackerManager
+    @EnvironmentObject var updateManager: UpdateManager
+    @EnvironmentObject var settingsStore: AppSettingsStore
+    @EnvironmentObject var libraryManager: LibraryManager
+    @EnvironmentObject var discordRPCManager: DiscordRPCManager
+    @EnvironmentObject var librarySourceRemapper: LibrarySourceRemapper
+    @EnvironmentObject var pluginManager: PluginManager
 
     @State private var showTrackerSearch = false
     @State private var showNavTitle = false
@@ -297,7 +257,10 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
     }
 
     private var isSaved: Bool { libraryManager.isSaved(id: viewModel.media.key) }
-    private var isTracked: Bool { TrackerManager.shared.trackerMappings[viewModel.media.key]?.isEmpty == false }
+    private var mediaIdentity: MediaIdentity {
+        MediaIdentity(pluginId: viewModel.pluginId, itemId: viewModel.media.key)
+    }
+    private var isTracked: Bool { trackerManager.hasLinks(for: mediaIdentity) }
 
     public var body: some View {
         ZStack {
@@ -344,17 +307,17 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
                     cleanDescription: viewModel.media.description?.strippingHTML(),
                     themeSecondary: themeSecondary,
                     onSaveToggle: {
-                        let didSaveNew = viewModel.toggleSave()
+                        let didSaveNew = viewModel.toggleSave(libraryManager: libraryManager)
                         if didSaveNew {
                             let hasCustomCategories = libraryManager.categories.filter({ !$0.isSystemCategory }).count > 0
-                            if alwaysShowCategoryPicker && hasCustomCategories {
+                            if settingsStore.alwaysShowCategoryPicker && hasCustomCategories {
                                 showCategoryAssignment = true
                             } else {
                                 SnackBarManager.shared.showSaved(itemId: viewModel.media.key)
                             }
                         }
                     },
-                    onTrackToggle: TrackerManager.shared.authenticatedProviders.isEmpty ? nil : { showTrackerSearch = true }
+                    onTrackToggle: trackerManager.authenticatedProviders.isEmpty ? nil : { showTrackerSearch = true }
                 )
 
                 chapterSection
@@ -374,9 +337,18 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
             }
         }
         .sheet(isPresented: $showTrackerSearch) {
-            TrackerSheetOrchestrator(localId: viewModel.media.key, title: viewModel.media.title, isAnime: viewModel.media is Anime) { _, progress, _ in
-                if let prog = progress, UserDefaults.standard.object(forKey: "Ito.AutoSyncTrackersToLocal") as? Bool ?? true {
-                    ReadProgressManager.shared.markReadUpTo(mangaId: viewModel.media.key, maxChapterNum: Float(prog))
+            TrackerSheetOrchestrator(
+                mediaIdentity: mediaIdentity,
+                title: viewModel.media.title,
+                isAnime: viewModel.media is Anime
+            ) { _, progress, _ in
+                if let prog = progress, settingsStore.autoSyncTrackersToLocal {
+                    Task {
+                        try await progressManager.markReadUpTo(
+                            media: mediaIdentity,
+                            maxChapterNum: Float(prog)
+                        )
+                    }
                 }
             }
         }
@@ -405,14 +377,25 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
                 self.themeSecondary = Color(hex: theme.secondaryHex)
             }
             await viewModel.loadDetails()
+            if libraryManager.isSaved(id: viewModel.media.key) {
+                do {
+                    try await updateManager.advanceBaseline(
+                        for: viewModel.media.key,
+                        media: mediaIdentity,
+                        knownChapterCount: viewModel.media.chapterList?.count ?? 0
+                    )
+                } catch {
+                    AppLogger.ui.error("Failed to advance update baseline: \(error)")
+                }
+            }
         }
         .onAppear {
-            let anilistId = TrackerManager.shared.getMediaId(for: viewModel.media.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let isAnime = viewModel.media is Anime
             let url = anilistId.flatMap { "https://anilist.co/\(isAnime ? "anime" : "manga")/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[viewModel.pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[viewModel.pluginId]?.info.name ?? "Unknown Plugin"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: viewModel.media.title,
                 state: "Viewing Details",
                 activityType: 3,
@@ -423,7 +406,7 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
             )
         }
         .onDisappear {
-            DiscordRPCManager.shared.clearActivity()
+            discordRPCManager.clearActivity()
         }
         .refreshable { await viewModel.loadDetails(force: true) }
         .onChange(of: viewModel.selectedGroup) { _ in
@@ -459,7 +442,7 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
         VStack(alignment: .leading, spacing: 12) {
 
             if let target = viewModel.resumeChapter(progressManager: progressManager) {
-                let isResume = progressManager.getLastRead(mangaId: viewModel.media.key) != nil
+                let isResume = progressManager.lastReadChapter(for: mediaIdentity) != nil
                 Button {
                     readingChapter = IdentifiableChapter(target)
                 } label: {
@@ -566,7 +549,11 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
     private func chapterList(chapters: [M.Chapter]) -> some View {
         LazyVStack(spacing: 0) {
             ForEach(chapters, id: \.key) { chapter in
-                let isRead = progressManager.isRead(mangaId: viewModel.media.key, chapterId: chapter.key, chapterNum: chapter.chapterNumber)
+                let isRead = progressManager.isRead(
+                    media: mediaIdentity,
+                    chapterId: chapter.key,
+                    chapterNum: chapter.chapterNumber
+                )
                 ChapterRowView(chapter: chapter, isRead: isRead) {
                     readingChapter = IdentifiableChapter(chapter)
                 }
@@ -639,7 +626,10 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
                     List(viewModel.relinkSearchResults, id: \.key) { result in
                         Button {
                             Task {
-                                await viewModel.performRelink(with: result)
+                                await viewModel.performRelink(
+                                    with: result,
+                                    remapper: librarySourceRemapper
+                                )
                                 if viewModel.didRelink {
                                     showRelinkSearch = false
                                 }

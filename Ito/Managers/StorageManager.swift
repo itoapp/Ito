@@ -3,32 +3,42 @@ import Foundation
 import Combine
 import Nuke
 
+@MainActor
 public class StorageManager: ObservableObject {
-    public static let shared = StorageManager()
-
-    private let cacheLimitKey = "Ito.DiskCacheLimitGB"
-    private let defaultLimitGB: Double = 10.0
-
-    @Published public var diskCacheLimitGB: Double {
-        didSet {
-            UserDefaults.standard.set(diskCacheLimitGB, forKey: cacheLimitKey)
-            updateCacheLimit()
-        }
-    }
+    @Published public private(set) var diskCacheLimitGB = AppPreferenceCatalog.diskCacheLimitGB.defaultValue
 
     @Published public private(set) var currentCacheSizeBytes: Int = 0
 
     // Maintain a reference to our custom data cache
     private var dataCache: DataCache?
+    private var settingsCancellable: AnyCancellable?
+    private let pluginManager: PluginManager
+    private var settingsStore: AppSettingsStore?
 
-    private init() {
-        if UserDefaults.standard.object(forKey: cacheLimitKey) != nil {
-            self.diskCacheLimitGB = UserDefaults.standard.double(forKey: cacheLimitKey)
-        } else {
-            self.diskCacheLimitGB = defaultLimitGB
-        }
-
+    public init(pluginManager: PluginManager) {
+        self.pluginManager = pluginManager
         setupNukePipeline()
+        refreshCacheSize()
+    }
+
+    func configure(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
+        diskCacheLimitGB = settingsStore.diskCacheLimitGB
+        updateCacheLimit()
+        settingsCancellable = settingsStore.$diskCacheLimitGB
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.diskCacheLimitGB = value
+                self?.updateCacheLimit()
+            }
+    }
+
+    public func reload() throws {
+        guard let settingsStore else {
+            throw StorageManagerError.settingsUnavailable
+        }
+        diskCacheLimitGB = settingsStore.diskCacheLimitGB
+        updateCacheLimit()
         refreshCacheSize()
     }
 
@@ -46,7 +56,10 @@ public class StorageManager: ObservableObject {
                 let config = URLSessionConfiguration.default
                 config.urlCache = nil
                 config.httpAdditionalHeaders = ["User-Agent": CloudflareManager.defaultUserAgent]
-                $0.dataLoader = PluginDataLoader(configuration: config)
+                $0.dataLoader = PluginDataLoader(
+                    configuration: config,
+                    pluginManager: pluginManager
+                )
             }
         } catch {
             AppLogger.general.error("Failed to initialize Nuke DataCache: \(error)")
@@ -84,4 +97,8 @@ public class StorageManager: ObservableObject {
         formatter.countStyle = .file
         return formatter.string(fromByteCount: Int64(bytes))
     }
+}
+
+public enum StorageManagerError: Error, Equatable {
+    case settingsUnavailable
 }

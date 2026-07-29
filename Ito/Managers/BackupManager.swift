@@ -4,11 +4,6 @@ import GRDB
 import OSLog
 import SystemConfiguration
 
-nonisolated public enum BackupRestoreMode: Sendable, Equatable {
-    case wipe
-    case merge
-}
-
 nonisolated enum BackupMergeError: Error, Equatable {
     case ambiguousLocalIdentity(
         pluginId: String,
@@ -404,19 +399,40 @@ nonisolated struct BackupMergeOperation: Sendable {
 
 @MainActor
 public class BackupManager: ObservableObject {
-    public static let shared = BackupManager()
-
     @Published public private(set) var isExporting: Bool = false
     @Published public private(set) var isRestoring: Bool = false
-    @Published public private(set) var lastMigrationReport: MigrationReport?
+    @Published public private(set) var lastRestoreReport: BackupRestoreReport?
+    @Published public private(set) var committedRefreshPendingOperationId: String?
 
-    private let registeredImporters: [BackupImporter] = [
-        AidokuImporter(),
-        PaperbackImporter(),
-        ItoNativeImporter()
-    ]
+    private let dbPool: DatabasePool
+    private let sourceDatabaseURL: URL
+    private let exportReadiness: BackupExportOperation.ReadinessGate
+    private let restoreRefresher: BackupRestoreRefresher
+    private let onAllReportsAcknowledged: @MainActor @Sendable () async throws -> Void
+    private var acknowledgmentInFlight = false
+    private var registeredImporters: [BackupImporter] = [ItoNativeImporter()]
 
-    private init() {}
+    public init(
+        dbPool: DatabasePool,
+        sourceDatabaseURL: URL,
+        exportReadiness: @escaping BackupExportOperation.ReadinessGate,
+        restoreRefresher: BackupRestoreRefresher,
+        onAllReportsAcknowledged: @escaping @MainActor @Sendable () async throws -> Void = {}
+    ) {
+        self.dbPool = dbPool
+        self.sourceDatabaseURL = sourceDatabaseURL
+        self.exportReadiness = exportReadiness
+        self.restoreRefresher = restoreRefresher
+        self.onAllReportsAcknowledged = onAllReportsAcknowledged
+    }
+
+    func configure(pluginResolver: PluginResolver) {
+        registeredImporters = [
+            AidokuImporter(resolver: pluginResolver),
+            PaperbackImporter(resolver: pluginResolver),
+            ItoNativeImporter()
+        ]
+    }
 
     private func parseBackup(url: URL) async throws -> ImportedBackup {
         let isAccessing = url.startAccessingSecurityScopedResource()
@@ -444,39 +460,78 @@ public class BackupManager: ObservableObject {
             try fileManager.removeItem(at: backupFileURL)
         }
 
-        // GRDB native backup
-        let dbPool = AppDatabase.shared.dbPool
-        try await Task.detached {
-            let backupDbPool = try DatabasePool(path: backupFileURL.path)
-            try dbPool.backup(to: backupDbPool)
-        }.value
+        try await BackupExportOperation(
+            dbPool: dbPool,
+            sourceDatabaseURL: sourceDatabaseURL,
+            readinessGate: exportReadiness
+        ).export(to: backupFileURL)
 
         return backupFileURL
     }
 
     public func analyzeMerge(from url: URL) async throws -> [MergeConflict] {
         let importedBackup = try await parseBackup(url: url)
-        return try await BackupMergeOperation(dbPool: AppDatabase.shared.dbPool)
+        return try await BackupMergeOperation(dbPool: dbPool)
             .analyze(importedBackup)
     }
 
-    public func restoreBackup(from url: URL, mode: BackupRestoreMode, resolvedConflicts: [String: ConflictResolution] = [:]) async throws -> MigrationReport? {
+    public func restoreBackup(
+        from url: URL,
+        mode: BackupRestoreMode,
+        resolvedConflicts: [String: ConflictResolution] = [:]
+    ) async throws -> BackupRestoreReport {
         isRestoring = true
         defer { isRestoring = false }
 
         let importedBackup = try await parseBackup(url: url)
-        let result = try await BackupMergeOperation(dbPool: AppDatabase.shared.dbPool).restore(
+        let committedReport = try await ComponentAwareBackupRestoreOperation(
+            dbPool: dbPool
+        ).restore(
             importedBackup,
             mode: mode,
             resolvedConflicts: resolvedConflicts
         )
-        AppLogger.database.info(
-            "Backup restore: items=\(result.insertedItemCount) historyInserted=\(result.insertedHistoryCount) historyUnassociated=\(result.skippedUnassociatedOrAmbiguousHistoryCount) historyPolicy=\(result.skippedByPolicyHistoryCount) historyDuplicate=\(result.skippedDuplicateHistoryCount)"
-        )
+        do {
+            let report = try await restoreRefresher.refreshCommittedRestore(
+                operationId: committedReport.operationId
+            )
+            committedRefreshPendingOperationId = nil
+            lastRestoreReport = try await restoreRefresher.loadReadyToPresentReport()
+            return report
+        } catch {
+            committedRefreshPendingOperationId = committedReport.operationId
+            lastRestoreReport = nil
+            throw BackupRestoreError.restoreCommittedRefreshPending(
+                operationId: committedReport.operationId
+            )
+        }
+    }
 
-        // Surface migration report
-        let report = result.retargetedMigrationReport(importedBackup.migrationReport)
-        self.lastMigrationReport = report
-        return report
+    public func retryCommittedRefresh() async throws {
+        guard let operationId = committedRefreshPendingOperationId else { return }
+        _ = try await restoreRefresher.refreshCommittedRestore(operationId: operationId)
+        committedRefreshPendingOperationId = nil
+        lastRestoreReport = try await restoreRefresher.loadReadyToPresentReport()
+    }
+
+    public func loadReadyReportForPresentation() async throws {
+        lastRestoreReport = try await restoreRefresher.loadReadyToPresentReport()
+    }
+
+    @discardableResult
+    public func acknowledgeRestoreReport() async throws -> Bool {
+        guard !acknowledgmentInFlight, let report = lastRestoreReport else {
+            return false
+        }
+        acknowledgmentInFlight = true
+        defer { acknowledgmentInFlight = false }
+        let acknowledged = try await restoreRefresher.acknowledgeReadyToPresent(
+            operationId: report.operationId
+        )
+        lastRestoreReport = try await restoreRefresher.loadReadyToPresentReport()
+        if acknowledged, lastRestoreReport == nil {
+            try await onAllReportsAcknowledged()
+        }
+        return acknowledged
     }
 }

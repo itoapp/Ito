@@ -11,24 +11,6 @@ public enum LibraryLayoutStyle: Int {
     case sectioned = 1
 }
 
-public enum UserDefaultsKeys {
-    public static let legacyLibraryItems = "ito_library_items"
-    public static let backupLibraryItems = "ito_library_items_backup"
-    public static let layoutStyle = "ito_library_layout_style"
-    public static let alwaysShowCategoryPicker = "ito_always_show_category_picker"
-
-    // Update & Notification Settings
-    public static let bgUpdatesEnabled = "ito_bg_updates_enabled"
-    public static let updateInterval = "ito_update_interval"
-    public static let skipCompleted = "ito_skip_completed"
-    public static let updateNotifications = "ito_update_notifications"
-    public static let wifiOnlyUpdates = "ito_wifi_only_updates"
-
-    // Discord RPC Settings
-    public static let discordRpcEnabled = "ito_discord_rpc_enabled"
-    public static let discordRpcUrl = "ito_discord_rpc_url"
-}
-
 // MARK: - PHASE 1: Models
 
 public struct LibraryCategory: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {

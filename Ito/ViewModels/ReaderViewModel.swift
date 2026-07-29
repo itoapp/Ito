@@ -8,41 +8,70 @@ public final class ReaderViewModel<M: MediaDisplayable, C: ChapterDisplayable>: 
     @Published public var currentChapter: C
 
     public let pluginId: String
-    private let progressManager = ReadProgressManager.shared
+    private let progressManager: ReadProgressManager
+    private let trackerManager: TrackerManager
+    private let historyManager: HistoryManager
 
     nonisolated deinit {}
 
-    public init(media: M, currentChapter: C, pluginId: String) {
+    public init(
+        media: M,
+        currentChapter: C,
+        pluginId: String,
+        progressManager: ReadProgressManager,
+        trackerManager: TrackerManager,
+        historyManager: HistoryManager
+    ) {
         self.media = media
         self.currentChapter = currentChapter
         self.pluginId = pluginId
+        self.progressManager = progressManager
+        self.trackerManager = trackerManager
+        self.historyManager = historyManager
     }
 
     public func markChapterRead() {
         let chapterTitleStr = currentChapter.title ?? currentChapter.key
 
         if let manga = media as? Manga {
-            HistoryManager.shared.addManga(manga, chapterKey: currentChapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
+            historyManager.addManga(
+                manga,
+                chapterKey: currentChapter.key,
+                chapterTitle: chapterTitleStr,
+                pluginId: pluginId
+            )
         } else if let anime = media as? Anime {
-            HistoryManager.shared.addAnime(anime, episodeKey: currentChapter.key, episodeTitle: chapterTitleStr, pluginId: pluginId)
+            historyManager.addAnime(
+                anime,
+                episodeKey: currentChapter.key,
+                episodeTitle: chapterTitleStr,
+                pluginId: pluginId
+            )
         } else if let novel = media as? Novel {
-            HistoryManager.shared.addNovel(novel, chapterKey: currentChapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
+            historyManager.addNovel(
+                novel,
+                chapterKey: currentChapter.key,
+                chapterTitle: chapterTitleStr,
+                pluginId: pluginId
+            )
         }
 
-        progressManager.markAsRead(
-            mangaId: media.key, chapterId: currentChapter.key, chapterNum: currentChapter.chapterNumber
-        )
-
         Task {
+            let identity = MediaIdentity(pluginId: pluginId, itemId: media.key)
+            try await progressManager.markAsRead(
+                media: identity,
+                chapterId: currentChapter.key,
+                chapterNum: currentChapter.chapterNumber
+            )
             if let chapterFloat = currentChapter.chapterNumber {
-                await TrackerManager.shared.updateProgress(localId: media.key, progress: Int(chapterFloat))
+                await trackerManager.updateProgress(media: identity, progress: Int(chapterFloat))
             } else {
                 let titleOrFallback = currentChapter.title ?? currentChapter.key
                 let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
                 if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
                     let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
                     if let chapNum = Int(numbersOnly) {
-                        await TrackerManager.shared.updateProgress(localId: media.key, progress: chapNum)
+                        await trackerManager.updateProgress(media: identity, progress: chapNum)
                     }
                 }
             }

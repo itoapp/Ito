@@ -1,13 +1,8 @@
 import SwiftUI
 import Combine
 
-public enum AppTheme: String, CaseIterable, Identifiable {
-    case system = "System"
-    case light = "Light"
-    case dark = "Dark"
-
-    public var id: String { self.rawValue }
-
+extension AppThemePreference: Identifiable {
+    public var id: String { rawValue }
     var colorScheme: ColorScheme? {
         switch self {
         case .system: return nil
@@ -18,11 +13,21 @@ public enum AppTheme: String, CaseIterable, Identifiable {
 }
 
 class AppearanceManager: ObservableObject {
-    public static let shared = AppearanceManager()
+    private let settingsStore: AppSettingsStore
+    private var cancellable: AnyCancellable?
 
-    @AppStorage("selectedTheme") var selectedTheme: AppTheme = .system {
-        willSet {
-            objectWillChange.send()
-        }
+    var selectedTheme: AppThemePreference {
+        settingsStore.appTheme
+    }
+
+    init(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
+        cancellable = settingsStore.$appTheme
+            .dropFirst()
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    func reload() {
+        objectWillChange.send()
     }
 }

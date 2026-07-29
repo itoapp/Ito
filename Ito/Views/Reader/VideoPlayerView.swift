@@ -9,6 +9,16 @@ struct VideoPlayerView: View {
     let anime: Anime
     let episode: Anime.Episode
 
+    @EnvironmentObject private var progressManager: ReadProgressManager
+    @EnvironmentObject private var trackerManager: TrackerManager
+    @EnvironmentObject private var discordRPCManager: DiscordRPCManager
+    @EnvironmentObject private var historyManager: HistoryManager
+    @EnvironmentObject private var pluginManager: PluginManager
+
+    private var mediaIdentity: MediaIdentity {
+        MediaIdentity(pluginId: pluginId, itemId: anime.key)
+    }
+
     @State private var videos: [Anime.Video] = []
     @State private var isLoaded = false
     @State private var errorMessage: String?
@@ -200,12 +210,12 @@ struct VideoPlayerView: View {
             await loadVideoStreams()
         }
         .onAppear {
-            let anilistId = TrackerManager.shared.getMediaId(for: anime.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let url = anilistId.flatMap { "https://anilist.co/anime/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
             let subGroup = episode.lang?.uppercased() ?? "Original"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: anime.title,
                 state: "Watching \(episode.title ?? "Episode \(episode.chapterNumber ?? 0)")",
                 activityType: 3,
@@ -216,12 +226,12 @@ struct VideoPlayerView: View {
             )
         }
         .onChange(of: episode.key) { _ in
-            let anilistId = TrackerManager.shared.getMediaId(for: anime.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let url = anilistId.flatMap { "https://anilist.co/anime/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
             let subGroup = episode.lang?.uppercased() ?? "Original"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: anime.title,
                 state: "Watching \(episode.title ?? "Episode \(episode.chapterNumber ?? 0)")",
                 activityType: 3,
@@ -232,7 +242,7 @@ struct VideoPlayerView: View {
             )
         }
         .onDisappear {
-            DiscordRPCManager.shared.clearActivity()
+            discordRPCManager.clearActivity()
             player?.pause()
         }
     }
@@ -242,7 +252,12 @@ struct VideoPlayerView: View {
 
         // Record history right away so it shows up even if it fails to load
         let episodeTitleStr = episode.title ?? episode.key
-        HistoryManager.shared.addAnime(anime, episodeKey: episode.key, episodeTitle: episodeTitleStr, pluginId: pluginId)
+        historyManager.addAnime(
+            anime,
+            episodeKey: episode.key,
+            episodeTitle: episodeTitleStr,
+            pluginId: pluginId
+        )
 
         do {
             AppLogger.ui.debug("🎬 [DEBUG] Fetching video list for episode: \(episode.key)")
@@ -378,20 +393,21 @@ struct VideoPlayerView: View {
                 hasTrackedProgress = true
 
                 // Mark as watched locally immediately
-                Task { @MainActor in
-                    ReadProgressManager.shared.markAsWatched(animeId: anime.key, episodeId: episode.key, episodeNum: episode.episode)
-                }
-
                 Task {
+                    try await progressManager.markAsWatched(
+                        media: mediaIdentity,
+                        episodeId: episode.key,
+                        episodeNum: episode.episode
+                    )
                     if let episodeFloat = episode.episode {
-                        await TrackerManager.shared.updateProgress(localId: anime.key, progress: Int(episodeFloat))
+                        await trackerManager.updateProgress(media: mediaIdentity, progress: Int(episodeFloat))
                     } else {
                         let titleOrFallback = episode.title ?? episode.key
                         let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
                         if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
                             let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
                             if let episodeNum = Int(numbersOnly) {
-                                await TrackerManager.shared.updateProgress(localId: anime.key, progress: episodeNum)
+                                await trackerManager.updateProgress(media: mediaIdentity, progress: episodeNum)
                             }
                         }
                     }

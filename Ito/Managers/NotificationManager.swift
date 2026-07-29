@@ -9,11 +9,21 @@ public class NotificationManager: ObservableObject {
     public static let shared = NotificationManager()
 
     @Published public private(set) var isAuthorized = false
+    private var settingsStore: AppSettingsStore?
+    private weak var updateManager: UpdateManager?
 
-    private init() {
+    public init() {
         Task {
             await checkStatus()
         }
+    }
+
+    func configure(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
+    }
+
+    func configure(updateManager: UpdateManager) {
+        self.updateManager = updateManager
     }
 
     public func requestPermission() async -> Bool {
@@ -41,8 +51,7 @@ public class NotificationManager: ObservableObject {
         guard !updatedItems.isEmpty else { return }
 
         // Check user settings for notifications
-        let showNotifications = UserDefaults.standard.object(forKey: UserDefaultsKeys.updateNotifications) as? Bool ?? true
-        guard showNotifications else { return }
+        guard settingsStore?.updateNotifications == true else { return }
 
         let center = UNUserNotificationCenter.current()
         let content = UNMutableNotificationContent()
@@ -64,7 +73,7 @@ public class NotificationManager: ObservableObject {
 
         // Use UIApplication to set badge if modifying outside of notifications too,
         // but here we just bundle it with the push notification response.
-        let totalUnread = UpdateManager.shared.newChapterCounts.values.reduce(0, +)
+        let totalUnread = updateManager?.totalBadgeCount ?? 0
         content.badge = NSNumber(value: totalUnread)
 
         let request = UNNotificationRequest(

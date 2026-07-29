@@ -3,7 +3,7 @@ import SwiftUI
 struct CategoryAssignmentSheet: View {
     let itemId: String
 
-    @StateObject private var libraryManager = LibraryManager.shared
+    @EnvironmentObject private var libraryManager: LibraryManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var showingAddSheet = false

@@ -7,7 +7,7 @@ import ito_runner
 
 @MainActor
 public class LibraryManager: ObservableObject, LibraryManaging {
-    public static let shared = LibraryManager()
+    public static let shared = LibraryManager(dbPool: AppDatabase.shared.dbPool)
 
     @Published public private(set) var categories: [LibraryCategory] = []
     @Published public private(set) var items: [LibraryItem] = []
@@ -20,50 +20,23 @@ public class LibraryManager: ObservableObject, LibraryManaging {
     private var linkObserver: DatabaseCancellable?
     private let dbPool: DatabasePool
 
-    private init() {
-        self.dbPool = AppDatabase.shared.dbPool
-        Task {
-            await migrateLegacyDataSafely()
-            startObservation()
-        }
+    public init(dbPool: DatabasePool) {
+        self.dbPool = dbPool
+        startObservation()
     }
 
-    // MARK: - Phase 2: The Bulletproof Migration
-    private func migrateLegacyDataSafely() async {
-        do {
-            let legacyKey = UserDefaultsKeys.legacyLibraryItems
-            let backupKey = UserDefaultsKeys.backupLibraryItems
-
-            try await dbPool.write { db in
-                // 1. The Guard: check if the "Uncategorized" category exists
-                if try LibraryCategory.filter(Column("isSystemCategory") == true).fetchCount(db) > 0 {
-                    return // Migration already happened!
-                }
-
-                // 2. The Atomic Transaction
-                let systemCategory = LibraryCategory(name: "Uncategorized", sortOrder: 0, isSystemCategory: true)
-                try systemCategory.insert(db)
-
-                // 3. Resilient Decoding
-                let defaults = UserDefaults.standard
-
-                if let data = defaults.data(forKey: legacyKey) {
-                    if let legacyItems = try? JSONDecoder().decode([LibraryItem].self, from: data) {
-                        for item in legacyItems {
-                            try item.insert(db) // Valid ones are saved
-                            let link = ItemCategoryLink(itemId: item.id, categoryId: systemCategory.id)
-                            try link.insert(db)
-                        }
-                    }
-
-                    // 4. Backup & Cleanup
-                    defaults.set(data, forKey: backupKey)
-                    defaults.removeObject(forKey: legacyKey)
-                }
-            }
-        } catch {
-            AppLogger.database.error("❌ Migration Failed: \(error.localizedDescription)")
+    public func reload() async throws {
+        let snapshot = try await dbPool.read { db in
+            (
+                try LibraryCategory.order(Column("sortOrder")).fetchAll(db),
+                try LibraryItem.order(Column("title")).fetchAll(db),
+                try ItemCategoryLink.fetchAll(db)
+            )
         }
+        categories = snapshot.0
+        items = snapshot.1
+        links = snapshot.2
+        isLoading = false
     }
 
     // MARK: - Phase 3: Reactive State Observation
@@ -279,35 +252,4 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         }
     }
 
-    // MARK: - AniList Interactions
-
-    public func setAnilistId(for itemId: String, anilistId: Int) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    if var item = try LibraryItem.fetchOne(db, key: itemId) {
-                        item.anilistId = anilistId
-                        try item.update(db)
-                    }
-                }
-            } catch {}
-        }
-    }
-
-    public func removeAnilistId(for itemId: String) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    if var item = try LibraryItem.fetchOne(db, key: itemId) {
-                        item.anilistId = nil
-                        try item.update(db)
-                    }
-                }
-            } catch {}
-        }
-    }
-
-    public func getAnilistId(for itemId: String) -> Int? {
-        return items.first(where: { $0.id == itemId })?.anilistId
-    }
 }

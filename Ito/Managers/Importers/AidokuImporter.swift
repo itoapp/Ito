@@ -64,6 +64,12 @@ private struct AidokuHistory: Decodable {
 }
 
 public struct AidokuImporter: BackupImporter {
+    private let resolver: PluginResolver
+
+    @MainActor
+    public init(resolver: PluginResolver) {
+        self.resolver = resolver
+    }
     public func canHandle(url: URL) -> Bool {
         return url.pathExtension.lowercased() == "aib" || url.pathExtension.lowercased() == "json"
     }
@@ -124,7 +130,7 @@ public struct AidokuImporter: BackupImporter {
                 if let cached = resolutionCache[libItem.sourceId] {
                     resolution = cached
                 } else {
-                    resolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: libItem.sourceId) }
+                    resolution = resolver.resolve(foreignId: libItem.sourceId)
                     resolutionCache[libItem.sourceId] = resolution
                 }
                 let resolvedPluginId = resolution.resolvedId
@@ -204,7 +210,7 @@ public struct AidokuImporter: BackupImporter {
                 if let cached = resolutionCache[hist.sourceId] {
                     histResolution = cached
                 } else {
-                    histResolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: hist.sourceId) }
+                    histResolution = resolver.resolve(foreignId: hist.sourceId)
                     resolutionCache[hist.sourceId] = histResolution
                 }
                 let resolvedPluginId = histResolution.resolvedId
@@ -245,6 +251,23 @@ public struct AidokuImporter: BackupImporter {
         )
 
         return ImportedBackup(
+            metadata: BackupMetadataRecord(formatVersion: 1, createdAt: backup.date),
+            capabilities: [
+                BackupCapabilityRecord(
+                    component: .libraryCore,
+                    representation: libraryRepresentation(
+                        categories: importedCategories,
+                        items: importedItems,
+                        links: importedLinks
+                    )
+                ),
+                BackupCapabilityRecord(
+                    component: .readingHistory,
+                    representation: importedHistory.isEmpty
+                        ? .representedEmpty
+                        : .representedNonempty
+                )
+            ],
             categories: importedCategories,
             items: importedItems,
             links: importedLinks,
@@ -252,6 +275,16 @@ public struct AidokuImporter: BackupImporter {
             preferences: [],
             migrationReport: report.hasIssues ? report : nil
         )
+    }
+
+    private func libraryRepresentation(
+        categories: [LibraryCategory],
+        items: [LibraryItem],
+        links: [ItemCategoryLink]
+    ) -> BackupRepresentation {
+        categories.isEmpty && items.isEmpty && links.isEmpty
+            ? .representedEmpty
+            : .representedNonempty
     }
 
     private func mapAidokuStatus(_ status: Int) -> Manga.Status {

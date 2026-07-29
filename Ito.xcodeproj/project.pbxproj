@@ -8,13 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		391483262FE4B140002F5EA7 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 391483252FE4B140002F5EA7 /* GRDB */; };
-		3B8E1A012FF0000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 391483252FE4B140002F5EA7 /* GRDB */; };
 		397BF7242FE6F4E600EFFFC4 /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 397BF7232FE6F4E600EFFFC4 /* ito-runner */; };
 		3A64EED82F7969F700B76A90 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 3A64EED72F7969F700B76A90 /* GRDB */; };
 		3A7509552F57FFE40057955D /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3A7509542F57FFE40057955D /* ito-runner */; };
 		3AC825702F5FD9300054AD29 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC8256F2F5FD9300054AD29 /* Nuke */; };
 		3AC825722F5FD9300054AD29 /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 3AC825712F5FD9300054AD29 /* NukeUI */; };
 		3ADF8E0F2F6CE2E6007A5EA0 /* ito-runner in Frameworks */ = {isa = PBXBuildFile; productRef = 3ADF8E0E2F6CE2E6007A5EA0 /* ito-runner */; };
+		3B8E1A012FF0000000000001 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 391483252FE4B140002F5EA7 /* GRDB */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */

@@ -75,6 +75,42 @@ struct LibrarySourceRemapperTests {
             try ItemCategoryLink(itemId: sourceId, categoryId: "cat-2").insert(db)
             try importedHistory.insert(db)
             try nativeHistory.insert(db)
+            try ReadProgressKeyRecord(
+                pluginId: oldPluginId,
+                canonicalMediaId: sourceId,
+                chapterKey: "chapter-key",
+                markedAt: checkedAt,
+                provenance: .runtime
+            ).insert(db)
+            try ReadProgressNumberRecord(
+                pluginId: oldPluginId,
+                canonicalMediaId: sourceId,
+                chapterNumber: 4.5,
+                markedAt: checkedAt,
+                provenance: .runtime
+            ).insert(db)
+            try MediaReadProgressRecord(
+                pluginId: oldPluginId,
+                canonicalMediaId: sourceId,
+                lastReadChapterKey: "resume-key",
+                updatedAt: updatedAt,
+                provenance: .runtime
+            ).insert(db)
+            try TrackerLinkRecord(
+                pluginId: oldPluginId,
+                canonicalMediaId: sourceId,
+                providerId: "anilist",
+                remoteMediaId: "42",
+                updatedAt: updatedAt,
+                provenance: .runtime
+            ).insert(db)
+            try UpdateBadgeRecord(
+                pluginId: oldPluginId,
+                canonicalMediaId: sourceId,
+                count: 3,
+                updatedAt: updatedAt,
+                provenance: .runtime
+            ).insert(db)
         }
 
         let result = try await LibrarySourceRemapper(dbPool: database.dbPool).remap(
@@ -115,7 +151,114 @@ struct LibrarySourceRemapperTests {
                 $0.mediaKey == destinationId &&
                 $0.pluginId == newPluginId
             })
+
+            let readKey = try ReadProgressKeyRecord.fetchOne(db)
+            #expect(readKey?.pluginId == newPluginId)
+            #expect(readKey?.canonicalMediaId == sourceId)
+            #expect(readKey?.chapterKey == "chapter-key")
+            #expect(readKey?.markedAt == checkedAt)
+            #expect(readKey?.provenance == .runtime)
+            let readNumber = try ReadProgressNumberRecord.fetchOne(db)
+            #expect(readNumber?.pluginId == newPluginId)
+            #expect(readNumber?.canonicalMediaId == sourceId)
+            #expect(readNumber?.chapterNumber == 4.5)
+            let resume = try MediaReadProgressRecord.fetchOne(db)
+            #expect(resume?.pluginId == newPluginId)
+            #expect(resume?.canonicalMediaId == sourceId)
+            #expect(resume?.lastReadChapterKey == "resume-key")
+            let tracker = try TrackerLinkRecord.fetchOne(db)
+            #expect(tracker?.pluginId == newPluginId)
+            #expect(tracker?.canonicalMediaId == sourceId)
+            #expect(tracker?.providerId == "anilist")
+            #expect(tracker?.remoteMediaId == "42")
+            let badge = try UpdateBadgeRecord.fetchOne(db)
+            #expect(badge?.pluginId == newPluginId)
+            #expect(badge?.canonicalMediaId == sourceId)
+            #expect(badge?.count == 3)
         }
+    }
+
+    @Test func scopedDestinationCollisionRollsBackEveryTable() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let source = makeItem(id: "series", pluginId: "old")
+        let category = LibraryCategory(id: "category", name: "Category", sortOrder: 0)
+        let history = ReadingHistoryRecord(
+            id: "history",
+            libraryItemId: source.id,
+            mediaKey: source.id,
+            title: source.title,
+            coverUrl: nil,
+            pluginId: source.pluginId,
+            chapterKey: "chapter",
+            chapterTitle: nil
+        )
+        try await database.dbPool.write { db in
+            try source.insert(db)
+            try category.insert(db)
+            try ItemCategoryLink(itemId: source.id, categoryId: category.id).insert(db)
+            try history.insert(db)
+            try ReadProgressKeyRecord(
+                pluginId: "old",
+                canonicalMediaId: "series",
+                chapterKey: "chapter",
+                markedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try ReadProgressNumberRecord(
+                pluginId: "old",
+                canonicalMediaId: "series",
+                chapterNumber: 1,
+                markedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try MediaReadProgressRecord(
+                pluginId: "old",
+                canonicalMediaId: "series",
+                lastReadChapterKey: "old-resume",
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try MediaReadProgressRecord(
+                pluginId: "new",
+                canonicalMediaId: "series",
+                lastReadChapterKey: "destination-resume",
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try TrackerLinkRecord(
+                pluginId: "old",
+                canonicalMediaId: "series",
+                providerId: "anilist",
+                remoteMediaId: "1",
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try UpdateBadgeRecord(
+                pluginId: "old",
+                canonicalMediaId: "series",
+                count: 2,
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+        }
+        let before = try await scopedSnapshot(database)
+
+        do {
+            _ = try await LibrarySourceRemapper(dbPool: database.dbPool).remap(
+                oldPluginId: "old",
+                newPluginId: "new",
+                affectedItemIds: [source.id]
+            )
+            Issue.record("Expected scoped destination collision")
+        } catch let error as LibrarySourceRemapper.RemapError {
+            #expect(error == .mediaStateDestinationCollision(
+                table: "mediaReadProgress",
+                canonicalMediaId: "series"
+            ))
+        }
+
+        #expect(try await scopedSnapshot(database) == before)
     }
 
     @Test func existingDestinationCollisionRollsBackEntireBatch() async throws {
@@ -333,6 +476,181 @@ struct LibrarySourceRemapperTests {
         ))
     }
 
+    @Test func mediaDetailRelinkMovesLibraryAndEveryScopedStateTable() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let pluginId = "plugin"
+        let sourceId = "imported-id"
+        let destinationId = "canonical-id"
+        let source = makeItem(id: sourceId, pluginId: pluginId)
+        let category = LibraryCategory(id: "category", name: "Category", sortOrder: 1)
+        let history = ReadingHistoryRecord(
+            id: "history",
+            libraryItemId: sourceId,
+            mediaKey: sourceId,
+            title: source.title,
+            coverUrl: nil,
+            pluginId: pluginId,
+            chapterKey: "chapter",
+            chapterTitle: "Chapter"
+        )
+        try await database.dbPool.write { db in
+            try category.insert(db)
+            try source.insert(db)
+            try ItemCategoryLink(itemId: sourceId, categoryId: category.id).insert(db)
+            try history.insert(db)
+            try ReadProgressKeyRecord(
+                pluginId: pluginId,
+                canonicalMediaId: sourceId,
+                chapterKey: "key",
+                markedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try ReadProgressNumberRecord(
+                pluginId: pluginId,
+                canonicalMediaId: sourceId,
+                chapterNumber: 2,
+                markedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try MediaReadProgressRecord(
+                pluginId: pluginId,
+                canonicalMediaId: sourceId,
+                lastReadChapterKey: "key",
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try TrackerLinkRecord(
+                pluginId: pluginId,
+                canonicalMediaId: sourceId,
+                providerId: "anilist",
+                remoteMediaId: "42",
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try UpdateBadgeRecord(
+                pluginId: pluginId,
+                canonicalMediaId: sourceId,
+                count: 3,
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+        }
+
+        let result = try await LibrarySourceRemapper(dbPool: database.dbPool).relink(
+            pluginId: pluginId,
+            possibleSourceItemIds: [sourceId],
+            destinationItemId: destinationId,
+            title: "Hydrated",
+            coverUrl: "https://example.com/cover.jpg",
+            rawPayload: Data([1, 2, 3])
+        )
+
+        #expect(result == .init(remappedItemCount: 1, movedLinkCount: 1, movedHistoryCount: 1))
+        try await database.dbPool.read { db in
+            #expect(try LibraryItem.fetchOne(db, key: sourceId) == nil)
+            let destination = try LibraryItem.fetchOne(db, key: destinationId)
+            #expect(destination?.title == "Hydrated")
+            #expect(try ItemCategoryLink.fetchOne(
+                db,
+                key: ["itemId": destinationId, "categoryId": category.id]
+            ) != nil)
+            let movedHistory = try ReadingHistoryRecord.fetchOne(db, key: history.id)
+            #expect(movedHistory?.libraryItemId == destinationId)
+            #expect(movedHistory?.mediaKey == destinationId)
+            #expect(try ReadProgressKeyRecord
+                .filter(Column("canonicalMediaId") == destinationId)
+                .fetchCount(db) == 1)
+            #expect(try ReadProgressNumberRecord
+                .filter(Column("canonicalMediaId") == destinationId)
+                .fetchCount(db) == 1)
+            #expect(try MediaReadProgressRecord
+                .filter(Column("canonicalMediaId") == destinationId)
+                .fetchCount(db) == 1)
+            #expect(try TrackerLinkRecord
+                .filter(Column("canonicalMediaId") == destinationId)
+                .fetchCount(db) == 1)
+            #expect(try UpdateBadgeRecord
+                .filter(Column("canonicalMediaId") == destinationId)
+                .fetchCount(db) == 1)
+        }
+    }
+
+    @Test func mediaDetailRelinkScopedCollisionRollsBackEveryTable() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let pluginId = "plugin"
+        let source = makeItem(id: "source", pluginId: pluginId)
+        let category = LibraryCategory(id: "category", name: "Category", sortOrder: 1)
+        try await database.dbPool.write { db in
+            try category.insert(db)
+            try source.insert(db)
+            try ItemCategoryLink(itemId: source.id, categoryId: category.id).insert(db)
+            try ReadingHistoryRecord(
+                id: "history",
+                libraryItemId: source.id,
+                mediaKey: source.id,
+                title: source.title,
+                coverUrl: nil,
+                pluginId: pluginId,
+                chapterKey: "chapter",
+                chapterTitle: nil
+            ).insert(db)
+            for canonicalMediaId in [source.id, "destination"] {
+                try TrackerLinkRecord(
+                    pluginId: pluginId,
+                    canonicalMediaId: canonicalMediaId,
+                    providerId: "anilist",
+                    remoteMediaId: canonicalMediaId,
+                    updatedAt: nil,
+                    provenance: .runtime
+                ).insert(db)
+            }
+            try ReadProgressKeyRecord(
+                pluginId: pluginId,
+                canonicalMediaId: source.id,
+                chapterKey: "key",
+                markedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try ReadProgressNumberRecord(
+                pluginId: pluginId,
+                canonicalMediaId: source.id,
+                chapterNumber: 1,
+                markedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try MediaReadProgressRecord(
+                pluginId: pluginId,
+                canonicalMediaId: source.id,
+                lastReadChapterKey: "key",
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+            try UpdateBadgeRecord(
+                pluginId: pluginId,
+                canonicalMediaId: source.id,
+                count: 1,
+                updatedAt: nil,
+                provenance: .runtime
+            ).insert(db)
+        }
+        let before = try await scopedSnapshot(database)
+
+        await #expect(throws: LibrarySourceRemapper.RemapError.self) {
+            _ = try await LibrarySourceRemapper(dbPool: database.dbPool).relink(
+                pluginId: pluginId,
+                possibleSourceItemIds: [source.id],
+                destinationItemId: "destination",
+                title: "Destination",
+                coverUrl: nil,
+                rawPayload: Data()
+            )
+        }
+
+        #expect(try await scopedSnapshot(database) == before)
+    }
+
     @Test func ambiguousHistoryAssociationIsTypedAndRollsBack() async throws {
         let database = try TestDatabase()
         defer { database.cleanup() }
@@ -394,6 +712,32 @@ struct LibrarySourceRemapperTests {
             anilistId: nil
         )
     }
+
+    private func scopedSnapshot(_ database: TestDatabase) async throws -> RemapSnapshot {
+        try await database.dbPool.read { db in
+            RemapSnapshot(
+                items: try LibraryItem.fetchAll(db),
+                links: try ItemCategoryLink.fetchAll(db),
+                history: try ReadingHistoryRecord.fetchAll(db),
+                readKeys: try ReadProgressKeyRecord.fetchAll(db),
+                readNumbers: try ReadProgressNumberRecord.fetchAll(db),
+                resume: try MediaReadProgressRecord.fetchAll(db),
+                trackerLinks: try TrackerLinkRecord.fetchAll(db),
+                badges: try UpdateBadgeRecord.fetchAll(db)
+            )
+        }
+    }
+}
+
+private struct RemapSnapshot: Equatable {
+    let items: [LibraryItem]
+    let links: [ItemCategoryLink]
+    let history: [ReadingHistoryRecord]
+    let readKeys: [ReadProgressKeyRecord]
+    let readNumbers: [ReadProgressNumberRecord]
+    let resume: [MediaReadProgressRecord]
+    let trackerLinks: [TrackerLinkRecord]
+    let badges: [UpdateBadgeRecord]
 }
 
 private struct AliasWrite: Equatable, Sendable {

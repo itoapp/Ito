@@ -4,7 +4,7 @@ import Nuke
 
 struct DiscoverView: View {
     @StateObject private var manager = DiscoverManager.shared
-    @StateObject private var pluginManager = PluginManager.shared
+    @EnvironmentObject private var pluginManager: PluginManager
 
     @State private var selectedType: DiscoverMediaType = .manga
     @State private var searchQuery = ""

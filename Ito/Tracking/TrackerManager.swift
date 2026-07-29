@@ -1,9 +1,10 @@
-import OSLog
-import Foundation
 import Combine
+import Foundation
+import GRDB
+import OSLog
 
 @MainActor
-public class TrackerManager: ObservableObject {
+public final class TrackerManager: ObservableObject {
     enum CredentialBootstrapState: Equatable {
         case notStarted
         case inFlight
@@ -14,46 +15,41 @@ public class TrackerManager: ObservableObject {
         case permanentFailure
     }
 
-    public static let shared: TrackerManager = {
-        let credentialStore = KeychainTrackerCredentialStore()
-        let legacyTokenStore = LegacyTokenStore(defaults: .standard)
-        return TrackerManager(
-            credentialStore: credentialStore,
-            legacyTokenStore: legacyTokenStore,
-            defaults: .standard
-        )
-    }()
-
-    // Instead of [String: Int], we now map [LocalId: [TrackerIdentifier: String]]
-    @Published public private(set) var trackerMappings: [String: [String: String]] = [:]
+    @Published private var trackerMappings: [MediaIdentity: [String: String]] = [:]
     @Published private(set) var credentialBootstrapState: CredentialBootstrapState = .notStarted
 
     public let providers: [any TrackerProvider]
 
-    private let mappingsKey = "Ito.MultiTrackerMappings"
-    private let legacyMappingsKey = "Ito.TrackerMappings"
-    private let defaults: UserDefaults
+    private let dbPool: DatabasePool
     private let anilistTracker: AnilistTracker
     private var credentialBootstrapTask: Task<AniListCredentialRepository.BootstrapOutcome, any Error>?
 
     init(
+        dbPool: DatabasePool,
         credentialStore: any TrackerCredentialStoring,
         legacyTokenStore: any LegacyTokenStoring,
-        defaults: UserDefaults
+        usernameDefaults: UserDefaults
     ) {
+        self.dbPool = dbPool
         let credentialRepository = AniListCredentialRepository(
             secureStore: credentialStore,
             legacyStore: legacyTokenStore
         )
-        let anilistTracker = AnilistTracker(
+        let tracker = AnilistTracker(
             credentialRepository: credentialRepository,
-            usernameDefaults: defaults
+            usernameDefaults: usernameDefaults
         )
-        self.defaults = defaults
-        self.anilistTracker = anilistTracker
-        self.providers = [anilistTracker]
+        anilistTracker = tracker
+        providers = [tracker]
+    }
 
-        loadMappings()
+    func reload() async throws {
+        let records = try await dbPool.read { db in
+            try TrackerLinkRecord.fetchAll(db)
+        }
+        trackerMappings = Dictionary(grouping: records) {
+            MediaIdentity(pluginId: $0.pluginId, canonicalMediaId: $0.canonicalMediaId)
+        }.mapValues { Dictionary(uniqueKeysWithValues: $0.map { ($0.providerId, $0.remoteMediaId) }) }
     }
 
     func bootstrapCredentials() async {
@@ -63,12 +59,10 @@ public class TrackerManager: ObservableObject {
         case .notStarted, .inFlight, .retryableProtectedDataFailure, .recoverableVerificationFailure:
             break
         }
-
         if let credentialBootstrapTask {
             await finishBootstrap(credentialBootstrapTask)
             return
         }
-
         credentialBootstrapState = .inFlight
         let task = Task { try await anilistTracker.bootstrapCredentials() }
         credentialBootstrapTask = task
@@ -79,104 +73,67 @@ public class TrackerManager: ObservableObject {
         _ task: Task<AniListCredentialRepository.BootstrapOutcome, any Error>
     ) async {
         do {
-            let outcome = try await task.value
-            credentialBootstrapState = CredentialBootstrapState(outcome.state)
+            credentialBootstrapState = CredentialBootstrapState(try await task.value.state)
         } catch {
             credentialBootstrapState = .permanentFailure
         }
         credentialBootstrapTask = nil
     }
 
-    private func loadMappings() {
-        if let data = defaults.data(forKey: mappingsKey),
-           let decoded = try? JSONDecoder().decode([String: [String: String]].self, from: data) {
-            self.trackerMappings = decoded
-        } else {
-            // Migrate legacy mappings
-            if let legacyData = defaults.data(forKey: legacyMappingsKey),
-               let legacyDecoded = try? JSONDecoder().decode([String: Int].self, from: legacyData) {
+    public func link(
+        media: MediaIdentity,
+        providerId: String,
+        remoteMediaId: String
+    ) async throws {
+        try await dbPool.write { db in
+            try TrackerLinkRecord(
+                pluginId: media.pluginId,
+                canonicalMediaId: media.canonicalMediaId,
+                providerId: providerId,
+                remoteMediaId: remoteMediaId,
+                updatedAt: Date(),
+                provenance: .runtime
+            ).save(db)
+        }
+        trackerMappings[media, default: [:]][providerId] = remoteMediaId
+    }
 
-                var newMappings: [String: [String: String]] = [:]
-                for (localId, anilistId) in legacyDecoded {
-                    newMappings[localId] = ["anilist": String(anilistId)]
-                }
-
-                self.trackerMappings = newMappings
-                saveMappings()
-            }
+    public func unlink(media: MediaIdentity, providerId: String) async throws {
+        _ = try await dbPool.write { db in
+            try TrackerLinkRecord
+                .filter(Column("pluginId") == media.pluginId)
+                .filter(Column("canonicalMediaId") == media.canonicalMediaId)
+                .filter(Column("providerId") == providerId)
+                .deleteAll(db)
+        }
+        trackerMappings[media]?.removeValue(forKey: providerId)
+        if trackerMappings[media]?.isEmpty == true {
+            trackerMappings.removeValue(forKey: media)
         }
     }
 
-    private func saveMappings() {
-        if let encoded = try? JSONEncoder().encode(trackerMappings) {
-            defaults.set(encoded, forKey: mappingsKey)
-        }
+    public func trackerId(for media: MediaIdentity, providerId: String) -> String? {
+        trackerMappings[media]?[providerId]
     }
 
-    public func link(localId: String, providerId: String, mediaId: String) {
-        var currentMapping = trackerMappings[localId] ?? [:]
-        currentMapping[providerId] = mediaId
-        trackerMappings[localId] = currentMapping
-        saveMappings()
-
-        // Backward compatibility for AniList in LibraryItem if needed.
-        // It's recommended to migrate LibraryManager away from `anilistId` to generic tracker logic,
-        // but to avoid breaking things instantly:
-        if providerId == "anilist", let intId = Int(mediaId) {
-            LibraryManager.shared.setAnilistId(for: localId, anilistId: intId)
-        }
-    }
-
-    public func unlink(localId: String, providerId: String) {
-        if var currentMapping = trackerMappings[localId] {
-            currentMapping.removeValue(forKey: providerId)
-            if currentMapping.isEmpty {
-                trackerMappings.removeValue(forKey: localId)
-            } else {
-                trackerMappings[localId] = currentMapping
-            }
-            saveMappings()
-        }
-
-        if providerId == "anilist" {
-            LibraryManager.shared.removeAnilistId(for: localId)
-        }
-    }
-
-    public func getMediaId(for localId: String, providerId: String) -> String? {
-        if let mappedId = trackerMappings[localId]?[providerId] {
-            return mappedId
-        }
-
-        // Fallback for AniList legacy
-        if providerId == "anilist", let legacyId = LibraryManager.shared.getAnilistId(for: localId) {
-            return String(legacyId)
-        }
-
-        return nil
+    public func hasLinks(for media: MediaIdentity) -> Bool {
+        trackerMappings[media]?.isEmpty == false
     }
 
     public var authenticatedProviders: [any TrackerProvider] {
-        return providers.filter { $0.isAuthenticated }
+        providers.filter(\.isAuthenticated)
     }
 
-    public func updateProgress(localId: String, progress: Int) async {
-        let mappings = trackerMappings[localId] ?? [:]
-
+    public func updateProgress(media: MediaIdentity, progress: Int) async {
+        let mappings = trackerMappings[media] ?? [:]
         for provider in authenticatedProviders {
-            if let mediaId = mappings[provider.identifier] {
-                do {
-                    try await provider.updateProgress(mediaId: mediaId, progress: progress, status: nil)
-                } catch {
-                    AppLogger.auth.error("\("Failed to update progress on \(provider.name)"): \(error.localizedDescription)")
-                }
-            } else if provider.identifier == "anilist", let legacyId = LibraryManager.shared.getAnilistId(for: localId) {
-                // Legacy fallback update
-                do {
-                    try await provider.updateProgress(mediaId: String(legacyId), progress: progress, status: nil)
-                } catch {
-                    AppLogger.auth.error("Failed to update legacy AniList progress: \(error.localizedDescription)")
-                }
+            guard let remoteMediaId = mappings[provider.identifier] else { continue }
+            do {
+                try await provider.updateProgress(mediaId: remoteMediaId, progress: progress, status: nil)
+            } catch {
+                AppLogger.auth.error(
+                    "Failed to update progress on \(provider.name): \(error.localizedDescription)"
+                )
             }
         }
     }
@@ -185,18 +142,12 @@ public class TrackerManager: ObservableObject {
 private extension TrackerManager.CredentialBootstrapState {
     init(_ state: AniListCredentialRepository.BootstrapState) {
         switch state {
-        case .notStarted:
-            self = .notStarted
-        case .ready:
-            self = .ready
-        case .retryableProtectedDataFailure:
-            self = .retryableProtectedDataFailure
-        case .recoverableVerificationFailure:
-            self = .recoverableVerificationFailure
-        case .conflict:
-            self = .conflict
-        case .permanentFailure:
-            self = .permanentFailure
+        case .notStarted: self = .notStarted
+        case .ready: self = .ready
+        case .retryableProtectedDataFailure: self = .retryableProtectedDataFailure
+        case .recoverableVerificationFailure: self = .recoverableVerificationFailure
+        case .conflict: self = .conflict
+        case .permanentFailure: self = .permanentFailure
         }
     }
 }

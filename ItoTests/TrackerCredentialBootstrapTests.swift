@@ -140,13 +140,16 @@ struct TrackerCredentialBootstrapTests {
     ) -> TrackerCredentialBootstrapSubject {
         let suiteName = "TrackerCredentialBootstrapTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
+        let subjectDatabase = try! TestDatabase()
         let manager = TrackerManager(
+            dbPool: subjectDatabase.dbPool,
             credentialStore: secureStore,
             legacyTokenStore: legacyStore,
-            defaults: defaults
+            usernameDefaults: defaults
         )
         return TrackerCredentialBootstrapSubject(
             manager: manager,
+            database: subjectDatabase,
             defaults: defaults,
             suiteName: suiteName
         )
@@ -156,10 +159,12 @@ struct TrackerCredentialBootstrapTests {
 @MainActor
 private struct TrackerCredentialBootstrapSubject {
     let manager: TrackerManager
+    let database: TestDatabase
     let defaults: UserDefaults
     let suiteName: String
 
     func cleanup() {
         defaults.removePersistentDomain(forName: suiteName)
+        database.cleanup()
     }
 }
