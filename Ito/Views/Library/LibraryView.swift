@@ -16,10 +16,12 @@ private struct LibraryGroup: Identifiable {
 // MARK: - LibraryView
 
 struct LibraryView: View {
-    @StateObject private var libraryManager = LibraryManager.shared
-    @StateObject private var updateManager = UpdateManager.shared
+    @EnvironmentObject private var libraryManager: LibraryManager
+    @EnvironmentObject private var updateManager: UpdateManager
+    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @EnvironmentObject private var discordRPCManager: DiscordRPCManager
+    @EnvironmentObject private var backupManager: BackupManager
 
-    @AppStorage(UserDefaultsKeys.layoutStyle) private var rawLayoutStyle: Int = LibraryLayoutStyle.sectioned.rawValue
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var searchText = ""
@@ -35,7 +37,7 @@ struct LibraryView: View {
     @State private var showBackupError = false
 
     private var layoutStyle: LibraryLayoutStyle {
-        LibraryLayoutStyle(rawValue: rawLayoutStyle) ?? .sectioned
+        LibraryLayoutStyle(rawValue: settingsStore.libraryLayoutStyle) ?? .sectioned
     }
 
     private let columns = [
@@ -127,7 +129,7 @@ struct LibraryView: View {
 
     private func updateDiscordStatus() {
         let categoryName = libraryManager.categories.first(where: { $0.id == selectedCategoryId })?.name
-        DiscordRPCManager.shared.updateLibraryStatus(categoryName: categoryName)
+        discordRPCManager.updateLibraryStatus(categoryName: categoryName)
     }
 
     // MARK: Content
@@ -281,7 +283,15 @@ struct LibraryView: View {
             HStack(spacing: 16) {
                 Button {
                     withAnimation {
-                        rawLayoutStyle = (layoutStyle == .sectioned) ? LibraryLayoutStyle.tabbed.rawValue : LibraryLayoutStyle.sectioned.rawValue
+                        let newValue = layoutStyle == .sectioned
+                            ? LibraryLayoutStyle.tabbed.rawValue
+                            : LibraryLayoutStyle.sectioned.rawValue
+                        Task {
+                            try? await settingsStore.set(
+                                newValue,
+                                for: AppPreferenceCatalog.libraryLayoutStyle
+                            )
+                        }
                     }
                 } label: {
                     Image(systemName: layoutStyle == .sectioned ? "rectangle.grid.1x2" : "square.grid.2x2")
@@ -304,7 +314,7 @@ struct LibraryView: View {
                     Button {
                         Task {
                             do {
-                                let tempURL = try await BackupManager.shared.createBackupFile()
+                                let tempURL = try await backupManager.createBackupFile()
                                 self.generatedBackup = BackupDocument(url: tempURL)
                                 self.isExportingBackup = true
                             } catch {
@@ -436,8 +446,10 @@ struct LibraryItemView: View {
     let isEditing: Bool
     var onAssignCategories: (() -> Void)?
 
-    @ObservedObject private var pluginManager = PluginManager.shared
-    @StateObject private var updateManager = UpdateManager.shared
+    @EnvironmentObject private var pluginManager: PluginManager
+    @EnvironmentObject private var libraryManager: LibraryManager
+    @EnvironmentObject private var updateManager: UpdateManager
+    @EnvironmentObject private var repoManager: RepoManager
     @State private var wiggleAngle: Double = Double.random(in: -1.2...1.2)
     @State private var isWiggling: Bool = false
 
@@ -446,7 +458,11 @@ struct LibraryItemView: View {
     }
 
     private var badgeCount: Int {
-        updateManager.newChapterCounts[item.id] ?? 0
+        updateManager.badgeCount(for: mediaIdentity)
+    }
+
+    private var mediaIdentity: MediaIdentity {
+        MediaIdentity(pluginId: item.pluginId, itemId: item.id)
     }
 
     var body: some View {
@@ -457,6 +473,11 @@ struct LibraryItemView: View {
             }
             .buttonStyle(PressableButtonStyle())
             .disabled(isEditing)
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    clearBadgeOnSelection()
+                }
+            )
             .contextMenu {
                 Button {
                     onAssignCategories?()
@@ -465,7 +486,7 @@ struct LibraryItemView: View {
                 }
 
                 Button(role: .destructive) {
-                    LibraryManager.shared.removeItem(withId: item.id)
+                    libraryManager.removeItem(withId: item.id)
                 } label: {
                     Label("Remove from Library", systemImage: "trash")
                 }
@@ -474,7 +495,7 @@ struct LibraryItemView: View {
             if isEditing {
                 Button {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        LibraryManager.shared.removeItem(withId: item.id)
+                        libraryManager.removeItem(withId: item.id)
                     }
                 } label: {
                     Image(systemName: "minus.circle.fill")
@@ -495,6 +516,19 @@ struct LibraryItemView: View {
         .onChange(of: isEditing) { editing in
             withAnimation {
                 isWiggling = editing
+            }
+        }
+    }
+
+    private func clearBadgeOnSelection() {
+        guard badgeCount > 0 else { return }
+        Task {
+            do {
+                try await updateManager.clearBadge(for: mediaIdentity)
+            } catch {
+                AppLogger.database.error(
+                    "Failed to clear update badge for \(item.id): \(error.localizedDescription)"
+                )
             }
         }
     }
@@ -594,6 +628,8 @@ struct LibraryItemView: View {
 
 struct DeferredPluginView: View {
     let item: LibraryItem
+    @EnvironmentObject private var pluginManager: PluginManager
+    @EnvironmentObject private var repoManager: RepoManager
 
     @State private var runner: ItoRunner?
     @State private var errorMessage: String?
@@ -727,12 +763,12 @@ struct DeferredPluginView: View {
         // ALWAYS refresh repositories first when explicitly installing a missing plugin.
         // This ensures if the user rebuilt their extensions locally or upstream updated, 
         // we won't throw Hash Mismatches due to stale stored data.
-        await RepoManager.shared.refreshAll()
+        await repoManager.refreshAll()
 
         var targetPkg: RepoPackage?
         var foundRepoUrl: String?
 
-        for repo in RepoManager.shared.repositories {
+        for repo in repoManager.repositories {
             if let pkg = repo.index?.packages.first(where: { $0.id == item.pluginId }) {
                 targetPkg = pkg
                 foundRepoUrl = repo.url
@@ -747,7 +783,7 @@ struct DeferredPluginView: View {
         }
 
         do {
-            try await RepoManager.shared.installPackage(pkg, repositoryUrl: url)
+            try await repoManager.installPackage(pkg, repositoryUrl: url)
 
             // Retry loading
             isMissingPlugin = false
@@ -774,7 +810,7 @@ struct DeferredPluginView: View {
             }
 
             try Task.checkCancellation()
-            let pluginRunner = try await PluginManager.shared.getRunner(for: item.pluginId)
+            let pluginRunner = try await pluginManager.getRunner(for: item.pluginId)
             try Task.checkCancellation()
             await MainActor.run { runner = pluginRunner }
 

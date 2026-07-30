@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct StorageSettingsView: View {
-    @StateObject private var storageManager = StorageManager.shared
+    @EnvironmentObject private var storageManager: StorageManager
+    @EnvironmentObject private var settingsStore: AppSettingsStore
 
     var body: some View {
         Form {
@@ -9,7 +10,12 @@ struct StorageSettingsView: View {
                 header: Text("Image & Network Cache"),
                 footer: Text("Set the maximum amount of disk space Ito is allowed to use for caching images and network responses.")
             ) {
-                Picker("Cache Limit", selection: $storageManager.diskCacheLimitGB) {
+                Picker("Cache Limit", selection: Binding(
+                    get: { settingsStore.diskCacheLimitGB },
+                    set: { value in
+                        Task { try? await settingsStore.set(value, for: AppPreferenceCatalog.diskCacheLimitGB) }
+                    }
+                )) {
                     ForEach(Array(stride(from: 1.0, through: 50.0, by: 1.0)), id: \.self) { value in
                         Text("\(Int(value)) GB").tag(value)
                     }

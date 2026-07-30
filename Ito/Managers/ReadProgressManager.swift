@@ -1,121 +1,142 @@
 import Combine
 import Foundation
-import SwiftUI
+import GRDB
 
-/// Manages reading progress, tracking which chapters have been read,
-/// and the last read chapter per manga.
 @MainActor
-public class ReadProgressManager: ObservableObject, ProgressTracking {
-    public static let shared = ReadProgressManager()
+public final class ReadProgressManager: ObservableObject, ProgressTracking {
+    @Published private var readChapters: [MediaIdentity: Set<String>] = [:]
+    @Published private var readChapterNumbers: [MediaIdentity: Set<Float>] = [:]
+    @Published private var lastReadChapter: [MediaIdentity: String] = [:]
 
-    // keys: manga ID, values: set of chapter IDs
-    @Published public private(set) var readChapters: [String: Set<String>] = [:]
+    private let dbPool: DatabasePool
+    private weak var updateManager: UpdateManager?
 
-    // keys: manga ID, values: set of read chapter numbers
-    @Published public private(set) var readChapterNumbers: [String: Set<Float>] = [:]
-
-    // keys: manga ID, values: last read chapter ID
-    @Published public private(set) var lastReadChapter: [String: String] = [:]
-
-    private let readChaptersKey = "Ito.ReadChapters"
-    private let readChapterNumbersKey = "Ito.ReadChapterNumbers"
-    private let lastReadChapterKey = "Ito.LastReadChapter"
-
-    private init() {
-        loadProgress()
+    public init(dbPool: DatabasePool) {
+        self.dbPool = dbPool
     }
 
-    private func loadProgress() {
-        let defaults = UserDefaults.standard
-        if let data = defaults.data(forKey: readChaptersKey),
-            let decoded = try? JSONDecoder().decode([String: Set<String>].self, from: data) {
-            self.readChapters = decoded
-        }
-
-        if let data = defaults.data(forKey: readChapterNumbersKey),
-            let decoded = try? JSONDecoder().decode([String: Set<Float>].self, from: data) {
-            self.readChapterNumbers = decoded
-        }
-
-        if let data = defaults.data(forKey: lastReadChapterKey),
-            let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-            self.lastReadChapter = decoded
-        }
+    func configure(updateManager: UpdateManager) {
+        self.updateManager = updateManager
     }
 
-    private func saveProgress() {
-        let defaults = UserDefaults.standard
-        if let encoded = try? JSONEncoder().encode(readChapters) {
-            defaults.set(encoded, forKey: readChaptersKey)
+    public func reload() async throws {
+        let snapshot = try await dbPool.read { db in
+            let keys = try ReadProgressKeyRecord.fetchAll(db)
+            let numbers = try ReadProgressNumberRecord.fetchAll(db)
+            let resume = try MediaReadProgressRecord.fetchAll(db)
+            return (keys, numbers, resume)
         }
-        if let encoded = try? JSONEncoder().encode(readChapterNumbers) {
-            defaults.set(encoded, forKey: readChapterNumbersKey)
-        }
-        if let encoded = try? JSONEncoder().encode(lastReadChapter) {
-            defaults.set(encoded, forKey: lastReadChapterKey)
-        }
-    }
 
-    /// Mark a chapter as read
-    public func markAsRead(mangaId: String, chapterId: String, chapterNum: Float? = nil) {
-        if readChapters[mangaId] == nil {
-            readChapters[mangaId] = []
-        }
-        readChapters[mangaId]?.insert(chapterId)
-
-        if let num = chapterNum {
-            if readChapterNumbers[mangaId] == nil {
-                readChapterNumbers[mangaId] = []
+        readChapters = Dictionary(grouping: snapshot.0) {
+            MediaIdentity(pluginId: $0.pluginId, canonicalMediaId: $0.canonicalMediaId)
+        }.mapValues { Set($0.map(\.chapterKey)) }
+        readChapterNumbers = Dictionary(grouping: snapshot.1) {
+            MediaIdentity(pluginId: $0.pluginId, canonicalMediaId: $0.canonicalMediaId)
+        }.mapValues { Set($0.map { Float($0.chapterNumber) }) }
+        lastReadChapter = Dictionary(
+            uniqueKeysWithValues: snapshot.2.map {
+                (
+                    MediaIdentity(pluginId: $0.pluginId, canonicalMediaId: $0.canonicalMediaId),
+                    $0.lastReadChapterKey
+                )
             }
-            readChapterNumbers[mangaId]?.insert(num)
+        )
+    }
+
+    public func markAsRead(
+        media: MediaIdentity,
+        chapterId: String,
+        chapterNum: Float? = nil
+    ) async throws {
+        let now = Date()
+        try await dbPool.write { db in
+            try ReadProgressKeyRecord(
+                pluginId: media.pluginId,
+                canonicalMediaId: media.canonicalMediaId,
+                chapterKey: chapterId,
+                markedAt: now,
+                provenance: .runtime
+            ).save(db)
+            if let chapterNum {
+                try ReadProgressNumberRecord(
+                    pluginId: media.pluginId,
+                    canonicalMediaId: media.canonicalMediaId,
+                    chapterNumber: Double(chapterNum),
+                    markedAt: now,
+                    provenance: .runtime
+                ).save(db)
+            }
+            try MediaReadProgressRecord(
+                pluginId: media.pluginId,
+                canonicalMediaId: media.canonicalMediaId,
+                lastReadChapterKey: chapterId,
+                updatedAt: now,
+                provenance: .runtime
+            ).save(db)
         }
 
-        lastReadChapter[mangaId] = chapterId
-
-        saveProgress()
+        readChapters[media, default: []].insert(chapterId)
+        if let chapterNum {
+            readChapterNumbers[media, default: []].insert(chapterNum)
+        }
+        lastReadChapter[media] = chapterId
     }
 
-    /// Mark an episode as watched (reusing the same structure as chapters)
-    public func markAsWatched(animeId: String, episodeId: String, episodeNum: Float? = nil) {
-        markAsRead(mangaId: animeId, chapterId: episodeId, chapterNum: episodeNum)
+    public func markAsWatched(
+        media: MediaIdentity,
+        episodeId: String,
+        episodeNum: Float? = nil
+    ) async throws {
+        try await markAsRead(media: media, chapterId: episodeId, chapterNum: episodeNum)
     }
 
-    /// Check if a chapter/episode is read/watched
-    public func isRead(mangaId: String, chapterId: String, chapterNum: Float? = nil) -> Bool {
-        if readChapters[mangaId]?.contains(chapterId) ?? false {
+    public func isRead(
+        media: MediaIdentity,
+        chapterId: String,
+        chapterNum: Float? = nil
+    ) -> Bool {
+        if readChapters[media]?.contains(chapterId) == true {
             return true
         }
-        if let num = chapterNum, let nums = readChapterNumbers[mangaId], nums.contains(num) {
-            return true
-        }
-        return false
+        return chapterNum.map { readChapterNumbers[media]?.contains($0) == true } ?? false
     }
 
-    /// Mark all chapters up to a given number as read (Useful for tracker syncing)
-    public func markReadUpTo(mangaId: String, maxChapterNum: Float) {
-        if readChapterNumbers[mangaId] == nil {
-            readChapterNumbers[mangaId] = []
+    public func markReadUpTo(media: MediaIdentity, maxChapterNum: Float) async throws {
+        guard maxChapterNum.isFinite, maxChapterNum >= 1 else {
+            return
         }
 
-        // Add all integers up to the maxChapterNum. 
-        // Note: For decimals (e.g. 15.5) we won't try to guess, but this covers standard integers nicely.
-        let maxInt = Int(maxChapterNum)
-        if maxInt > 0 {
-            for i in 1...maxInt {
-                readChapterNumbers[mangaId]?.insert(Float(i))
+        let now = Date()
+        let numbers: Set<Float> = {
+            var values = Set((1...Int(maxChapterNum)).map(Float.init))
+            values.insert(maxChapterNum)
+            return values
+        }()
+        try await dbPool.write { db in
+            for number in numbers {
+                try ReadProgressNumberRecord(
+                    pluginId: media.pluginId,
+                    canonicalMediaId: media.canonicalMediaId,
+                    chapterNumber: Double(number),
+                    markedAt: now,
+                    provenance: .runtime
+                ).save(db)
             }
+            try UpdateBadgeRecord
+                .filter(Column("pluginId") == media.pluginId)
+                .filter(Column("canonicalMediaId") == media.canonicalMediaId)
+                .deleteAll(db)
         }
-        // Also ensure the exact float is marked
-        readChapterNumbers[mangaId]?.insert(maxChapterNum)
 
-        // Bulk operation — fully clear the badge. Next refresh will recalculate.
-        UpdateManager.shared.clearBadge(for: mangaId)
-
-        saveProgress()
+        readChapterNumbers[media, default: []].formUnion(numbers)
+        try await updateManager?.reload()
     }
 
-    /// Get the last read chapter ID for a manga
-    public func getLastRead(mangaId: String) -> String? {
-        return lastReadChapter[mangaId]
+    public func lastReadChapter(for media: MediaIdentity) -> String? {
+        lastReadChapter[media]
+    }
+
+    public func readChapterNumbers(for media: MediaIdentity) -> Set<Float> {
+        readChapterNumbers[media] ?? []
     }
 }

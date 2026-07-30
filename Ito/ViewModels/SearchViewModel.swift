@@ -16,6 +16,7 @@ public class SearchViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var currentTasks: [Task<Void, Never>] = []
     private var searchSessionID = UUID()
+    private var pluginManager: PluginManager?
 
     public init() {
         self.recentSearches = UserDefaults.standard.stringArray(forKey: "Ito.RecentSearches") ?? []
@@ -28,6 +29,10 @@ public class SearchViewModel: ObservableObject {
                 self?.performSearch(query: query)
             }
             .store(in: &cancellables)
+    }
+
+    public func configure(pluginManager: PluginManager) {
+        self.pluginManager = pluginManager
     }
 
     public func performSearch(query: String) {
@@ -51,7 +56,11 @@ public class SearchViewModel: ObservableObject {
         let sessionID = UUID()
         self.searchSessionID = sessionID
 
-        let plugins = PluginManager.shared.installedPlugins.values.sorted { $0.info.name < $1.info.name }
+        guard let pluginManager else {
+            isSearching = false
+            return
+        }
+        let plugins = pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }
 
         // Filter plugins based on the currently selected scope!
         var validPlugins: [InstalledPlugin] = []
@@ -102,7 +111,7 @@ public class SearchViewModel: ObservableObject {
 
                 do {
                     AppLogger.ui.debug("\("🔍 [Search] Getting runner for \(plugin.info.name)")...")
-                    let runner = try await PluginManager.shared.getRunner(for: plugin.id)
+                    let runner = try await pluginManager.getRunner(for: plugin.id)
 
                     guard !Task.isCancelled, self.searchSessionID == sessionID else { break }
 
@@ -174,7 +183,7 @@ public class SearchViewModel: ObservableObject {
                     // Evict it so the next use creates a fresh instance.
                     if "\(error)".contains("wasmTrap") || "\(error)".contains("Trap") {
                         AppLogger.ui.debug("🔍 [Search] Evicting corrupted runner for \(plugin.id)")
-                        PluginManager.shared.evictRunner(for: plugin.id)
+                        pluginManager.evictRunner(for: plugin.id)
                     }
                 }
 

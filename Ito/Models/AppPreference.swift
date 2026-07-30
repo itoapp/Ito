@@ -5,16 +5,41 @@ public struct AppPreference: Codable, Identifiable, Hashable, Sendable, Fetchabl
     public static let databaseTableName = "appPreference"
 
     public var id: String { key }
-    public var key: String
-    public var value: Data
+    public let key: String
+    public let value: Data
 
-    public init(key: String, value: Data) {
+    @available(*, deprecated, message: "Use the typed AppPreferenceKey initializer for catalog preferences.")
+    nonisolated public init(key: String, value: Data) {
         self.key = key
         self.value = value
+    }
+
+    nonisolated public init<Value>(key: AppPreferenceKey<Value>, value: Value) throws {
+        guard key.isValid(value) else {
+            throw AppPreferenceError.invalidValue(key: key.name)
+        }
+        self.key = key.name
+        self.value = try JSONEncoder().encode(value)
+    }
+
+    nonisolated public func decodedValue<Value>(for key: AppPreferenceKey<Value>) throws -> Value {
+        guard self.key == key.name else {
+            throw AppPreferenceError.keyMismatch(expected: key.name, actual: self.key)
+        }
+        let decoded = try JSONDecoder().decode(Value.self, from: value)
+        guard key.isValid(decoded) else {
+            throw AppPreferenceError.invalidValue(key: key.name)
+        }
+        return decoded
     }
 
     public enum Columns {
         public static let key = Column("key")
         public static let value = Column("value")
     }
+}
+
+public enum AppPreferenceError: Error, Equatable {
+    case invalidValue(key: String)
+    case keyMismatch(expected: String, actual: String)
 }

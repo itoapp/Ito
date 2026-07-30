@@ -127,7 +127,7 @@ extension MatchDecision: Codable, DatabaseValueConvertible {
     }
 }
 
-public struct SourceMappingRecord: Codable, FetchableRecord, PersistableRecord, Sendable {
+public struct SourceMappingRecord: Codable, Equatable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "sourceMapping"
 
     // PK

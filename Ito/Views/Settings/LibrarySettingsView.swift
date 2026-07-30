@@ -1,23 +1,17 @@
 import SwiftUI
 
 struct LibrarySettingsView: View {
-    @AppStorage(UserDefaultsKeys.alwaysShowCategoryPicker) private var alwaysShowCategoryPicker: Bool = false
-
-    // Updates
-    @AppStorage(UserDefaultsKeys.bgUpdatesEnabled) private var bgUpdatesEnabled: Bool = true
-    @AppStorage(UserDefaultsKeys.updateInterval) private var updateInterval: Int = 4
-    @AppStorage(UserDefaultsKeys.skipCompleted) private var skipCompleted: Bool = true
-    @AppStorage(UserDefaultsKeys.updateNotifications) private var updateNotifications: Bool = true
-
-    // Network
-    @AppStorage(UserDefaultsKeys.wifiOnlyUpdates) private var wifiOnlyUpdates: Bool = false
-
+    @EnvironmentObject private var notificationManager: NotificationManager
+    @EnvironmentObject private var settingsStore: AppSettingsStore
     @State private var showingNotificationAlert = false
 
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: $alwaysShowCategoryPicker) {
+                Toggle(isOn: binding(
+                    settingsStore.alwaysShowCategoryPicker,
+                    key: AppPreferenceCatalog.alwaysShowCategoryPicker
+                )) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Prompt Category on Save")
                         Text("Show the list picker when saving a new series.")
@@ -32,34 +26,47 @@ struct LibrarySettingsView: View {
             }
 
             Section {
-                Toggle("Check for Updates", isOn: $bgUpdatesEnabled)
+                Toggle("Check for Updates", isOn: binding(
+                    settingsStore.backgroundUpdatesEnabled,
+                    key: AppPreferenceCatalog.backgroundUpdatesEnabled
+                ))
 
-                if bgUpdatesEnabled {
-                    Toggle("Notify on New Chapters", isOn: $updateNotifications)
-                        .onChange(of: updateNotifications) { newValue in
+                if settingsStore.backgroundUpdatesEnabled {
+                    Toggle("Notify on New Chapters", isOn: binding(
+                        settingsStore.updateNotifications,
+                        key: AppPreferenceCatalog.updateNotifications
+                    ))
+                        .onChange(of: settingsStore.updateNotifications) { newValue in
                             if newValue {
                                 Task {
-                                    let granted = await NotificationManager.shared.requestPermission()
+                                    let granted = await notificationManager.requestPermission()
                                     if !granted {
-                                        await MainActor.run {
-                                            showingNotificationAlert = true
-                                            updateNotifications = false
-                                        }
+                                        showingNotificationAlert = true
+                                        try? await settingsStore.set(
+                                            false,
+                                            for: AppPreferenceCatalog.updateNotifications
+                                        )
                                     }
                                 }
                             }
                         }
 
-                    Picker("Update Frequency", selection: $updateInterval) {
-                        Text("1 Hour").tag(1)
-                        Text("2 Hours").tag(2)
-                        Text("4 Hours").tag(4)
-                        Text("6 Hours").tag(6)
-                        Text("12 Hours").tag(12)
-                        Text("24 Hours").tag(24)
+                    Picker("Update Frequency", selection: binding(
+                        settingsStore.updateInterval,
+                        key: AppPreferenceCatalog.updateInterval
+                    )) {
+                        Text("1 Hour").tag(UpdateIntervalPreference.hourly)
+                        Text("2 Hours").tag(UpdateIntervalPreference.twoHours)
+                        Text("4 Hours").tag(UpdateIntervalPreference.fourHours)
+                        Text("6 Hours").tag(UpdateIntervalPreference.sixHours)
+                        Text("12 Hours").tag(UpdateIntervalPreference.twelveHours)
+                        Text("24 Hours").tag(UpdateIntervalPreference.daily)
                     }
 
-                    Toggle("Skip Completed Series", isOn: $skipCompleted)
+                    Toggle("Skip Completed Series", isOn: binding(
+                        settingsStore.skipCompleted,
+                        key: AppPreferenceCatalog.skipCompleted
+                    ))
                 }
             } header: {
                 Text("Updates")
@@ -68,7 +75,10 @@ struct LibrarySettingsView: View {
             }
 
             Section {
-                Toggle("Wi-Fi Only", isOn: $wifiOnlyUpdates)
+                Toggle("Wi-Fi Only", isOn: binding(
+                    settingsStore.wifiOnlyUpdates,
+                    key: AppPreferenceCatalog.wifiOnlyUpdates
+                ))
             } header: {
                 Text("Restrictions")
             } footer: {
@@ -87,6 +97,18 @@ struct LibrarySettingsView: View {
         } message: {
             Text("Please enable notifications for Ito in your device Settings to receive update alerts.")
         }
+    }
+
+    private func binding<Value: Codable & Sendable>(
+        _ value: Value,
+        key: AppPreferenceKey<Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { value },
+            set: { newValue in
+                Task { try? await settingsStore.set(newValue, for: key) }
+            }
+        )
     }
 }
 

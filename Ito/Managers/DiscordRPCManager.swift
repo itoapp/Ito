@@ -12,20 +12,16 @@ public enum DiscordRPCState: Equatable {
 
 @MainActor
 public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketDelegate {
-    public static let shared = DiscordRPCManager()
+    public static let shared = DiscordRPCManager(libraryManager: .shared)
 
     @Published public var state: DiscordRPCState = .disconnected
 
     public var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: UserDefaultsKeys.discordRpcEnabled)
+        settingsStore?.discordRPCEnabled ?? false
     }
 
     public var wsUrl: String {
-        get { UserDefaults.standard.string(forKey: UserDefaultsKeys.discordRpcUrl) ?? "ws://127.0.0.1:3000" }
-        set {
-            UserDefaults.standard.set(newValue, forKey: UserDefaultsKeys.discordRpcUrl)
-            if isEnabled { reconnect() }
-        }
+        settingsStore?.discordRPCURL ?? AppPreferenceCatalog.discordRPCURL.defaultValue
     }
 
     private var webSocketTask: URLSessionWebSocketTask?
@@ -33,6 +29,8 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
     private var isIntentionalDisconnect = false
     private let clientId = "1488209929721352252"
     private var cancellables = Set<AnyCancellable>()
+    private var settingsStore: AppSettingsStore?
+    private let libraryManager: LibraryManager
 
     // Current Activity Cache
     private var currentActivityDetails: String = "Ito"
@@ -48,12 +46,13 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
     private var isLibraryActive: Bool = false
     private var lastLibraryCategoryName: String?
 
-    override private init() {
+    public init(libraryManager: LibraryManager) {
+        self.libraryManager = libraryManager
         super.init()
         self.session = URLSession(configuration: .default, delegate: self, delegateQueue: OperationQueue.main)
 
         // Observe library changes to update stats if browsing
-        Publishers.CombineLatest(LibraryManager.shared.$items, LibraryManager.shared.$categories)
+        Publishers.CombineLatest(libraryManager.$items, libraryManager.$categories)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _ in
                 guard let self = self, self.isLibraryActive else { return }
@@ -77,21 +76,28 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
             }
             .store(in: &cancellables)
 
-        // Delay initial connection slightly so app can boot without lag
-        if isEnabled {
+    }
+
+    func configure(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
+        settingsStore.$discordRPCEnabled
+            .combineLatest(settingsStore.$discordRPCURL)
+            .dropFirst()
+            .sink { [weak self] enabled, _ in
+                guard let self else { return }
+                self.objectWillChange.send()
+                if enabled {
+                    self.reconnect()
+                } else {
+                    self.disconnect(intentional: true)
+                }
+            }
+            .store(in: &cancellables)
+
+        if settingsStore.discordRPCEnabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 self.connect()
             }
-        }
-    }
-
-    public func setIsEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: UserDefaultsKeys.discordRpcEnabled)
-        self.objectWillChange.send()
-        if enabled {
-            connect()
-        } else {
-            disconnect(intentional: true)
         }
     }
 
@@ -264,8 +270,8 @@ public class DiscordRPCManager: NSObject, ObservableObject, URLSessionWebSocketD
     internal func refreshLibraryStatus() {
         guard isLibraryActive else { return }
 
-        let itemCount = LibraryManager.shared.items.count
-        let categoryCount = LibraryManager.shared.categories.count
+        let itemCount = libraryManager.items.count
+        let categoryCount = libraryManager.categories.count
 
         let details = lastLibraryCategoryName.flatMap { "Browsing \($0)" } ?? "Browsing Collection"
         let state = "\(itemCount) Series in \(categoryCount) Categories"

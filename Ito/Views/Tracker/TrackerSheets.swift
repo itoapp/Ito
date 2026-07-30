@@ -3,24 +3,31 @@ import SwiftUI
 import NukeUI
 
 public struct TrackerSheetOrchestrator: View {
-    let localId: String
+    let mediaIdentity: MediaIdentity
     let title: String
     let isAnime: Bool
     var onTracked: ((TrackerMedia, Int?, String?) -> Void)?
 
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject private var trackerManager: TrackerManager
 
     @State private var selectedProvider: (any TrackerProvider)?
+    @State private var showPersistenceError = false
 
-    public init(localId: String, title: String, isAnime: Bool, onTracked: ((TrackerMedia, Int?, String?) -> Void)? = nil) {
-        self.localId = localId
+    public init(
+        mediaIdentity: MediaIdentity,
+        title: String,
+        isAnime: Bool,
+        onTracked: ((TrackerMedia, Int?, String?) -> Void)? = nil
+    ) {
+        self.mediaIdentity = mediaIdentity
         self.title = title
         self.isAnime = isAnime
         self.onTracked = onTracked
     }
 
     public var body: some View {
-        let authenticatedProviders = TrackerManager.shared.authenticatedProviders
+        let authenticatedProviders = trackerManager.authenticatedProviders
 
         if authenticatedProviders.isEmpty {
             NavigationView {
@@ -43,39 +50,47 @@ public struct TrackerSheetOrchestrator: View {
         } else if authenticatedProviders.count == 1 {
             // Bypass selection
             let provider = authenticatedProviders.first!
-            if let existingId = TrackerManager.shared.getMediaId(for: localId, providerId: provider.identifier) {
+            if let existingId = trackerManager.trackerId(for: mediaIdentity, providerId: provider.identifier) {
                 let media = TrackerMedia(id: existingId, title: title, titleRomaji: nil, coverImage: nil, format: nil, episodes: nil, chapters: nil)
                 NavigationView {
-                    TrackerDetailsSheet(provider: provider, localId: localId, media: media, showCancelButton: true, onSave: { progress, status in
+                    TrackerDetailsSheet(provider: provider, mediaIdentity: mediaIdentity, media: media, showCancelButton: true, onSave: { progress, status in
                         onTracked?(media, progress, status)
                         dismiss()
+                        return true
                     }, onDelete: {
                         onTracked?(media, nil, nil) // notify deleted
                     })
                 }
             } else {
-                TrackerSearchSheet(provider: provider, localId: localId, title: title, isAnime: isAnime) { media, progress, status in
-                    TrackerManager.shared.link(localId: localId, providerId: provider.identifier, mediaId: media.id)
-                    onTracked?(media, progress, status)
-                    dismiss()
+                TrackerSearchSheet(provider: provider, mediaIdentity: mediaIdentity, title: title, isAnime: isAnime) { media, progress, status in
+                    await linkAndPublish(media, provider: provider, progress: progress, status: status)
+                }
+                .alert("Tracker Change Not Saved", isPresented: $showPersistenceError) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text("Your tracker change couldn't be saved. Please try again.")
                 }
             }
         } else {
             // Selection Sheet
             if let provider = selectedProvider {
-                if let existingId = TrackerManager.shared.getMediaId(for: localId, providerId: provider.identifier) {
+                if let existingId = trackerManager.trackerId(for: mediaIdentity, providerId: provider.identifier) {
                     let media = TrackerMedia(id: existingId, title: title, titleRomaji: nil, coverImage: nil, format: nil, episodes: nil, chapters: nil)
-                    TrackerDetailsSheet(provider: provider, localId: localId, media: media, showCancelButton: true, onSave: { progress, status in
+                    TrackerDetailsSheet(provider: provider, mediaIdentity: mediaIdentity, media: media, showCancelButton: true, onSave: { progress, status in
                         onTracked?(media, progress, status)
                         dismiss()
+                        return true
                     }, onDelete: {
                         onTracked?(media, nil, nil)
                     })
                 } else {
-                    TrackerSearchSheet(provider: provider, localId: localId, title: title, isAnime: isAnime) { media, progress, status in
-                        TrackerManager.shared.link(localId: localId, providerId: provider.identifier, mediaId: media.id)
-                        onTracked?(media, progress, status)
-                        dismiss()
+                    TrackerSearchSheet(provider: provider, mediaIdentity: mediaIdentity, title: title, isAnime: isAnime) { media, progress, status in
+                        await linkAndPublish(media, provider: provider, progress: progress, status: status)
+                    }
+                    .alert("Tracker Change Not Saved", isPresented: $showPersistenceError) {
+                        Button("OK", role: .cancel) { }
+                    } message: {
+                        Text("Your tracker change couldn't be saved. Please try again.")
                     }
                 }
             } else {
@@ -88,7 +103,7 @@ public struct TrackerSheetOrchestrator: View {
                                 Text(provider.name)
                                     .foregroundColor(.primary)
                                 Spacer()
-                                if TrackerManager.shared.getMediaId(for: localId, providerId: provider.identifier) != nil {
+                                if trackerManager.trackerId(for: mediaIdentity, providerId: provider.identifier) != nil {
                                     Text("Tracked")
                                         .font(.caption)
                                         .foregroundColor(.green)
@@ -107,6 +122,26 @@ public struct TrackerSheetOrchestrator: View {
             }
         }
     }
+
+    private func linkAndPublish(
+        _ media: TrackerMedia,
+        provider: any TrackerProvider,
+        progress: Int?,
+        status: String?
+    ) async -> Bool {
+        do {
+            try await trackerManager.link(
+                media: mediaIdentity,
+                providerId: provider.identifier,
+                remoteMediaId: media.id
+            )
+            onTracked?(media, progress, status)
+            return true
+        } catch {
+            showPersistenceError = true
+            return false
+        }
+    }
 }
 
 struct PresentationDetentsModifier: ViewModifier {
@@ -121,7 +156,7 @@ struct PresentationDetentsModifier: ViewModifier {
 
 struct TrackerSearchSheet: View {
     let provider: any TrackerProvider
-    let localId: String
+    let mediaIdentity: MediaIdentity
     let title: String
     let isAnime: Bool
 
@@ -133,12 +168,18 @@ struct TrackerSearchSheet: View {
 
     @State private var showDetailsSheet = false
 
-    var onTrack: (TrackerMedia, Int?, String?) -> Void
+    var onTrack: (TrackerMedia, Int?, String?) async -> Bool
     @Environment(\.dismiss) var dismiss
 
-    init(provider: any TrackerProvider, localId: String, title: String, isAnime: Bool, onTrack: @escaping (TrackerMedia, Int?, String?) -> Void) {
+    init(
+        provider: any TrackerProvider,
+        mediaIdentity: MediaIdentity,
+        title: String,
+        isAnime: Bool,
+        onTrack: @escaping (TrackerMedia, Int?, String?) async -> Bool
+    ) {
         self.provider = provider
-        self.localId = localId
+        self.mediaIdentity = mediaIdentity
         self.title = title
         self.isAnime = isAnime
         self._searchQuery = State(initialValue: title)
@@ -214,10 +255,13 @@ struct TrackerSearchSheet: View {
                 ZStack {
                     if let selectedMedia = selectedMedia {
                         NavigationLink(
-                            destination: TrackerDetailsSheet(provider: provider, localId: localId, media: selectedMedia, onSave: { progress, newStatus in
-                                onTrack(selectedMedia, progress, newStatus)
-                                showDetailsSheet = false
-                                dismiss()
+                            destination: TrackerDetailsSheet(provider: provider, mediaIdentity: mediaIdentity, media: selectedMedia, onSave: { progress, newStatus in
+                                let didTrack = await onTrack(selectedMedia, progress, newStatus)
+                                if didTrack {
+                                    showDetailsSheet = false
+                                    dismiss()
+                                }
+                                return didTrack
                             }),
                             isActive: $showDetailsSheet
                         ) {
@@ -278,11 +322,11 @@ struct TrackerSearchSheet: View {
 
 struct TrackerDetailsSheet: View {
     let provider: any TrackerProvider
-    let localId: String
+    let mediaIdentity: MediaIdentity
     let media: TrackerMedia
     var showCancelButton: Bool = false
 
-    var onSave: (Int?, String?) -> Void
+    var onSave: (Int?, String?) async -> Bool
     var onDelete: (() -> Void)?
 
     @State private var status: String? = "PLANNING"
@@ -291,8 +335,10 @@ struct TrackerDetailsSheet: View {
     @State private var startDate = Date()
     @State private var finishDate: Date?
     @State private var isSaving = false
+    @State private var isUnlinking = false
     @State private var isLoadingEntry = true
     @State private var isNewEntry = true
+    @State private var showPersistenceError = false
 
     let statuses = ["CURRENT", "PLANNING", "COMPLETED", "DROPPED", "PAUSED", "REPEATING"]
 
@@ -316,6 +362,8 @@ struct TrackerDetailsSheet: View {
     @State private var maxLocalProgress: Int?
 
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject private var progressManager: ReadProgressManager
+    @EnvironmentObject private var trackerManager: TrackerManager
 
     var body: some View {
         Form {
@@ -418,16 +466,17 @@ struct TrackerDetailsSheet: View {
                     }
 
                     if !isNewEntry {
-                        Button(role: .destructive, action: {
-                            if let onDelete = onDelete {
-                                onDelete()
+                        Button(role: .destructive, action: stopTracking) {
+                            HStack {
+                                if isUnlinking {
+                                    ProgressView()
+                                        .accessibilityLabel("Stopping tracking")
+                                }
+                                Label("Stop Tracking", systemImage: "trash")
+                                    .foregroundColor(.red)
                             }
-                            TrackerManager.shared.unlink(localId: localId, providerId: provider.identifier)
-                            dismiss()
-                        }) {
-                            Label("Stop Tracking", systemImage: "trash")
-                                .foregroundColor(.red)
                         }
+                        .disabled(isUnlinking)
                     }
                 }
             }
@@ -437,7 +486,12 @@ struct TrackerDetailsSheet: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 if showCancelButton {
-                    Button("Cancel") { onSave(nil, nil); dismiss() }
+                    Button("Cancel") {
+                        Task { @MainActor in
+                            _ = await onSave(nil, nil)
+                            dismiss()
+                        }
+                    }
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
@@ -464,6 +518,11 @@ struct TrackerDetailsSheet: View {
                 Text("No local reading or watching history was found for this series.")
             }
         }
+        .alert("Tracker Change Not Saved", isPresented: $showPersistenceError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Your tracker change couldn't be saved. Please try again.")
+        }
         .task {
             guard isLoadingEntry else { return }
             await fetchExistingEntry()
@@ -475,8 +534,25 @@ struct TrackerDetailsSheet: View {
         }
     }
 
+    private func stopTracking() {
+        isUnlinking = true
+        Task { @MainActor in
+            do {
+                try await trackerManager.unlink(
+                    media: mediaIdentity,
+                    providerId: provider.identifier
+                )
+                onDelete?()
+                dismiss()
+            } catch {
+                isUnlinking = false
+                showPersistenceError = true
+            }
+        }
+    }
+
     private func calculateLocalProgress() {
-        if let readNumbers = ReadProgressManager.shared.readChapterNumbers[localId], let maxNum = readNumbers.max() {
+        if let maxNum = progressManager.readChapterNumbers(for: mediaIdentity).max() {
             self.maxLocalProgress = Int(maxNum)
             self.showSyncAlert = true
         } else {
@@ -527,7 +603,7 @@ struct TrackerDetailsSheet: View {
 
     private func saveProgress() {
         isSaving = true
-        Task {
+        Task { @MainActor in
             var savedProgress: Int?
             let progInt = Int(progress)
             let effectiveStatus = status
@@ -539,9 +615,9 @@ struct TrackerDetailsSheet: View {
                 AppLogger.ui.error("Failed saving TrackerProgress with status: \(error.localizedDescription)")
             }
 
-            await MainActor.run {
-                isSaving = false
-                onSave(savedProgress, effectiveStatus)
+            isSaving = false
+            let shouldDismiss = await onSave(savedProgress, effectiveStatus)
+            if shouldDismiss {
                 dismiss()
             }
         }
