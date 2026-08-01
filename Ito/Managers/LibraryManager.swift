@@ -137,43 +137,6 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         }
     }
 
-    public func saveResolvedMedia(media: ResolvedPluginMedia, pluginId: String, anilistId: Int? = nil) {
-        let key: String
-        let title: String
-        let coverUrl: String?
-        let isAnime: Bool
-        let pluginType: PluginType
-        let count: Int
-        let payload: Data
-        switch media {
-        case .manga(let m):
-            key = m.key; title = m.title; coverUrl = m.cover; isAnime = false; pluginType = .manga; count = m.chapters?.count ?? 0
-            payload = (try? JSONEncoder().encode(m)) ?? Data()
-        case .anime(let a):
-            key = a.key; title = a.title; coverUrl = a.cover; isAnime = true; pluginType = .anime; count = a.episodes?.count ?? 0
-            payload = (try? JSONEncoder().encode(a)) ?? Data()
-        }
-        let legacyId = "\(pluginId)_\(key)"
-        Task {
-            do {
-                try await dbPool.write { db in
-                    if var existing = try LibraryItem.fetchOne(db, sql: "SELECT * FROM libraryItem WHERE id = ? OR id = ?", arguments: [key, legacyId]) {
-                        if let anilistId = anilistId { existing.anilistId = anilistId }
-                        try existing.update(db)
-                    } else {
-                        let newItem = LibraryItem(id: key, title: title, coverUrl: coverUrl, pluginId: pluginId, isAnime: isAnime, pluginType: pluginType, rawPayload: payload, anilistId: anilistId, knownChapterCount: count)
-                        try newItem.insert(db)
-                        if let uncategorized = try LibraryCategory.filter(Column("isSystemCategory") == true).fetchOne(db) {
-                            try ItemCategoryLink(itemId: newItem.id, categoryId: uncategorized.id).insert(db)
-                        }
-                    }
-                }
-            } catch {
-                AppLogger.database.error("Failed to save resolved media: \(error)")
-            }
-        }
-    }
-
     public func toggleSaveManga(manga: Manga, pluginId: String) {
         let payload = (try? JSONEncoder().encode(manga)) ?? Data()
         let count = manga.chapters?.count ?? 0
