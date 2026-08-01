@@ -8,6 +8,8 @@ public protocol LibraryManaging: ObservableObject {
     func removeItem(withId id: String)
     func toggleSaveManga(manga: Manga, pluginId: String)
     func toggleSaveNovel(novel: Novel, pluginId: String)
+    func saveResolvedMedia(media: ResolvedPluginMedia, pluginId: String, anilistId: Int?)
+
     func toggleSaveAnime(anime: Anime, pluginId: String)
 
     func setAnilistId(for itemId: String, anilistId: Int)

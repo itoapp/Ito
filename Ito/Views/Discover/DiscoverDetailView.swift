@@ -1,6 +1,7 @@
 import SwiftUI
 import NukeUI
 import Nuke
+import OSLog
 import ito_runner
 
 private let detailHeroHeight: CGFloat = 340
@@ -16,33 +17,38 @@ struct DiscoverDetailView: View {
     @State var media: DiscoverMedia
 
     @StateObject private var pluginManager = PluginManager.shared
+    @StateObject private var resolverViewModel: SourceResolverViewModel
     @State private var isDescriptionExpanded = false
     @State private var showNavTitle = false
 
-    @State private var selectedPlugin: InstalledPlugin?
-    @State private var pluginSearchResults: [PluginSearchResult] = []
-    @State private var isSearchingPlugin = false
-    @State private var pluginSearchError: String?
     @State private var themeDominant: Color?
     @State private var themeSecondary: Color?
 
-    private var uniqueMediaKey: String { "anilist_\(media.id)" }
+    // Manual Rejection Alert
+    @State private var mappingToReject: MatchedSource?
+    @State private var showingRejectConfirmation = false
 
-    private var matchingPlugins: [InstalledPlugin] {
-        pluginManager.installedPlugins.values
-            .filter { plugin in
-                if media.type == "ANIME" {
-                    return plugin.info.type == .anime
-                } else {
-                    return plugin.info.type == .manga
-                }
-            }
-            .sorted { $0.info.name < $1.info.name }
+    // Manual Confirmation Alert for fuzzy/ambiguous
+    @State private var mappingToConfirm: MatchedSource?
+    @State private var showingConfirmAlert = false
+
+    init(media: DiscoverMedia) {
+        self._media = State(initialValue: media)
+        self._resolverViewModel = StateObject(wrappedValue: SourceResolverViewModel(media: media))
     }
+
+    private var uniqueMediaKey: String { "anilist_\(media.id)" }
 
     private var cleanDescription: String? {
         guard let desc = media.description, !desc.isEmpty else { return nil }
         return desc.strippingHTML()
+    }
+
+    private var navigationBinding: Binding<Bool> {
+        Binding(
+            get: { resolverViewModel.isSourceDestinationPresented },
+            set: { resolverViewModel.navigationBindingDidSet($0) }
+        )
     }
 
     var body: some View {
@@ -57,38 +63,47 @@ struct DiscoverDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     SharedHeroHeader(
-                    title: media.title,
-                    backdropURL: media.bannerImage,
-                    coverURL: media.coverImage,
-                    authorOrStudio: media.titleRomaji != media.title ? media.titleRomaji : nil,
-                    statusLabel: media.status?.replacingOccurrences(of: "_", with: " ").capitalized,
-                    pluginId: media.averageScore != nil ? "★ \(media.averageScore!)%" : (media.format?.replacingOccurrences(of: "_", with: " ") ?? "Discover"),
-                    onImageLoaded: { uiImage in
-                        let key = uniqueMediaKey
-                        Task {
-                            await ThemeManager.shared.extractAndCache(image: uiImage, for: key)
-                            if let theme = await ThemeManager.shared.getTheme(for: key) {
-                                withAnimation(.easeIn(duration: 0.6)) {
-                                    self.themeDominant = Color(hex: theme.dominantHex)
-                                    self.themeSecondary = Color(hex: theme.secondaryHex)
+                        title: media.title,
+                        backdropURL: media.bannerImage,
+                        coverURL: media.coverImage,
+                        authorOrStudio: media.titleRomaji != media.title ? media.titleRomaji : nil,
+                        statusLabel: media.status?.replacingOccurrences(of: "_", with: " ").capitalized,
+                        pluginId: media.averageScore != nil ? "★ \(media.averageScore!)%" : (media.format?.replacingOccurrences(of: "_", with: " ") ?? "Discover"),
+                        onImageLoaded: { uiImage in
+                            let key = uniqueMediaKey
+                            Task {
+                                await ThemeManager.shared.extractAndCache(image: uiImage, for: key)
+                                if let theme = await ThemeManager.shared.getTheme(for: key) {
+                                    withAnimation(.easeIn(duration: 0.6)) {
+                                        self.themeDominant = Color(hex: theme.dominantHex)
+                                        self.themeSecondary = Color(hex: theme.secondaryHex)
+                                    }
                                 }
                             }
                         }
-                    }
-                )
-                .background(
-                    GeometryReader { geo in
-                        Color.clear.preference(
-                            key: DetailNavTitleKey.self,
-                            value: geo.frame(in: .global).maxY < 0
-                        )
-                    }
-                )
+                    )
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: DetailNavTitleKey.self,
+                                value: geo.frame(in: .global).maxY < 0
+                            )
+                        }
+                    )
 
-                contentSection
+                    contentSection
+                }
             }
-        }
-        .background(Color.clear)
+            .background(Color.clear)
+
+            // Top-level, stable navigation host
+            NavigationLink(
+                isActive: navigationBinding,
+                destination: {
+                    SourceDestinationHost(resolverViewModel: resolverViewModel)
+                },
+                label: { EmptyView() }
+            )
         }
         .coordinateSpace(name: "scroll")
         .onPreferenceChange(DetailNavTitleKey.self) { heroGone in
@@ -115,6 +130,25 @@ struct DiscoverDetailView: View {
                 await MainActor.run { self.media = fetched }
             }
         }
+        .onAppear {
+            resolverViewModel.startCheckAndResolve()
+        }
+        .alert("Reject Source?", isPresented: $showingRejectConfirmation, presenting: mappingToReject) { match in
+            Button("Reject", role: .destructive) {
+                resolverViewModel.rejectAndMark(match: match)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { match in
+            Text("Are you sure you want to reject this match?")
+        }
+        .alert("Confirm Source?", isPresented: $showingConfirmAlert, presenting: mappingToConfirm) { match in
+            Button("Confirm", role: .none) {
+                resolverViewModel.confirmAndRoute(match: match)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { match in
+            Text("This is an ambiguous match. Are you sure you want to link it?")
+        }
     }
 
     // MARK: - Content Section
@@ -134,7 +168,7 @@ struct DiscoverDetailView: View {
 
             Divider().padding(.horizontal, 16)
 
-            sourceSelectionSection
+            sourceResolverSection
 
             if let recommendations = media.recommendations, !recommendations.isEmpty {
                 Divider().padding(.horizontal, 16)
@@ -221,20 +255,94 @@ struct DiscoverDetailView: View {
         .padding(.horizontal, 16)
     }
 
-    // MARK: - Source Selection
+    // MARK: - Source Resolver Section
 
-    private var sourceSelectionSection: some View {
+    private var sourceResolverSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Read with Plugin")
+            Text("Read with Plugins")
                 .font(.title3.weight(.bold))
                 .padding(.horizontal, 16)
 
-            if matchingPlugins.isEmpty {
+            if let error = resolverViewModel.pluginSearchError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 16)
+            }
+
+            switch resolverViewModel.state {
+            case .idle:
+                EmptyView()
+            case .savedSource(let mapping, let payload):
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        if let plugin = PluginManager.shared.installedPlugins[mapping.pluginId],
+                           let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            Image(systemName: "puzzlepiece.extension.fill")
+                                .foregroundStyle(Color.accentColor).imageScale(.large)
+                                .frame(width: 40, height: 40)
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(payload.title())
+                                .font(.headline)
+                                .lineLimit(1)
+
+                            let pluginName = PluginManager.shared.installedPlugins[mapping.pluginId]?.info.name ?? mapping.pluginId
+                            Text("Saved Source • \(pluginName) • Confirmed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+
+                        Button("Open") {
+                            resolverViewModel.openSavedSource(mapping: mapping, payload: payload)
+                        }
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.horizontal, 16)
+
+                    Button("Search Other Sources") {
+                        resolverViewModel.resolve()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                }
+            case .loading(let matches):
+                VStack(spacing: 12) {
+                    HStack {
+                        ProgressView().progressViewStyle(.circular)
+                            .padding(.trailing, 8)
+                        Text("Searching installed sources...")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+
+                    if !matches.isEmpty {
+                        Divider().padding(.horizontal, 16)
+                        matchesList(matches)
+                    }
+                }
+            case .completed(let matches):
+                matchesList(matches)
+            case .noCompatiblePlugins:
                 VStack(spacing: 12) {
                     Image(systemName: "puzzlepiece.extension")
                         .font(.system(size: 36, weight: .thin))
                         .foregroundStyle(.secondary)
-                    Text("No \(media.type == "ANIME" ? "anime" : "manga") plugins installed")
+                    Text("No plugins installed")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Text("Install plugins from the Browse tab to source content.")
@@ -246,117 +354,80 @@ struct DiscoverDetailView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 24)
                 .padding(.horizontal, 16)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(matchingPlugins, id: \.id) { plugin in
-                        PluginSourceRow(
-                            plugin: plugin,
-                            isSelected: selectedPlugin?.id == plugin.id,
-                            isSearching: isSearchingPlugin && selectedPlugin?.id == plugin.id
-                        ) {
-                            searchPlugin(plugin)
-                        }
-                        Divider().padding(.leading, 72)
-                    }
+            case .empty:
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 36, weight: .thin))
+                        .foregroundStyle(.secondary)
+                    Text("No matches found")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .padding(.horizontal, 16)
+            case .partialFailure(let matches, let failedPlugins):
+                VStack(alignment: .leading, spacing: 12) {
+                    if !matches.isEmpty {
+                        matchesList(matches)
+                        Divider().padding(.horizontal, 16)
+                    }
 
-                if let error = pluginSearchError {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Some plugins failed: \(failedPlugins.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                }
+            case .fatalFailure(let error):
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 36, weight: .thin))
+                        .foregroundStyle(.red)
+                    Text("Error")
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
                     Text(error)
                         .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 16)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
-
-                if !pluginSearchResults.isEmpty {
-                    pluginResultsSection
-                }
-            }
-        }
-    }
-
-    // MARK: - Plugin Results
-
-    private var pluginResultsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Results from \(selectedPlugin?.info.name ?? "Plugin")")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
-
-            VStack(spacing: 0) {
-                ForEach(pluginSearchResults) { result in
-                    NavigationLink(destination: result.destination) {
-                        PluginResultRow(result: result)
-                    }
-                    Divider().padding(.leading, 72)
-                }
+            case .cancelled:
+                Text("Search cancelled.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
             }
         }
     }
 
-    // MARK: - Plugin Search
-
-    private func searchPlugin(_ plugin: InstalledPlugin) {
-        selectedPlugin = plugin
-        pluginSearchResults = []
-        pluginSearchError = nil
-        isSearchingPlugin = true
-
-        Task {
-            do {
-                let runner = try await PluginManager.shared.getRunner(for: plugin.id)
-                let searchTitle = media.titleRomaji ?? media.title
-                let pluginId = plugin.url.deletingPathExtension().lastPathComponent
-
-                switch plugin.info.type {
-                case .manga:
-                    let result = try await runner.getSearchMangaList(query: searchTitle, page: 1, filters: [])
-                    await MainActor.run {
-                        self.pluginSearchResults = result.entries.prefix(5).map { manga in
-                            PluginSearchResult(
-                                id: manga.key,
-                                title: manga.title,
-                                cover: manga.cover,
-                                subtitle: manga.authors?.joined(separator: ", "),
-                                destination: AnyView(MediaDetailView(runner: runner, media: manga, pluginId: pluginId) { try await runner.getMangaUpdate(manga: $0) })
-                            )
+    private func matchesList(_ matches: [MatchedSource]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(matches.enumerated()), id: \.offset) { index, match in
+                ResolvedSourceRow(
+                    match: match,
+                    isProcessing: resolverViewModel.processingMatchId == match.media.key(),
+                    onConfirm: {
+                        if match.decision == .autoConfirm {
+                            resolverViewModel.confirmAndRoute(match: match)
+                        } else {
+                            mappingToConfirm = match
+                            showingConfirmAlert = true
                         }
-                        self.isSearchingPlugin = false
+                    },
+                    onReject: {
+                        mappingToReject = match
+                        showingRejectConfirmation = true
                     }
-                case .anime:
-                    let result = try await runner.getSearchAnimeList(query: searchTitle, page: 1, filters: [])
-                    await MainActor.run {
-                        self.pluginSearchResults = result.entries.prefix(5).map { anime in
-                            PluginSearchResult(
-                                id: anime.key,
-                                title: anime.title,
-                                cover: anime.cover,
-                                subtitle: anime.studios?.joined(separator: ", "),
-                                destination: AnyView(MediaDetailView(runner: runner, media: anime, pluginId: pluginId) { try await runner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) })
-                            )
-                        }
-                        self.isSearchingPlugin = false
-                    }
-                case .novel:
-                    let result = try await runner.getSearchNovelList(query: searchTitle, page: 1, filters: [])
-                    await MainActor.run {
-                        self.pluginSearchResults = result.entries.prefix(5).map { novel in
-                            PluginSearchResult(
-                                id: novel.key,
-                                title: novel.title,
-                                cover: novel.cover,
-                                subtitle: novel.authors?.joined(separator: ", "),
-                                destination: AnyView(MediaDetailView(runner: runner, media: novel, pluginId: pluginId) { try await runner.getNovelUpdate(novel: $0) })
-                            )
-                        }
-                        self.isSearchingPlugin = false
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    self.pluginSearchError = "Search failed: \(error.localizedDescription)"
-                    self.isSearchingPlugin = false
+                )
+                if index != matches.count - 1 {
+                    Divider().padding(.leading, 72)
                 }
             }
         }
@@ -383,6 +454,65 @@ struct DiscoverDetailView: View {
             }
         }
         .padding(.top, 8)
+    }
+}
+
+private struct SourceDestinationHost: View {
+    @ObservedObject var resolverViewModel: SourceResolverViewModel
+
+    var body: some View {
+        Group {
+            if let route = resolverViewModel.sourceRoute {
+                destinationContent(route)
+            } else {
+                Color.clear
+            }
+        }
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    resolverViewModel.manualDestinationPopRequested()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.backward")
+                        Text("Back")
+                    }
+                }
+            }
+        }
+        .onAppear {
+            resolverViewModel.destinationDidAppear()
+        }
+        .onDisappear {
+            resolverViewModel.destinationDidDisappear()
+        }
+    }
+
+    @ViewBuilder
+    private func destinationContent(_ route: SourceRoute) -> some View {
+        switch route.media {
+        case .manga(let manga):
+            MediaDetailView(runner: route.runner, media: manga, pluginId: route.pluginID) { updated in
+                try await route.runner.getMangaUpdate(manga: updated)
+            }
+            .onReceive(LibraryManager.shared.$items) { items in
+                if let id = route.anilistID,
+                   items.contains(where: { $0.id == manga.key && $0.anilistId == nil }) {
+                    LibraryManager.shared.setAnilistId(for: manga.key, anilistId: id)
+                }
+            }
+        case .anime(let anime):
+            MediaDetailView(runner: route.runner, media: anime, pluginId: route.pluginID) { updated in
+                try await route.runner.getAnimeUpdate(anime: updated, needsDetails: true, needsEpisodes: true)
+            }
+            .onReceive(LibraryManager.shared.$items) { items in
+                if let id = route.anilistID,
+                   items.contains(where: { $0.id == anime.key && $0.anilistId == nil }) {
+                    LibraryManager.shared.setAnilistId(for: anime.key, anilistId: id)
+                }
+            }
+        }
     }
 }
 
@@ -436,53 +566,98 @@ private struct DiscoverRecommendationCard: View {
     }
 }
 
-// MARK: - Plugin Source Row
+// MARK: - Resolved Source Row
 
-private struct PluginSourceRow: View {
-    let plugin: InstalledPlugin
-    let isSelected: Bool
-    let isSearching: Bool
-    let onTap: () -> Void
+private struct ResolvedSourceRow: View {
+    let match: MatchedSource
+    let isProcessing: Bool
+    let onConfirm: () -> Void
+    let onReject: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 12) {
-                if let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 40, height: 40)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                } else {
-                    Image(systemName: "puzzlepiece.extension.fill")
-                        .foregroundStyle(Color.accentColor).imageScale(.large)
-                        .frame(width: 40, height: 40)
-                }
+        HStack(spacing: 12) {
+            if let plugin = PluginManager.shared.installedPlugins[match.pluginID],
+               let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .opacity(match.decision == .discard ? 0.4 : 1.0)
+            } else {
+                Image(systemName: "puzzlepiece.extension.fill")
+                    .foregroundStyle(Color.accentColor).imageScale(.large)
+                    .frame(width: 40, height: 40)
+                    .opacity(match.decision == .discard ? 0.4 : 1.0)
+            }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(plugin.info.name)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text("v\(plugin.info.version)")
-                        .font(.caption)
+            VStack(alignment: .leading, spacing: 2) {
+                let mediaTitle = match.media.title()
+                Text(mediaTitle)
+                    .font(.headline)
+                    .strikethrough(match.decision == .discard)
+                    .foregroundStyle(match.decision == .discard ? .secondary : .primary)
+                    .lineLimit(1)
+
+                let pluginName = PluginManager.shared.installedPlugins[match.pluginID]?.info.name ?? match.pluginID
+                Text("\(pluginName) • \(matchMethodString(match.matchMethod))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            ZStack {
+                Menu {
+                    Button("Confirm", action: onConfirm)
+                    Button("Reject", role: .destructive, action: onReject)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .padding(8)
                 }
+                .opacity(match.decision != .discard && !isProcessing ? 1 : 0)
+                .disabled(match.decision == .discard || isProcessing)
 
-                Spacer()
-
-                if isSearching {
-                    ProgressView().progressViewStyle(.circular)
-                } else {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                if isProcessing {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .padding(8)
+                } else if match.decision == .discard {
+                    Button("Revert") {
+                        onConfirm()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(isSelected ? Color.itoCardBackground : Color.clear)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isProcessing && match.decision != .discard else { return }
+            onConfirm()
+        }
+    }
+
+    private func matchMethodString(_ method: MatchMethod) -> String {
+        switch method {
+        case .exactPreferred: return "Exact Match"
+        case .exactAlternative: return "Exact Alt Match"
+        case .fuzzy: return String(format: "Fuzzy (%.0f%%)", match.score * 100)
+        case .none: return "No Match"
+        }
+    }
+}
+
+// Extension to safely get title from ResolvedPluginMedia
+private extension ResolvedPluginMedia {
+    func title() -> String {
+        switch self {
+        case .manga(let m): return m.title
+        case .anime(let a): return a.title
+        }
     }
 }
