@@ -14,6 +14,7 @@ public final class AppDatabase: Sendable {
     }()
 
     public let dbPool: DatabasePool
+    public let databaseURL: URL
 
     private init() throws {
         let fileManager = FileManager.default
@@ -25,6 +26,7 @@ public final class AppDatabase: Sendable {
         }
 
         let databaseURL = directoryURL.appendingPathComponent("ItoLibrary.sqlite")
+        self.databaseURL = databaseURL
 
         var configuration = Configuration()
         #if DEBUG
@@ -145,6 +147,336 @@ public final class AppDatabase: Sendable {
             try db.create(index: "idx_sourceMapping_plugin", on: "sourceMapping", columns: ["pluginId", "pluginMediaKey"])
         }
 
+        // MARK: - v6: Durable State Contracts
+        migrator.registerMigration("v6") { db in
+            try db.create(table: "readProgressKey") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("canonicalMediaId", .text).notNull()
+                t.column("chapterKey", .text).notNull()
+                t.column("markedAt", .datetime)
+                t.column("provenance", .text)
+                t.primaryKey(["pluginId", "canonicalMediaId", "chapterKey"])
+                t.check(sql: "provenance IS NULL OR provenance IN ('runtime', 'legacyUnknownTime')")
+            }
+
+            try db.create(table: "readProgressNumber") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("canonicalMediaId", .text).notNull()
+                t.column("chapterNumber", .double).notNull()
+                t.column("markedAt", .datetime)
+                t.column("provenance", .text)
+                t.primaryKey(["pluginId", "canonicalMediaId", "chapterNumber"])
+                t.check(sql: "provenance IS NULL OR provenance IN ('runtime', 'legacyUnknownTime')")
+            }
+
+            try db.create(table: "mediaReadProgress") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("canonicalMediaId", .text).notNull()
+                t.column("lastReadChapterKey", .text).notNull()
+                t.column("updatedAt", .datetime)
+                t.column("provenance", .text)
+                t.primaryKey(["pluginId", "canonicalMediaId"])
+                t.check(sql: "provenance IS NULL OR provenance IN ('runtime', 'legacyUnknownTime')")
+            }
+
+            try db.create(table: "trackerLink") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("canonicalMediaId", .text).notNull()
+                t.column("providerId", .text).notNull()
+                t.column("remoteMediaId", .text).notNull()
+                t.column("updatedAt", .datetime)
+                t.column("provenance", .text)
+                t.primaryKey(["pluginId", "canonicalMediaId", "providerId"])
+                t.check(sql: "provenance IS NULL OR provenance IN ('runtime', 'legacyUnknownTime')")
+            }
+
+            try db.create(table: "updateBadge") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("canonicalMediaId", .text).notNull()
+                t.column("count", .integer).notNull().check { $0 >= 0 }
+                t.column("updatedAt", .datetime)
+                t.column("provenance", .text)
+                t.primaryKey(["pluginId", "canonicalMediaId"])
+                t.check(sql: "provenance IS NULL OR provenance IN ('runtime', 'legacyUnknownTime')")
+            }
+
+            try db.create(table: "repository") { t in
+                t.primaryKey("url", .text)
+                t.column("lastFetched", .datetime)
+                t.column("indexPayload", .blob)
+            }
+
+            try db.create(table: "pluginMigrationAlias") { t in
+                t.primaryKey("foreignId", .text)
+                t.column("pluginId", .text).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+
+            try db.create(table: "pluginSetting") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("key", .text).notNull()
+                t.column("value", .blob).notNull()
+                t.column("updatedAt", .datetime)
+                t.primaryKey(["pluginId", "key"])
+            }
+
+            try db.create(table: "pluginIdentityRegistry") { t in
+                t.primaryKey("pluginId", .text)
+                t.column("manifestId", .text)
+                t.column("lastSeenAt", .datetime).notNull()
+            }
+
+            try db.create(table: "pluginIdentityAlias") { t in
+                t.column("pluginId", .text).notNull()
+                    .references("pluginIdentityRegistry", onDelete: .cascade)
+                t.column("aliasKind", .text).notNull()
+                t.column("aliasValue", .text).notNull()
+                t.column("suiteDomain", .text)
+                t.column("discoverySource", .text).notNull()
+                t.column("lastSeenAt", .datetime).notNull()
+                t.primaryKey(["pluginId", "aliasKind", "aliasValue"])
+                t.uniqueKey(["suiteDomain"])
+            }
+
+            try db.create(table: "legacyDefaultsInbox") { t in
+                t.column("sourceDomain", .text).notNull()
+                t.column("sourceKey", .text).notNull()
+                t.column("valueType", .text).notNull()
+                t.column("canonicalPayload", .blob).notNull()
+                t.column("fingerprint", .text).notNull()
+                t.column("expectedElementCount", .integer).notNull().check { $0 >= 0 }
+                t.column("capturedAt", .datetime).notNull()
+                t.column("lifecycleStatus", .text).notNull()
+                t.primaryKey(["sourceDomain", "sourceKey", "fingerprint"])
+                t.check(sql: "lifecycleStatus IN ('captured', 'resolved')")
+            }
+
+            try db.execute(sql: """
+                CREATE TRIGGER legacyDefaultsInbox_immutablePayload
+                BEFORE UPDATE OF sourceDomain, sourceKey, valueType, canonicalPayload, fingerprint, expectedElementCount
+                ON legacyDefaultsInbox
+                BEGIN
+                    SELECT RAISE(ABORT, 'legacyDefaultsInbox canonical capture is immutable');
+                END
+                """)
+
+            try db.create(table: "legacyDefaultsOutcome") { t in
+                t.column("sourceDomain", .text).notNull()
+                t.column("sourceKey", .text).notNull()
+                t.column("fingerprint", .text).notNull()
+                t.column("elementPath", .text).notNull()
+                t.column("disposition", .text).notNull()
+                t.column("targetKind", .text).notNull()
+                t.column("targetIdentity", .text).notNull()
+                t.column("targetFingerprint", .text).notNull()
+                t.primaryKey([
+                    "sourceDomain", "sourceKey", "fingerprint", "elementPath",
+                    "disposition", "targetKind", "targetIdentity"
+                ])
+                t.foreignKey(
+                    ["sourceDomain", "sourceKey", "fingerprint"],
+                    references: "legacyDefaultsInbox",
+                    onDelete: .cascade
+                )
+                t.check(sql: "disposition IN ('normalized', 'archived', 'unscoped')")
+            }
+
+            try db.create(table: "legacyUnscopedMediaState") { t in
+                t.column("sourceKey", .text).notNull()
+                t.column("legacyMediaId", .text).notNull()
+                t.column("canonicalPayload", .blob).notNull()
+                t.column("candidates", .blob).notNull()
+                t.column("fingerprint", .text).notNull()
+                t.primaryKey(["sourceKey", "legacyMediaId", "fingerprint"])
+            }
+
+            try db.create(table: "legacyStateMigration") { t in
+                t.column("sourceDomain", .text).notNull()
+                t.column("sourceKey", .text).notNull()
+                t.column("fingerprint", .text).notNull()
+                t.column("status", .text).notNull()
+                t.column("updatedAt", .datetime).notNull()
+                t.primaryKey(["sourceDomain", "sourceKey", "fingerprint"])
+                t.check(sql: "status IN ('captured', 'cleanupPending', 'cleanupVerified', 'resolved')")
+            }
+
+            try db.execute(sql: """
+                CREATE TRIGGER legacyStateMigration_monotonicStatus
+                BEFORE UPDATE OF status ON legacyStateMigration
+                WHEN CASE OLD.status
+                    WHEN 'captured' THEN 0
+                    WHEN 'cleanupPending' THEN 1
+                    WHEN 'cleanupVerified' THEN 2
+                    WHEN 'resolved' THEN 3
+                END > CASE NEW.status
+                    WHEN 'captured' THEN 0
+                    WHEN 'cleanupPending' THEN 1
+                    WHEN 'cleanupVerified' THEN 2
+                    WHEN 'resolved' THEN 3
+                END
+                BEGIN
+                    SELECT RAISE(ABORT, 'legacyStateMigration status cannot regress');
+                END
+                """)
+
+            try db.create(table: "legacyStateArchive") { t in
+                t.column("id", .integer).notNull().primaryKey(autoincrement: true)
+                t.column("sourceDomain", .text).notNull()
+                t.column("sourceKey", .text).notNull()
+                t.column("contentClass", .text).notNull()
+                t.column("valueType", .text).notNull()
+                t.column("valuePayload", .blob).notNull()
+                t.column("fingerprint", .text).notNull()
+                t.column("reason", .text).notNull()
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["sourceDomain", "sourceKey", "contentClass", "valueType", "fingerprint"])
+                t.check(sql: "contentClass IN ('appNonSecret', 'opaquePluginState')")
+            }
+
+            try db.create(table: "backupMetadata") { t in
+                t.column("id", .integer).notNull().primaryKey().check { $0 == 1 }
+                t.column("formatVersion", .integer).notNull().check { $0 > 0 }
+                t.column("createdAt", .datetime).notNull()
+            }
+
+            try db.create(table: "backupCapability") { t in
+                t.primaryKey("component", .text)
+                t.column("representation", .text).notNull()
+                t.check(sql: "component IN ('libraryCore', 'readingHistory', 'scalarAppPreferences', 'readProgressAndResume', 'trackerLinks', 'updateBadges', 'repositories', 'userImporterAliases', 'pluginIdentityAndAliases', 'pluginSettings', 'legacyUnscopedMediaState', 'legacyStateArchive')")
+                t.check(sql: "representation IN ('representedEmpty', 'representedNonempty')")
+            }
+
+            try db.create(table: "backupRestoreJournal") { t in
+                t.primaryKey("operationId", .text)
+                t.column("status", .text).notNull()
+                t.column("reportPayload", .blob).notNull()
+                t.column("updatedAt", .datetime).notNull()
+                t.check(sql: "status IN ('pendingRefresh', 'readyToPresent')")
+            }
+
+            try backfillLegacyAniListLinks(in: db)
+            // v4 compatibility only: this transforms an already-durable database row.
+            // Standard-domain UserDefaults capture/removal belongs exclusively to
+            // LegacyDefaultsMigrator after schema migration.
+            try migrateLegacyRepositories(in: db)
+
+            try db.create(index: "idx_readProgressKey_media", on: "readProgressKey", columns: ["pluginId", "canonicalMediaId"])
+            try db.create(index: "idx_readProgressNumber_media", on: "readProgressNumber", columns: ["pluginId", "canonicalMediaId"])
+            try db.create(index: "idx_trackerLink_provider", on: "trackerLink", columns: ["providerId", "remoteMediaId"])
+            try db.create(index: "idx_pluginIdentityAlias_suiteDomain", on: "pluginIdentityAlias", columns: ["suiteDomain"])
+            try db.create(index: "idx_legacyDefaultsOutcome_inbox", on: "legacyDefaultsOutcome", columns: ["sourceDomain", "sourceKey", "fingerprint"])
+        }
+
+        // MARK: - v7: Installation-local Plugin Migration Authority
+        migrator.registerMigration("v7") { db in
+            try db.create(table: "pluginSettingMigrationAuthority") { t in
+                t.column("pluginId", .text).notNull()
+                t.column("key", .text).notNull()
+                t.column("sourceDomain", .text).notNull()
+                t.column("sourceKey", .text).notNull()
+                t.column("sourceFingerprint", .text).notNull()
+                t.primaryKey(["pluginId", "key"])
+                t.foreignKey(
+                    ["pluginId", "key"],
+                    references: "pluginSetting",
+                    onDelete: .cascade
+                )
+                t.foreignKey(
+                    ["sourceDomain", "sourceKey", "sourceFingerprint"],
+                    references: "legacyDefaultsInbox",
+                    columns: ["sourceDomain", "sourceKey", "fingerprint"],
+                    onDelete: .cascade
+                )
+            }
+
+            try db.execute(sql: """
+                CREATE TRIGGER pluginSetting_clearMigrationAuthority
+                AFTER UPDATE ON pluginSetting
+                BEGIN
+                    DELETE FROM pluginSettingMigrationAuthority
+                    WHERE pluginId = NEW.pluginId AND key = NEW.key;
+                END
+                """)
+        }
+
+        // MARK: - v8: Source Mapping Backup Capability
+        migrator.registerMigration("v8") { db in
+            try db.execute(
+                sql: "ALTER TABLE backupCapability RENAME TO backupCapability_v7"
+            )
+            try db.create(table: "backupCapability") { t in
+                t.primaryKey("component", .text)
+                t.column("representation", .text).notNull()
+                t.check(sql: "component IN ('libraryCore', 'readingHistory', 'sourceMappings', 'scalarAppPreferences', 'readProgressAndResume', 'trackerLinks', 'updateBadges', 'repositories', 'userImporterAliases', 'pluginIdentityAndAliases', 'pluginSettings', 'legacyUnscopedMediaState', 'legacyStateArchive')")
+                t.check(sql: "representation IN ('representedEmpty', 'representedNonempty')")
+            }
+            try db.execute(
+                sql: """
+                    INSERT INTO backupCapability (component, representation)
+                    SELECT component, representation
+                    FROM backupCapability_v7
+                    """
+            )
+            try db.drop(table: "backupCapability_v7")
+        }
+
         return migrator
+    }
+
+    nonisolated static func backfillLegacyAniListLinks(in db: Database) throws {
+        // `libraryItem.anilistId` is compatibility input only. A preexisting scoped
+        // link is authoritative and wins because the logical key uses INSERT OR IGNORE.
+        try db.execute(sql: """
+            INSERT OR IGNORE INTO trackerLink
+                (pluginId, canonicalMediaId, providerId, remoteMediaId, updatedAt, provenance)
+            SELECT
+                pluginId,
+                CASE
+                    WHEN substr(id, 1, length(pluginId) + 1) = pluginId || '_'
+                    THEN substr(id, length(pluginId) + 2)
+                    ELSE id
+                END,
+                'anilist',
+                CAST(anilistId AS TEXT),
+                NULL,
+                'legacyUnknownTime'
+            FROM libraryItem
+            WHERE anilistId IS NOT NULL
+            """)
+    }
+
+    nonisolated static func migrateLegacyRepositories(
+        in db: Database,
+        beforeReadback: ((Database) throws -> Void)? = nil
+    ) throws {
+        guard let preference = try AppPreference.fetchOne(db, key: "ito_repositories"),
+              let repositories = try? JSONDecoder().decode([Repository].self, from: preference.value),
+              Set(repositories.map(\.url)).count == repositories.count else {
+            return
+        }
+
+        let expectedRecords = try repositories.map { repository in
+            RepositoryRecord(
+                url: repository.url,
+                lastFetched: repository.lastFetched,
+                indexPayload: try repository.index.map { try JSONEncoder().encode($0) }
+            )
+        }.sorted { $0.url < $1.url }
+
+        var verified = false
+        try db.inSavepoint {
+            for record in expectedRecords {
+                try record.insert(db)
+            }
+
+            try beforeReadback?(db)
+            let storedRecords = try RepositoryRecord.fetchAll(db).sorted { $0.url < $1.url }
+            verified = storedRecords == expectedRecords
+            return verified ? .commit : .rollback
+        }
+
+        if verified {
+            _ = try AppPreference.deleteOne(db, key: "ito_repositories")
+        }
     }
 }

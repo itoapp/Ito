@@ -3,6 +3,7 @@ import ito_runner
 
 struct SearchView: View {
     @StateObject private var viewModel = SearchViewModel()
+    @EnvironmentObject private var pluginManager: PluginManager
 
     var body: some View {
         NavigationView {
@@ -135,6 +136,9 @@ struct SearchView: View {
             .searchable(text: $viewModel.searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Manga, Anime, and Novels")
             .disableAutocorrection(true)
         }
+        .task {
+            viewModel.configure(pluginManager: pluginManager)
+        }
         .navigationViewStyle(.stack)
     }
 
@@ -148,7 +152,7 @@ struct SearchView: View {
 
             if viewModel.isSearching {
                 let stillSearching = viewModel.activeTasks.contains { id in
-                    PluginManager.shared.installedPlugins[id]?.info.name == pluginName
+                    pluginManager.installedPlugins[id]?.info.name == pluginName
                 }
                 if stillSearching {
                     ProgressView().progressViewStyle(.circular).controlSize(.small)

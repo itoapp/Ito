@@ -6,7 +6,7 @@ import ito_runner
 // MARK: - RepositoriesView
 
 struct RepositoriesView: View {
-    @ObservedObject private var repoManager = RepoManager.shared
+    @EnvironmentObject private var repoManager: RepoManager
     @State private var showingAddRepo = false
     @State private var newRepoUrl = ""
     @State private var isAddingRepo = false
@@ -182,7 +182,8 @@ struct RepositoriesView: View {
 
     private func performDelete(at offsets: IndexSet) {
         offsets.forEach { index in
-            repoManager.removeRepository(url: repoManager.repositories[index].url)
+            let url = repoManager.repositories[index].url
+            Task { try await repoManager.removeRepository(url: url) }
         }
     }
 
@@ -209,8 +210,8 @@ struct RepositoriesView: View {
 
 struct RepoDetailView: View {
     let repository: Repository
-    @ObservedObject private var repoManager = RepoManager.shared
-    @ObservedObject private var pluginManager = PluginManager.shared
+    @EnvironmentObject private var repoManager: RepoManager
+    @EnvironmentObject private var pluginManager: PluginManager
 
     @State private var searchQuery = ""
     @State private var installingPackageId: String?

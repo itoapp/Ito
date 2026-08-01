@@ -15,7 +15,9 @@ struct TrackerManagerCredentialInjectionTests {
         #expect(subject.manager.providers.map(\.identifier) == ["anilist"])
         #expect(subject.manager.providers.map(\.name) == ["AniList"])
         #expect(subject.manager.authenticatedProviders.isEmpty)
-        #expect(subject.manager.trackerMappings == ["local-fixture": ["anilist": "42"]])
+        #expect(!subject.manager.hasLinks(
+            for: MediaIdentity(pluginId: "legacy", canonicalMediaId: "local-fixture")
+        ))
 
         await subject.manager.bootstrapCredentials()
 
@@ -93,24 +95,31 @@ struct TrackerManagerCredentialInjectionTests {
     ) throws -> TrackerManagerSubject {
         let suiteName = "TrackerManagerCredentialInjectionTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
-        let mappings = ["local-fixture": ["anilist": "42"]]
-        defaults.set(try JSONEncoder().encode(mappings), forKey: "Ito.MultiTrackerMappings")
+        let database = try TestDatabase()
         let manager = TrackerManager(
+            dbPool: database.dbPool,
             credentialStore: secureStore,
             legacyTokenStore: legacyStore,
-            defaults: defaults
+            usernameDefaults: defaults
         )
-        return TrackerManagerSubject(manager: manager, defaults: defaults, suiteName: suiteName)
+        return TrackerManagerSubject(
+            manager: manager,
+            database: database,
+            defaults: defaults,
+            suiteName: suiteName
+        )
     }
 }
 
 @MainActor
 private struct TrackerManagerSubject {
     let manager: TrackerManager
+    let database: TestDatabase
     let defaults: UserDefaults
     let suiteName: String
 
     func cleanup() {
         defaults.removePersistentDomain(forName: suiteName)
+        database.cleanup()
     }
 }

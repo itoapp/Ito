@@ -12,9 +12,13 @@ import ito_runner
 struct MigrationReportView: View {
     let report: MigrationReport
     let onDismiss: () -> Void
+    var remediationAllowed = true
+    var showsDismissButton = true
 
-    @StateObject private var repoManager = RepoManager.shared
-    @StateObject private var pluginManager = PluginManager.shared
+    @EnvironmentObject private var repoManager: RepoManager
+    @EnvironmentObject private var pluginResolver: PluginResolver
+    @EnvironmentObject private var librarySourceRemapper: LibrarySourceRemapper
+    @EnvironmentObject private var pluginManager: PluginManager
 
     @State private var installingSourceId: String?
     @State private var remappingPlugin: MigrationReport.UnresolvedPlugin?
@@ -33,11 +37,11 @@ struct MigrationReportView: View {
             .navigationTitle("Import Results")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // HIG: "Use labels like 'Done' consistently to indicate completion."
-                // Placed as confirmationAction per HIG toolbar guidance.
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done", action: onDismiss)
                         .font(.headline)
+                        .opacity(showsDismissButton ? 1 : 0)
+                        .disabled(!showsDismissButton)
                 }
             }
             .sheet(isPresented: $showRemapPicker) {
@@ -114,7 +118,11 @@ struct MigrationReportView: View {
         } header: {
             Text("Sources")
         } footer: {
-            Text("Install missing extensions, remap them to an existing Ito plugin, or skip to handle later from your library.")
+            if remediationAllowed {
+                Text("Install missing extensions, remap them to an existing Ito plugin, or skip to handle later from your library.")
+            } else {
+                Text("Remediation is unavailable until the restore report has been acknowledged.")
+            }
         }
     }
 
@@ -149,7 +157,7 @@ struct MigrationReportView: View {
                 }
             }
 
-            if !isResolved {
+            if !isResolved && remediationAllowed {
                 // HIG: Button roles communicate intent. Normal for install/remap,
                 // no destructive action here. Capsule shape provides clear tap targets.
                 // HIG: "Maintain movement in progress indicators" — ProgressView shown inline.
@@ -249,12 +257,12 @@ struct MigrationReportView: View {
     private func autoInstall(plugin: MigrationReport.UnresolvedPlugin) async {
         installingSourceId = plugin.foreignId
 
-        await RepoManager.shared.refreshAll()
+        await repoManager.refreshAll()
 
         var targetPkg: RepoPackage?
         var foundRepoUrl: String?
 
-        for repo in RepoManager.shared.repositories {
+        for repo in repoManager.repositories {
             if let pkg = repo.index?.packages.first(where: { $0.id == plugin.resolvedId }) {
                 targetPkg = pkg
                 foundRepoUrl = repo.url
@@ -264,9 +272,9 @@ struct MigrationReportView: View {
 
         if let pkg = targetPkg, let url = foundRepoUrl {
             do {
-                try await RepoManager.shared.installPackage(pkg, repositoryUrl: url)
+                try await repoManager.installPackage(pkg, repositoryUrl: url)
                 // Refresh plugin cache so library stops showing "missing plugin"
-                await PluginManager.shared.reloadInstalledPlugins()
+                await pluginManager.reloadInstalledPlugins()
                 withAnimation { _ = resolvedSources.insert(plugin.foreignId) }
             } catch {
                 installError = "Could not install \"\(plugin.foreignId)\": \(error.localizedDescription)"
@@ -285,26 +293,23 @@ struct MigrationReportView: View {
 
         Task {
             do {
-                let remapper = LibrarySourceRemapper(dbPool: AppDatabase.shared.dbPool)
-                let result = try await remapper.remapAndPersistAlias(
+                let result = try await librarySourceRemapper.remapAndPersistAlias(
                     foreignId: foreignId,
                     oldPluginId: plugin.resolvedId,
                     newPluginId: newPluginId,
                     affectedItemIds: plugin.affectedItemIds
                 ) { foreignId, newPluginId in
-                    await MainActor.run {
-                        PluginResolver.shared.saveUserAlias(
-                            foreignId: foreignId,
-                            itoPluginId: newPluginId
-                        )
-                    }
+                    try await pluginResolver.saveUserAlias(
+                        foreignId: foreignId,
+                        itoPluginId: newPluginId
+                    )
                 }
                 AppLogger.database.info("Remapped \(result.remappedItemCount) items from \(plugin.resolvedId) to \(newPluginId), moving \(result.movedLinkCount) links and \(result.movedHistoryCount) history rows")
                 await MainActor.run {
                     _ = withAnimation { resolvedSources.insert(foreignId) }
                 }
                 // Refresh plugin cache so library picks up the remapped IDs
-                await PluginManager.shared.reloadInstalledPlugins()
+                await pluginManager.reloadInstalledPlugins()
             } catch {
                 AppLogger.database.error("\("Remap failed for \(foreignId)"): \(error)")
                 await MainActor.run {
@@ -326,8 +331,8 @@ struct RemapPickerView: View {
     let onSelect: (String) -> Void
     let onCancel: () -> Void
 
-    @StateObject private var pluginManager = PluginManager.shared
-    @StateObject private var repoManager = RepoManager.shared
+    @EnvironmentObject private var pluginManager: PluginManager
+    @EnvironmentObject private var repoManager: RepoManager
     @State private var searchText = ""
 
     private var allOptions: [(id: String, name: String, isInstalled: Bool)] {

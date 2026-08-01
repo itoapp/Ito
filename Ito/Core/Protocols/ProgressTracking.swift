@@ -2,13 +2,11 @@ import Foundation
 import Combine
 
 public protocol ProgressTracking: ObservableObject {
-    var readChapters: [String: Set<String>] { get }
-    var readChapterNumbers: [String: Set<Float>] { get }
-    var lastReadChapter: [String: String] { get }
-
-    func markAsRead(mangaId: String, chapterId: String, chapterNum: Float?)
-    func markAsWatched(animeId: String, episodeId: String, episodeNum: Float?)
-    func isRead(mangaId: String, chapterId: String, chapterNum: Float?) -> Bool
-    func markReadUpTo(mangaId: String, maxChapterNum: Float)
-    func getLastRead(mangaId: String) -> String?
+    func markAsRead(media: MediaIdentity, chapterId: String, chapterNum: Float?) async throws
+    func markAsWatched(media: MediaIdentity, episodeId: String, episodeNum: Float?) async throws
+    func isRead(media: MediaIdentity, chapterId: String, chapterNum: Float?) -> Bool
+    func markReadUpTo(media: MediaIdentity, maxChapterNum: Float) async throws
+    func lastReadChapter(for media: MediaIdentity) -> String?
+    func readChapterNumbers(for media: MediaIdentity) -> Set<Float>
+    func reload() async throws
 }

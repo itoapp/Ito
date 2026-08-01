@@ -67,8 +67,12 @@ private struct PBChapterProgress: Decodable {
 }
 
 public struct PaperbackImporter: BackupImporter {
+    private let resolver: PluginResolver
 
-    public init() {}
+    @MainActor
+    public init(resolver: PluginResolver) {
+        self.resolver = resolver
+    }
 
     public func canHandle(url: URL) -> Bool {
         return url.pathExtension.lowercased() == "pas4" || url.pathExtension.lowercased() == "zip"
@@ -139,7 +143,7 @@ public struct PaperbackImporter: BackupImporter {
             if let cached = resolutionCache[src.sourceId] {
                 resolution = cached
             } else {
-                resolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: src.sourceId) }
+                resolution = resolver.resolve(foreignId: src.sourceId)
                 resolutionCache[src.sourceId] = resolution
             }
             let resolvedPluginId = resolution.resolvedId
@@ -240,7 +244,7 @@ public struct PaperbackImporter: BackupImporter {
                 if let cached = resolutionCache[src.sourceId] {
                     histResolution = cached
                 } else {
-                    histResolution = await MainActor.run { PluginResolver.shared.resolve(foreignId: src.sourceId) }
+                    histResolution = resolver.resolve(foreignId: src.sourceId)
                     resolutionCache[src.sourceId] = histResolution
                 }
                 let resolvedPluginId = histResolution.resolvedId
@@ -282,11 +286,38 @@ public struct PaperbackImporter: BackupImporter {
         )
 
         return ImportedBackup(
+            metadata: BackupMetadataRecord(formatVersion: 1, createdAt: Date()),
+            capabilities: [
+                BackupCapabilityRecord(
+                    component: .libraryCore,
+                    representation: libraryRepresentation(
+                        categories: importedCategories,
+                        items: importedItems,
+                        links: importedLinks
+                    )
+                ),
+                BackupCapabilityRecord(
+                    component: .readingHistory,
+                    representation: importedHistory.isEmpty
+                        ? .representedEmpty
+                        : .representedNonempty
+                )
+            ],
             categories: importedCategories,
             items: importedItems,
             links: importedLinks,
             history: importedHistory,
             migrationReport: report.hasIssues ? report : nil
         )
+    }
+
+    private func libraryRepresentation(
+        categories: [LibraryCategory],
+        items: [LibraryItem],
+        links: [ItemCategoryLink]
+    ) -> BackupRepresentation {
+        categories.isEmpty && items.isEmpty && links.isEmpty
+            ? .representedEmpty
+            : .representedNonempty
     }
 }

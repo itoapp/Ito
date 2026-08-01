@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BackupSettingsView: View {
-    @StateObject private var backupManager = BackupManager.shared
+    @EnvironmentObject private var backupManager: BackupManager
 
     @State private var isExporting = false
     @State private var isImporting = false
@@ -19,8 +19,10 @@ struct BackupSettingsView: View {
     @State private var alertMessage = ""
     @State private var showAlert = false
 
-    @State private var showMigrationReport = false
-    @State private var activeMigrationReport: MigrationReport?
+    @State private var showRestoreReport = false
+    @State private var activeRestoreReport: BackupRestoreReport?
+    @State private var showRefreshPending = false
+    @State private var isAcknowledgingReport = false
 
     var body: some View {
         List {
@@ -123,14 +125,40 @@ struct BackupSettingsView: View {
         .alert(isPresented: $showAlert) {
             Alert(title: Text(alertTitle), message: Text(alertMessage), dismissButton: .default(Text("OK")))
         }
-        .sheet(isPresented: $showMigrationReport) {
-            if let report = activeMigrationReport {
-                MigrationReportView(report: report) {
-                    showMigrationReport = false
-                    activeMigrationReport = nil
+        .sheet(isPresented: $showRestoreReport) {
+            if let report = activeRestoreReport {
+                BackupRestoreReportView(report: report) {
+                    guard !isAcknowledgingReport else { return }
+                    isAcknowledgingReport = true
+                    Task {
+                        do {
+                            _ = try await backupManager.acknowledgeRestoreReport()
+                            activeRestoreReport = backupManager.lastRestoreReport
+                            showRestoreReport = activeRestoreReport != nil
+                        } catch {
+                            showError("Acknowledgment Failed", error.localizedDescription)
+                        }
+                        isAcknowledgingReport = false
+                    }
                 }
                 .interactiveDismissDisabled()
             }
+        }
+        .alert("Restore committed; refresh pending", isPresented: $showRefreshPending) {
+            Button("Retry") {
+                Task {
+                    do {
+                        try await backupManager.retryCommittedRefresh()
+                        activeRestoreReport = backupManager.lastRestoreReport
+                        showRestoreReport = activeRestoreReport != nil
+                    } catch {
+                        showRefreshPending = true
+                    }
+                }
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text("Your restored data is saved. Refresh must finish before a report can be shown.")
         }
     }
 
@@ -167,21 +195,20 @@ struct BackupSettingsView: View {
     private func executeFinalImport(url: URL, mode: BackupRestoreMode, resolutions: [String: ConflictResolution] = [:]) {
         Task {
             do {
-                let report = try await backupManager.restoreBackup(from: url, mode: mode, resolvedConflicts: resolutions)
-
-                if let report = report, report.hasIssues {
-                    // Surface migration report
-                    activeMigrationReport = report
-                    showMigrationReport = true
-                } else {
-                    alertTitle = "Restore Successful"
-                    alertMessage = mode == .wipe ? "Your library has been successfully replaced." : "Your backup has been merged into your library."
-                    showAlert = true
-                }
+                let report = try await backupManager.restoreBackup(
+                    from: url,
+                    mode: mode,
+                    resolvedConflicts: resolutions
+                )
+                activeRestoreReport = report
+                showRestoreReport = true
+                pendingImportURL = nil
+            } catch BackupRestoreError.restoreCommittedRefreshPending {
+                showRefreshPending = true
                 pendingImportURL = nil
             } catch {
                 alertTitle = "Restore Failed"
-                alertMessage = "An error occurred: \(error.localizedDescription)\n\nYour library was safely reverted and no changes were made."
+                alertMessage = error.localizedDescription
                 showAlert = true
                 pendingImportURL = nil
             }

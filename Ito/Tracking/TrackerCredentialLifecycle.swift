@@ -4,7 +4,7 @@ import Foundation
 final class TrackerCredentialLifecycle {
     private let bootstrapCredentials: () async -> Void
 
-    init(manager: TrackerManager = .shared) {
+    init(manager: TrackerManager) {
         self.bootstrapCredentials = { await manager.bootstrapCredentials() }
     }
 

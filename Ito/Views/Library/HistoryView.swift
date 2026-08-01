@@ -2,7 +2,7 @@ import SwiftUI
 import NukeUI
 
 struct HistoryView: View {
-    @StateObject private var historyManager = HistoryManager.shared
+    @EnvironmentObject private var historyManager: HistoryManager
 
     var body: some View {
         Group {

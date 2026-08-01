@@ -11,8 +11,4 @@ public protocol LibraryManaging: ObservableObject {
     func saveResolvedMedia(media: ResolvedPluginMedia, pluginId: String, anilistId: Int?)
 
     func toggleSaveAnime(anime: Anime, pluginId: String)
-
-    func setAnilistId(for itemId: String, anilistId: Int)
-    func removeAnilistId(for itemId: String)
-    func getAnilistId(for itemId: String) -> Int?
 }

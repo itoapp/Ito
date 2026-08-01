@@ -66,7 +66,6 @@ final class SourceResolverViewModelTests: XCTestCase {
         try AppDatabase.makeMigrator().migrate(dbQueue)
         repository = GRDBSourceMappingRepository(dbWriter: dbQueue)
         pluginProvider = FakePluginProvider()
-        _ = LibraryManager.shared // Ensure initialization
     }
 
     func testValidSavedMappingPublishesSavedSourceState() async throws {
@@ -720,29 +719,34 @@ final class SourceResolverViewModelTests: XCTestCase {
     }
 
     // 27, 28, 29, 30. Library Saving
-    // 27, 28, 29, 30. Library Saving
     func testLibrarySaving() async throws {
+        let testDatabase = try TestDatabase()
+        let libraryManager = LibraryManager(dbPool: testDatabase.dbPool)
         let exp1 = expectation(description: "Item saved")
-        let sub1 = LibraryManager.shared.$items.sink { items in
+        let sub1 = libraryManager.$items.sink { items in
             if items.contains(where: { $0.id == "m1" }) { exp1.fulfill() }
         }
-        LibraryManager.shared.toggleSaveManga(manga: Manga(key: "m1", title: "T"), pluginId: "p1")
+        libraryManager.toggleSaveManga(manga: Manga(key: "m1", title: "T"), pluginId: "p1")
         await fulfillment(of: [exp1], timeout: 2.0)
         sub1.cancel()
 
         let exp2 = expectation(description: "Item updated")
-        let sub2 = LibraryManager.shared.$items.sink { items in
+        let sub2 = libraryManager.$items.sink { items in
             if items.contains(where: { $0.id == "m1" && $0.anilistId == 200 }) { exp2.fulfill() }
         }
-        LibraryManager.shared.setAnilistId(for: "m1", anilistId: 200)
+        libraryManager.saveResolvedMedia(
+            media: ResolvedPluginMedia.manga(Manga(key: "m1", title: "T")),
+            pluginId: "p1",
+            anilistId: 200
+        )
         await fulfillment(of: [exp2], timeout: 2.0)
         sub2.cancel()
 
         let exp3 = expectation(description: "Anime saved")
-        let sub3 = LibraryManager.shared.$items.sink { items in
+        let sub3 = libraryManager.$items.sink { items in
             if items.contains(where: { $0.id == "a1" }) { exp3.fulfill() }
         }
-        LibraryManager.shared.toggleSaveAnime(anime: Anime(key: "a1", title: "A"), pluginId: "p1")
+        libraryManager.toggleSaveAnime(anime: Anime(key: "a1", title: "A"), pluginId: "p1")
         await fulfillment(of: [exp3], timeout: 2.0)
         sub3.cancel()
     }

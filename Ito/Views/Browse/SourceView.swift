@@ -16,6 +16,7 @@ extension PluginInfo {
 }
 
 struct SourceView: View {
+    @EnvironmentObject private var pluginManager: PluginManager
     let plugin: InstalledPlugin
 
     @State private var runner: ItoRunner?
@@ -82,7 +83,7 @@ struct SourceView: View {
                                                     }
                                                 }
                                             }
-                                            await PluginManager.shared.reloadInstalledPlugins()
+                                            await pluginManager.reloadInstalledPlugins()
                                             await MainActor.run {
                                                 dismiss()
                                             }
@@ -149,7 +150,7 @@ struct SourceView: View {
         .sheet(isPresented: $showSettings, onDismiss: {
             Task {
                 // Evict the cached runner so settings changes take effect on reload
-                PluginManager.shared.evictRunner(for: plugin.id)
+                pluginManager.evictRunner(for: plugin.id)
                 isLoaded = false
                 homeLayout = nil
                 runner = nil
@@ -420,7 +421,7 @@ struct SourceView: View {
         AppLogger.ui.debug("\("📦 [SourceView] loadPlugin START for \(plugin.info.name)") (id: \(plugin.id))")
         do {
             AppLogger.ui.debug("📦 [SourceView] Getting cached runner from PluginManager...")
-            let pluginRunner = try await PluginManager.shared.getRunner(for: plugin.id)
+            let pluginRunner = try await pluginManager.getRunner(for: plugin.id)
             AppLogger.ui.debug("📦 [SourceView] Runner obtained")
 
             guard !Task.isCancelled else {

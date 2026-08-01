@@ -1,7 +1,6 @@
 import SwiftUI
 import NukeUI
 import Nuke
-import OSLog
 import ito_runner
 
 private let detailHeroHeight: CGFloat = 340
@@ -16,7 +15,7 @@ private struct DetailNavTitleKey: PreferenceKey {
 struct DiscoverDetailView: View {
     @State var media: DiscoverMedia
 
-    @StateObject private var pluginManager = PluginManager.shared
+    @ObservedObject private var pluginManager: PluginManager
     @StateObject private var resolverViewModel: SourceResolverViewModel
     @State private var isDescriptionExpanded = false
     @State private var showNavTitle = false
@@ -32,9 +31,12 @@ struct DiscoverDetailView: View {
     @State private var mappingToConfirm: MatchedSource?
     @State private var showingConfirmAlert = false
 
-    init(media: DiscoverMedia) {
+    init(media: DiscoverMedia, pluginManager: PluginManager) {
         self._media = State(initialValue: media)
-        self._resolverViewModel = StateObject(wrappedValue: SourceResolverViewModel(media: media))
+        self._pluginManager = ObservedObject(wrappedValue: pluginManager)
+        self._resolverViewModel = StateObject(
+            wrappedValue: SourceResolverViewModel(media: media, pluginManager: pluginManager)
+        )
     }
 
     private var uniqueMediaKey: String { "anilist_\(media.id)" }
@@ -276,7 +278,7 @@ struct DiscoverDetailView: View {
             case .savedSource(let mapping, let payload):
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        if let plugin = PluginManager.shared.installedPlugins[mapping.pluginId],
+                        if let plugin = pluginManager.installedPlugins[mapping.pluginId],
                            let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
                             Image(uiImage: uiImage)
                                 .resizable()
@@ -294,7 +296,7 @@ struct DiscoverDetailView: View {
                                 .font(.headline)
                                 .lineLimit(1)
 
-                            let pluginName = PluginManager.shared.installedPlugins[mapping.pluginId]?.info.name ?? mapping.pluginId
+                            let pluginName = pluginManager.installedPlugins[mapping.pluginId]?.info.name ?? mapping.pluginId
                             Text("Saved Source • \(pluginName) • Confirmed")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -412,6 +414,7 @@ struct DiscoverDetailView: View {
             ForEach(Array(matches.enumerated()), id: \.offset) { index, match in
                 ResolvedSourceRow(
                     match: match,
+                    pluginManager: pluginManager,
                     isProcessing: resolverViewModel.processingMatchId == match.media.key(),
                     onConfirm: {
                         if match.decision == .autoConfirm {
@@ -444,7 +447,9 @@ struct DiscoverDetailView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(recommendations) { recMedia in
-                        NavigationLink(destination: DiscoverDetailView(media: recMedia)) {
+                        NavigationLink(
+                            destination: DiscoverDetailView(media: recMedia, pluginManager: pluginManager)
+                        ) {
                             DiscoverRecommendationCard(media: recMedia)
                         }
                         .buttonStyle(.plain)
@@ -459,6 +464,8 @@ struct DiscoverDetailView: View {
 
 private struct SourceDestinationHost: View {
     @ObservedObject var resolverViewModel: SourceResolverViewModel
+    @EnvironmentObject private var libraryManager: LibraryManager
+    @EnvironmentObject private var trackerManager: TrackerManager
 
     var body: some View {
         Group {
@@ -496,22 +503,37 @@ private struct SourceDestinationHost: View {
             MediaDetailView(runner: route.runner, media: manga, pluginId: route.pluginID) { updated in
                 try await route.runner.getMangaUpdate(manga: updated)
             }
-            .onReceive(LibraryManager.shared.$items) { items in
-                if let id = route.anilistID,
-                   items.contains(where: { $0.id == manga.key && $0.anilistId == nil }) {
-                    LibraryManager.shared.setAnilistId(for: manga.key, anilistId: id)
-                }
+            .onReceive(libraryManager.$items) { items in
+                linkAniListIfNeeded(itemKey: manga.key, route: route, items: items)
             }
         case .anime(let anime):
             MediaDetailView(runner: route.runner, media: anime, pluginId: route.pluginID) { updated in
                 try await route.runner.getAnimeUpdate(anime: updated, needsDetails: true, needsEpisodes: true)
             }
-            .onReceive(LibraryManager.shared.$items) { items in
-                if let id = route.anilistID,
-                   items.contains(where: { $0.id == anime.key && $0.anilistId == nil }) {
-                    LibraryManager.shared.setAnilistId(for: anime.key, anilistId: id)
-                }
+            .onReceive(libraryManager.$items) { items in
+                linkAniListIfNeeded(itemKey: anime.key, route: route, items: items)
             }
+        }
+    }
+
+    private func linkAniListIfNeeded(
+        itemKey: String,
+        route: SourceRoute,
+        items: [LibraryItem]
+    ) {
+        guard let anilistID = route.anilistID,
+              items.contains(where: { $0.id == itemKey }),
+              trackerManager.trackerId(
+                  for: MediaIdentity(pluginId: route.pluginID, itemId: itemKey),
+                  providerId: "anilist"
+              ) == nil else { return }
+
+        Task {
+            try? await trackerManager.link(
+                media: MediaIdentity(pluginId: route.pluginID, itemId: itemKey),
+                providerId: "anilist",
+                remoteMediaId: String(anilistID)
+            )
         }
     }
 }
@@ -570,13 +592,14 @@ private struct DiscoverRecommendationCard: View {
 
 private struct ResolvedSourceRow: View {
     let match: MatchedSource
+    @ObservedObject var pluginManager: PluginManager
     let isProcessing: Bool
     let onConfirm: () -> Void
     let onReject: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            if let plugin = PluginManager.shared.installedPlugins[match.pluginID],
+            if let plugin = pluginManager.installedPlugins[match.pluginID],
                let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
                 Image(uiImage: uiImage)
                     .resizable()
@@ -599,7 +622,7 @@ private struct ResolvedSourceRow: View {
                     .foregroundStyle(match.decision == .discard ? .secondary : .primary)
                     .lineLimit(1)
 
-                let pluginName = PluginManager.shared.installedPlugins[match.pluginID]?.info.name ?? match.pluginID
+                let pluginName = pluginManager.installedPlugins[match.pluginID]?.info.name ?? match.pluginID
                 Text("\(pluginName) • \(matchMethodString(match.matchMethod))")
                     .font(.caption)
                     .foregroundStyle(.secondary)

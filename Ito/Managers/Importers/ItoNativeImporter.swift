@@ -2,40 +2,477 @@ import Foundation
 import GRDB
 
 public struct ItoNativeImporter: BackupImporter {
+    nonisolated private static let legacyRepositoriesKey = "ito_repositories"
+
+    private let standardApplicationDomain: String
+
+    public init(
+        standardApplicationDomain: String = Bundle.main.bundleIdentifier ?? "moe.itoapp.ito"
+    ) {
+        self.standardApplicationDomain = standardApplicationDomain
+    }
+
     public func canHandle(url: URL) -> Bool {
-        return url.pathExtension.lowercased() == "itobackup"
+        url.pathExtension.lowercased() == "itobackup"
     }
 
     public func parse(url: URL) async throws -> ImportedBackup {
         let backupPool = try DatabasePool(path: url.path)
 
-        // Ensure atomic reading of the backup representation
         return try await backupPool.read { db in
-            let categories = try LibraryCategory.fetchAll(db)
-            let items = try LibraryItem.fetchAll(db)
-            let links = try ItemCategoryLink.fetchAll(db)
+            let metadata = try fetchMetadata(in: db)
+            let capabilities = try fetchCapabilities(in: db)
+            let hasLegacyLibraryTables = try [
+                LibraryCategory.databaseTableName,
+                LibraryItem.databaseTableName,
+                ItemCategoryLink.databaseTableName
+            ].allSatisfy { try db.tableExists($0) }
+            let hasLegacyHistoryTable = try db.tableExists(
+                ReadingHistoryRecord.databaseTableName
+            )
+            let categories = try fetchIfPresent(LibraryCategory.self, in: db)
+            let items = try fetchLibraryItems(in: db)
+            let links = try fetchIfPresent(ItemCategoryLink.self, in: db)
+            let history = try fetchIfPresent(ReadingHistoryRecord.self, in: db)
+            let sourceMappings = try capabilities.contains {
+                $0.component == .sourceMappings
+                    && $0.representation != .unrepresented
+            }
+                ? fetchSourceMappings(in: db)
+                : []
+            let preferences = try fetchIfPresent(AppPreference.self, in: db)
+            let readProgressKeys = try fetchIfPresent(ReadProgressKeyRecord.self, in: db)
+            let readProgressNumbers = try fetchIfPresent(
+                ReadProgressNumberRecord.self,
+                in: db
+            )
+            let mediaReadProgress = try fetchIfPresent(MediaReadProgressRecord.self, in: db)
+            var trackerLinks = try fetchIfPresent(TrackerLinkRecord.self, in: db)
+            let updateBadges = try fetchIfPresent(UpdateBadgeRecord.self, in: db)
+            var repositories = try fetchIfPresent(RepositoryRecord.self, in: db)
+            let importerAliases = try fetchIfPresent(
+                PluginMigrationAliasRecord.self,
+                in: db
+            )
+            let pluginIdentities = try fetchIfPresent(PluginIdentityRecord.self, in: db)
+            let pluginIdentityAliases = try fetchIfPresent(
+                PluginIdentityAliasRecord.self,
+                in: db
+            )
+            let pluginSettings = try fetchIfPresent(PluginSettingRecord.self, in: db)
+            let legacyUnscopedMediaState = try fetchIfPresent(
+                LegacyUnscopedMediaStateRecord.self,
+                in: db
+            )
+            let legacyStateArchives = try fetchArchives(in: db)
+            var importedPreferences = preferences
+            var legacyRepresentationOverrides: [BackupComponent: BackupRepresentation] = [:]
 
-            let history: [ReadingHistoryRecord]
-            if try db.tableExists("readingHistory") {
-                history = try ReadingHistoryRecord.fetchAll(db)
-            } else {
-                history = []
+            if metadata == nil, capabilities.isEmpty {
+                trackerLinks = synthesizeLegacyTrackerLinks(
+                    items: items,
+                    existingLinks: trackerLinks
+                )
+                let legacyRepositories = try synthesizeLegacyRepositories(
+                    preferences: preferences,
+                    existingRepositories: repositories
+                )
+                repositories = legacyRepositories.records
+                if let representation = legacyRepositories.representation {
+                    legacyRepresentationOverrides[.repositories] = representation
+                }
+                if hasLegacyLibraryTables {
+                    legacyRepresentationOverrides[.libraryCore] = representation(
+                        hasRows: !categories.isEmpty || !items.isEmpty || !links.isEmpty
+                    )
+                }
+                if hasLegacyHistoryTable {
+                    legacyRepresentationOverrides[.readingHistory] = representation(
+                        hasRows: !history.isEmpty
+                    )
+                }
+                importedPreferences.removeAll { $0.key == Self.legacyRepositoriesKey }
             }
 
-            let preferences: [AppPreference]
-            if try db.tableExists("appPreference") {
-                preferences = try AppPreference.fetchAll(db)
-            } else {
-                preferences = []
-            }
-
-            return ImportedBackup(
+            let imported = ImportedBackup(
+                metadata: metadata,
+                capabilities: capabilities,
+                legacyRepresentationOverrides: legacyRepresentationOverrides,
                 categories: categories,
                 items: items,
                 links: links,
                 history: history,
-                preferences: preferences
+                sourceMappings: sourceMappings,
+                preferences: importedPreferences,
+                representedPreferenceKeys: importedPreferences.map(\.key),
+                readProgressKeys: readProgressKeys,
+                readProgressNumbers: readProgressNumbers,
+                mediaReadProgress: mediaReadProgress,
+                trackerLinks: trackerLinks,
+                updateBadges: updateBadges,
+                repositories: repositories,
+                importerAliases: importerAliases,
+                pluginIdentities: pluginIdentities,
+                pluginIdentityAliases: pluginIdentityAliases,
+                pluginSettings: pluginSettings,
+                legacyUnscopedMediaState: legacyUnscopedMediaState,
+                legacyStateArchives: legacyStateArchives
+            )
+            try imported.validateCapabilityMetadata()
+            try validateCapabilityRepresentations(imported)
+            return imported
+        }
+    }
+
+    nonisolated private func fetchMetadata(in db: Database) throws -> BackupMetadataRecord? {
+        guard try db.tableExists(BackupMetadataRecord.databaseTableName) else {
+            return nil
+        }
+        let requiredColumns = ["id", "formatVersion", "createdAt"]
+        guard try hasColumns(requiredColumns, in: BackupMetadataRecord.databaseTableName, db: db)
+        else {
+            throw invalidCapability(code: "invalidMetadataColumns")
+        }
+
+        let rows = try Row.fetchAll(db, sql: "SELECT id, formatVersion, createdAt FROM backupMetadata")
+        guard rows.count <= 1 else {
+            throw invalidCapability(code: "duplicateMetadata")
+        }
+        guard let row = rows.first else { return nil }
+        let id: Int? = row["id"]
+        let formatVersion: Int? = row["formatVersion"]
+        let createdAt: Date? = row["createdAt"]
+        guard id == 1, let formatVersion, let createdAt else {
+            throw invalidCapability(code: "invalidMetadataRow")
+        }
+        return BackupMetadataRecord(formatVersion: formatVersion, createdAt: createdAt)
+    }
+
+    nonisolated private func fetchCapabilities(
+        in db: Database
+    ) throws -> [BackupCapabilityRecord] {
+        guard try db.tableExists(BackupCapabilityRecord.databaseTableName) else {
+            return []
+        }
+        guard try hasColumns(
+            ["component", "representation"],
+            in: BackupCapabilityRecord.databaseTableName,
+            db: db
+        ) else {
+            throw invalidCapability(code: "invalidCapabilityColumns")
+        }
+
+        let rows = try Row.fetchAll(
+            db,
+            sql: "SELECT component, representation FROM backupCapability"
+        )
+        var seen = Set<BackupComponent>()
+        return try rows.map { row in
+            let componentValue: String? = row["component"]
+            let representationValue: String? = row["representation"]
+            guard let componentValue,
+                  let component = BackupComponent(rawValue: componentValue) else {
+                throw invalidCapability(code: "unknownComponent")
+            }
+            guard seen.insert(component).inserted else {
+                throw invalidCapability(component: component, code: "duplicate")
+            }
+            guard let representationValue,
+                  let representation = BackupRepresentation(rawValue: representationValue),
+                  representation != .unrepresented else {
+                throw invalidCapability(component: component, code: "invalidRepresentation")
+            }
+            return BackupCapabilityRecord(
+                component: component,
+                representation: representation
             )
         }
+    }
+
+    nonisolated private func fetchLibraryItems(in db: Database) throws -> [LibraryItem] {
+        guard try db.tableExists("libraryItem") else { return [] }
+        let requiredColumns = [
+            "id", "title", "coverUrl", "pluginId", "isAnime", "pluginType",
+            "rawPayload", "anilistId"
+        ]
+        guard try hasColumns(requiredColumns, in: "libraryItem", db: db) else {
+            throw BackupPreflightError.rejected(
+                .invalidComponentData(component: .libraryCore, code: "invalidLibraryItemColumns")
+            )
+        }
+
+        let availableColumns = Set(try db.columns(in: "libraryItem").map(\.name))
+        let optionalColumns = ["status", "lastCheckedAt", "lastUpdatedAt", "knownChapterCount"]
+        let projections = requiredColumns + optionalColumns.map { column in
+            availableColumns.contains(column) ? column : "NULL AS \(column)"
+        }
+        return try LibraryItem.fetchAll(
+            db,
+            sql: "SELECT \(projections.joined(separator: ", ")) FROM libraryItem"
+        )
+    }
+
+    nonisolated private func fetchArchives(
+        in db: Database
+    ) throws -> [LegacyStateArchiveRecord] {
+        let archives: [LegacyStateArchiveRecord]
+        do {
+            archives = try fetchIfPresent(LegacyStateArchiveRecord.self, in: db)
+        } catch {
+            throw BackupPreflightError.rejected(
+                .invalidComponentData(
+                    component: .legacyStateArchive,
+                    code: "invalidArchiveRow"
+                )
+            )
+        }
+        for archive in archives {
+            let classification = LegacyDefaultsSourceTuple(
+                sourceDomain: archive.sourceDomain,
+                sourceKey: archive.sourceKey
+            ).classification(standardApplicationDomain: standardApplicationDomain)
+
+            switch classification {
+            case .appManagedCredential:
+                throw BackupPreflightError.rejected(
+                    .credentialPayloadRejected(
+                        sourceDomain: archive.sourceDomain,
+                        sourceKey: archive.sourceKey
+                    )
+                )
+            case .appNonSecret:
+                guard archive.contentClass == .appNonSecret else {
+                    throw invalidArchiveClassification()
+                }
+            case .opaquePluginState:
+                guard archive.contentClass == .opaquePluginState else {
+                    throw invalidArchiveClassification()
+                }
+            }
+        }
+        return archives
+    }
+
+    nonisolated private func fetchSourceMappings(
+        in db: Database
+    ) throws -> [SourceMappingRecord] {
+        do {
+            return try fetchIfPresent(SourceMappingRecord.self, in: db)
+        } catch {
+            throw BackupPreflightError.rejected(
+                .invalidComponentData(
+                    component: .sourceMappings,
+                    code: "invalidSourceMappingRow"
+                )
+            )
+        }
+    }
+
+    nonisolated private func synthesizeLegacyTrackerLinks(
+        items: [LibraryItem],
+        existingLinks: [TrackerLinkRecord]
+    ) -> [TrackerLinkRecord] {
+        var links = existingLinks
+        var representedKeys = Set(
+            links.map { "\($0.pluginId)\u{0}\($0.canonicalMediaId)\u{0}\($0.providerId)" }
+        )
+        for item in items {
+            guard let anilistId = item.anilistId else { continue }
+            let canonicalMediaId = ImportedMediaIdentity.canonicalMediaId(
+                itemId: item.id,
+                pluginId: item.pluginId
+            )
+            let key = "\(item.pluginId)\u{0}\(canonicalMediaId)\u{0}anilist"
+            guard representedKeys.insert(key).inserted else { continue }
+            links.append(
+                TrackerLinkRecord(
+                    pluginId: item.pluginId,
+                    canonicalMediaId: canonicalMediaId,
+                    providerId: "anilist",
+                    remoteMediaId: String(anilistId),
+                    updatedAt: nil,
+                    provenance: .legacyUnknownTime
+                )
+            )
+        }
+        return links
+    }
+
+    nonisolated private func synthesizeLegacyRepositories(
+        preferences: [AppPreference],
+        existingRepositories: [RepositoryRecord]
+    ) throws -> (
+        records: [RepositoryRecord],
+        representation: BackupRepresentation?
+    ) {
+        let legacyPreferences = preferences.filter { $0.key == Self.legacyRepositoriesKey }
+        guard legacyPreferences.count <= 1 else {
+            throw BackupPreflightError.rejected(
+                .invalidKeyData(
+                    component: .repositories,
+                    key: Self.legacyRepositoriesKey,
+                    code: "duplicateLegacyPayload"
+                )
+            )
+        }
+        guard let preference = legacyPreferences.first else {
+            return (existingRepositories, nil)
+        }
+
+        guard let legacyRepositories = try? JSONDecoder().decode(
+            [Repository].self,
+            from: preference.value
+        ) else {
+            throw BackupPreflightError.rejected(
+                .invalidKeyData(
+                    component: .repositories,
+                    key: Self.legacyRepositoriesKey,
+                    code: "invalidLegacyPayload"
+                )
+            )
+        }
+
+        var repositoriesByURL: [String: RepositoryRecord] = [:]
+        for repository in existingRepositories {
+            guard repositoriesByURL.updateValue(repository, forKey: repository.url) == nil else {
+                throw BackupPreflightError.rejected(
+                    .invalidComponentData(
+                        component: .repositories,
+                        code: "duplicateRepositoryURL"
+                    )
+                )
+            }
+        }
+        for repository in legacyRepositories where repositoriesByURL[repository.url] == nil {
+            repositoriesByURL[repository.url] = RepositoryRecord(
+                url: repository.url,
+                lastFetched: repository.lastFetched,
+                indexPayload: try repository.index.map { try JSONEncoder().encode($0) }
+            )
+        }
+        return (
+            repositoriesByURL.values.sorted { $0.url < $1.url },
+            legacyRepositories.isEmpty ? .representedEmpty : .representedNonempty
+        )
+    }
+
+    nonisolated private func validateCapabilityRepresentations(
+        _ backup: ImportedBackup
+    ) throws {
+        guard backup.metadata != nil else { return }
+        for component in BackupComponent.allCases
+        where backup.representation(of: component) == .unrepresented
+            && backupHasRows(backup, for: component) {
+            throw invalidCapability(
+                component: component,
+                code: "unrepresentedContainsRows"
+            )
+        }
+        for capability in backup.capabilities {
+            if capability.component == .scalarAppPreferences,
+               capability.representation == .representedNonempty {
+                let catalogKeys = Set(AppPreferenceCatalogEntry.allCases.map(\.rawValue))
+                let preferenceKeys = Set(backup.preferences.map(\.key))
+                guard backup.preferences.count == catalogKeys.count,
+                      preferenceKeys == catalogKeys,
+                      Set(backup.representedPreferenceKeys) == catalogKeys else {
+                    throw invalidCapability(
+                        component: .scalarAppPreferences,
+                        code: "incompletePreferenceCatalog"
+                    )
+                }
+            }
+
+            let hasRows = backupHasRows(backup, for: capability.component)
+            switch (capability.representation, hasRows) {
+            case (.representedEmpty, true):
+                throw invalidCapability(
+                    component: capability.component,
+                    code: "representedEmptyHasRows"
+                )
+            case (.representedNonempty, false):
+                throw invalidCapability(
+                    component: capability.component,
+                    code: "representedNonemptyHasNoRows"
+                )
+            default:
+                break
+            }
+        }
+    }
+
+    nonisolated private func representation(
+        hasRows: Bool
+    ) -> BackupRepresentation {
+        hasRows ? .representedNonempty : .representedEmpty
+    }
+
+    nonisolated private func backupHasRows(
+        _ backup: ImportedBackup,
+        for component: BackupComponent
+    ) -> Bool {
+        switch component {
+        case .libraryCore:
+            !backup.categories.isEmpty || !backup.items.isEmpty || !backup.links.isEmpty
+        case .readingHistory:
+            !backup.history.isEmpty
+        case .sourceMappings:
+            !backup.sourceMappings.isEmpty
+        case .scalarAppPreferences:
+            !backup.representedPreferenceKeys.isEmpty
+        case .readProgressAndResume:
+            !backup.readProgressKeys.isEmpty
+                || !backup.readProgressNumbers.isEmpty
+                || !backup.mediaReadProgress.isEmpty
+        case .trackerLinks:
+            !backup.trackerLinks.isEmpty
+        case .updateBadges:
+            !backup.updateBadges.isEmpty
+        case .repositories:
+            !backup.repositories.isEmpty
+        case .userImporterAliases:
+            !backup.importerAliases.isEmpty
+        case .pluginIdentityAndAliases:
+            !backup.pluginIdentities.isEmpty || !backup.pluginIdentityAliases.isEmpty
+        case .pluginSettings:
+            !backup.pluginSettings.isEmpty
+        case .legacyUnscopedMediaState:
+            !backup.legacyUnscopedMediaState.isEmpty
+        case .legacyStateArchive:
+            !backup.legacyStateArchives.isEmpty
+        }
+    }
+
+    nonisolated private func fetchIfPresent<Record>(
+        _ type: Record.Type,
+        in db: Database
+    ) throws -> [Record] where Record: FetchableRecord & TableRecord {
+        guard try db.tableExists(Record.databaseTableName) else { return [] }
+        return try Record.fetchAll(db)
+    }
+
+    nonisolated private func hasColumns(
+        _ requiredColumns: [String],
+        in table: String,
+        db: Database
+    ) throws -> Bool {
+        let columns = Set(try db.columns(in: table).map(\.name))
+        return requiredColumns.allSatisfy(columns.contains)
+    }
+
+    nonisolated private func invalidCapability(
+        component: BackupComponent? = nil,
+        code: String
+    ) -> BackupPreflightError {
+        .rejected(.invalidCapabilityMetadata(component: component, code: code))
+    }
+
+    nonisolated private func invalidArchiveClassification() -> BackupPreflightError {
+        .rejected(
+            .invalidComponentData(
+                component: .legacyStateArchive,
+                code: "contentClassSourceMismatch"
+            )
+        )
     }
 }

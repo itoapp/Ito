@@ -16,22 +16,31 @@ struct PluginSettingsView: View {
     let schema: SettingsSchema
 
     @Environment(\.dismiss) private var dismiss
-
-    // We bind directly to the plugin's defaults suite so it maps symmetrically to DefaultDefaultsModule.
-    private let defaults: UserDefaults
-
-    init(plugin: InstalledPlugin, schema: SettingsSchema) {
-        self.plugin = plugin
-        self.schema = schema
-        let pluginId = plugin.url.deletingPathExtension().lastPathComponent
-        self.defaults = UserDefaults(suiteName: "moe.ito.runners.\(pluginId)") ?? .standard
-    }
+    @EnvironmentObject private var pluginManager: PluginManager
+    @State private var isPrepared = false
+    @State private var preparationError: String?
 
     var body: some View {
         NavigationView {
             Form {
-                ForEach(schema.settings, id: \.id) { setting in
-                    SettingRowView(setting: setting, defaults: defaults)
+                if isPrepared {
+                    ForEach(schema.settings, id: \.id) { setting in
+                        SettingRowView(
+                            setting: setting,
+                            pluginId: plugin.info.id,
+                            store: pluginManager.pluginSettingsStore
+                        )
+                    }
+                } else if preparationError != nil {
+                    Section {
+                        Label(
+                            "Plugin settings could not be loaded. No changes were applied.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundColor(.red)
+                    }
+                } else {
+                    ProgressView("Preparing plugin settings…")
                 }
             }
             .navigationTitle("\(plugin.info.name) Settings")
@@ -39,22 +48,31 @@ struct PluginSettingsView: View {
             .navigationBarItems(trailing: Button("Done") {
                 dismiss()
             })
+            .task {
+                do {
+                    try pluginManager.pluginSettingsStore.prepare(pluginId: plugin.info.id)
+                    isPrepared = true
+                } catch {
+                    preparationError = String(describing: error)
+                }
+            }
         }
     }
 }
 
 private struct SettingRowView: View {
     let setting: Setting
-    let defaults: UserDefaults
+    let pluginId: String
+    @ObservedObject var store: PluginSettingsStore
 
     var body: some View {
         switch setting {
         case .toggle(let id, let name, let summary, let defaultValue):
-            ToggleSettingRow(id: id, name: name, summary: summary, defaultValue: defaultValue, defaults: defaults)
+            ToggleSettingRow(id: id, name: name, summary: summary, defaultValue: defaultValue, pluginId: pluginId, store: store)
         case .text(let id, let name, let summary, let defaultValue):
-            TextSettingRow(id: id, name: name, summary: summary, defaultValue: defaultValue, defaults: defaults)
+            TextSettingRow(id: id, name: name, summary: summary, defaultValue: defaultValue, pluginId: pluginId, store: store)
         case .picker(let id, let name, let summary, let options, let defaultValue):
-            PickerSettingRow(id: id, name: name, summary: summary, options: options, defaultValue: defaultValue, defaults: defaults)
+            PickerSettingRow(id: id, name: name, summary: summary, options: options, defaultValue: defaultValue, pluginId: pluginId, store: store)
         }
     }
 }
@@ -64,17 +82,15 @@ private struct ToggleSettingRow: View {
     let name: String
     let summary: String?
     let defaultValue: Bool
-    let defaults: UserDefaults
-
-    @State private var value: Bool = false
+    let pluginId: String
+    @ObservedObject var store: PluginSettingsStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Toggle(name, isOn: Binding(
-                get: { self.value },
+                get: { store.get(pluginId: pluginId, key: id).map { $0 == "true" } ?? defaultValue },
                 set: {
-                    self.value = $0
-                    defaults.set($0 ? "true" : "false", forKey: id)
+                    store.set(pluginId: pluginId, key: id, value: $0 ? "true" : "false")
                 }
             ))
             if let summary = summary, !summary.isEmpty {
@@ -85,11 +101,12 @@ private struct ToggleSettingRow: View {
         }
         .padding(.vertical, 2)
         .onAppear {
-            if let strValues = defaults.string(forKey: id) {
-                self.value = (strValues == "true")
-            } else {
-                self.value = defaultValue
-                defaults.set(defaultValue ? "true" : "false", forKey: id)
+            if store.get(pluginId: pluginId, key: id) == nil {
+                store.set(
+                    pluginId: pluginId,
+                    key: id,
+                    value: defaultValue ? "true" : "false"
+                )
             }
         }
     }
@@ -100,18 +117,16 @@ private struct TextSettingRow: View {
     let name: String
     let summary: String?
     let defaultValue: String
-    let defaults: UserDefaults
-
-    @State private var value: String = ""
+    let pluginId: String
+    @ObservedObject var store: PluginSettingsStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(name)
             TextField(name, text: Binding(
-                get: { self.value },
+                get: { store.get(pluginId: pluginId, key: id) ?? defaultValue },
                 set: { newValue in
-                    self.value = newValue
-                    defaults.set(newValue, forKey: id)
+                    store.set(pluginId: pluginId, key: id, value: newValue)
                 }
             ))
             .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -124,11 +139,8 @@ private struct TextSettingRow: View {
         }
         .padding(.vertical, 2)
         .onAppear {
-            if let current = defaults.string(forKey: id) {
-                self.value = current
-            } else {
-                self.value = defaultValue
-                defaults.set(defaultValue, forKey: id)
+            if store.get(pluginId: pluginId, key: id) == nil {
+                store.set(pluginId: pluginId, key: id, value: defaultValue)
             }
         }
     }
@@ -140,17 +152,15 @@ private struct PickerSettingRow: View {
     let summary: String?
     let options: [String]
     let defaultValue: String
-    let defaults: UserDefaults
-
-    @State private var value: String = ""
+    let pluginId: String
+    @ObservedObject var store: PluginSettingsStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Picker(name, selection: Binding(
-                get: { self.value },
+                get: { store.get(pluginId: pluginId, key: id) ?? defaultValue },
                 set: { newValue in
-                    self.value = newValue
-                    defaults.set(newValue, forKey: id)
+                    store.set(pluginId: pluginId, key: id, value: newValue)
                 }
             )) {
                 ForEach(options, id: \.self) { option in
@@ -165,11 +175,8 @@ private struct PickerSettingRow: View {
         }
         .padding(.vertical, 2)
         .onAppear {
-            if let current = defaults.string(forKey: id) {
-                self.value = current
-            } else {
-                self.value = defaultValue
-                defaults.set(defaultValue, forKey: id)
+            if store.get(pluginId: pluginId, key: id) == nil {
+                store.set(pluginId: pluginId, key: id, value: defaultValue)
             }
         }
     }

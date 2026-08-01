@@ -6,9 +6,14 @@ import ito_runner
 /// and routes them through the PluginManager to the appropriate Wasm module.
 public final class PluginDataLoader: DataLoading, @unchecked Sendable {
     private let defaultLoader: DataLoader
+    private let pluginManager: PluginManager
 
-    public init(configuration: URLSessionConfiguration = .default) {
+    public init(
+        configuration: URLSessionConfiguration = .default,
+        pluginManager: PluginManager
+    ) {
         self.defaultLoader = DataLoader(configuration: configuration)
+        self.pluginManager = pluginManager
     }
 
     public func loadData(with request: URLRequest, didReceiveData: @escaping @Sendable (Data, URLResponse) -> Void, completion: @escaping @Sendable (Error?) -> Void) -> Cancellable {
@@ -37,7 +42,7 @@ public final class PluginDataLoader: DataLoading, @unchecked Sendable {
                 realUrlString = realUrlString.replacingOccurrences(of: "http:/", with: "http://")
                 realUrlString = realUrlString.replacingOccurrences(of: "https:///", with: "https://")
 
-                guard let runner = try? await PluginManager.shared.getRunner(for: pluginId) else {
+                guard let runner = try? await pluginManager.getRunner(for: pluginId) else {
                     throw URLError(.fileDoesNotExist)
                 }
 

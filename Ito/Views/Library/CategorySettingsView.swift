@@ -3,7 +3,7 @@ import SwiftUI
 import GRDB
 
 struct CategorySettingsView: View {
-    @StateObject private var libraryManager = LibraryManager.shared
+    @EnvironmentObject private var libraryManager: LibraryManager
     @State private var showingAddCategory = false
     @State private var newCategoryName = ""
 

@@ -21,7 +21,8 @@ enum TrackerSettingsCredentialState: Equatable {
 }
 
 struct TrackerSettingsView: View {
-    @StateObject private var trackerManager = TrackerManager.shared
+    @EnvironmentObject private var trackerManager: TrackerManager
+    @EnvironmentObject private var settingsStore: AppSettingsStore
     @State private var authenticatingProvider: String?
     @State private var authError: String?
     @State private var errorProvider: String?
@@ -90,8 +91,15 @@ struct TrackerSettingsView: View {
 
             Section(header: Text("Preferences"), footer: Text("When updating or tracking a series, automatically mark all previous chapters or episodes as read/watched in your local library.")) {
                 Toggle("Sync Trackers to Local Library", isOn: Binding(
-                    get: { UserDefaults.standard.object(forKey: "Ito.AutoSyncTrackersToLocal") as? Bool ?? true },
-                    set: { UserDefaults.standard.set($0, forKey: "Ito.AutoSyncTrackersToLocal") }
+                    get: { settingsStore.autoSyncTrackersToLocal },
+                    set: { value in
+                        Task {
+                            try? await settingsStore.set(
+                                value,
+                                for: AppPreferenceCatalog.autoSyncTrackersToLocal
+                            )
+                        }
+                    }
                 ))
             }
         }

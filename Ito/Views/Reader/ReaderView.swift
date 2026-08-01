@@ -33,6 +33,15 @@ struct ReaderView: View {
     @State var currentChapter: Manga.Chapter
 
     @EnvironmentObject var progressManager: ReadProgressManager
+    @EnvironmentObject var trackerManager: TrackerManager
+    @EnvironmentObject var settingsStore: AppSettingsStore
+    @EnvironmentObject var discordRPCManager: DiscordRPCManager
+    @EnvironmentObject var historyManager: HistoryManager
+    @EnvironmentObject var pluginManager: PluginManager
+
+    private var mediaIdentity: MediaIdentity {
+        MediaIdentity(pluginId: pluginId, itemId: manga.key)
+    }
 
     // Shared state
     @State private var isLoaded = false
@@ -41,7 +50,9 @@ struct ReaderView: View {
     @State private var showSettings = false
     @State private var overrideViewer: Manga.Viewer = .Default
     @State private var showUI = true
-    @AppStorage("Ito.PreloadImageCount") private var preloadImageCount: Int = 5
+    private var preloadImageCount: Int {
+        settingsStore.preloadImageCount.rawValue
+    }
 
     // --- Paged mode state (RTL/LTR) ---
     @State private var pagedPages: [Page] = []
@@ -135,17 +146,28 @@ struct ReaderView: View {
             ReaderSettingsView(
                 viewer: $overrideViewer,
                 defaultViewer: manga.viewer,
-                preloadCount: $preloadImageCount
+                preloadCount: Binding(
+                    get: { settingsStore.preloadImageCount.rawValue },
+                    set: { value in
+                        guard let preference = ImagePreloadCountPreference(rawValue: value) else { return }
+                        Task {
+                            try? await settingsStore.set(
+                                preference,
+                                for: AppPreferenceCatalog.preloadImageCount
+                            )
+                        }
+                    }
+                )
             )
         }
         .task { await loadInitialChapter() }
         .onAppear {
-            let anilistId = TrackerManager.shared.getMediaId(for: manga.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
             let scanlator = currentChapter.scanlator ?? "Official"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: manga.title,
                 state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapterNumber ?? 0)")",
                 activityType: 3,
@@ -156,12 +178,12 @@ struct ReaderView: View {
             )
         }
         .onChange(of: currentChapter.key) { _ in
-            let anilistId = TrackerManager.shared.getMediaId(for: manga.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
             let scanlator = currentChapter.scanlator ?? "Official"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: manga.title,
                 state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapterNumber ?? 0)")",
                 activityType: 3,
@@ -172,7 +194,7 @@ struct ReaderView: View {
             )
         }
         .onDisappear {
-            DiscordRPCManager.shared.clearActivity()
+            discordRPCManager.clearActivity()
         }
         .onDisappear { imagePrefetcher.stopPrefetching() }
         .onChange(of: isPaged) { newIsPaged in
@@ -495,17 +517,23 @@ extension ReaderView {
 
     func markChapterRead(_ chapter: Manga.Chapter) {
         let chapterTitleStr = chapter.title ?? chapter.key
-        HistoryManager.shared.addManga(manga, chapterKey: chapter.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
+        historyManager.addManga(
+            manga,
+            chapterKey: chapter.key,
+            chapterTitle: chapterTitleStr,
+            pluginId: pluginId
+        )
 
         guard !markedChapterKeys.contains(chapter.key) else { return }
         markedChapterKeys.insert(chapter.key)
-        progressManager.markAsRead(
-            mangaId: manga.key, chapterId: chapter.key, chapterNum: chapter.chapter
-        )
-
         Task {
+            try await progressManager.markAsRead(
+                media: mediaIdentity,
+                chapterId: chapter.key,
+                chapterNum: chapter.chapter
+            )
             if let chapterFloat = chapter.chapter {
-                await TrackerManager.shared.updateProgress(localId: manga.key, progress: Int(chapterFloat))
+                await trackerManager.updateProgress(media: mediaIdentity, progress: Int(chapterFloat))
             } else {
                 let titleOrFallback = chapter.title ?? chapter.key
                 let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
@@ -514,7 +542,7 @@ extension ReaderView {
                 if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
                     let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
                     if let chapNum = Int(numbersOnly) {
-                        await TrackerManager.shared.updateProgress(localId: manga.key, progress: chapNum)
+                        await trackerManager.updateProgress(media: mediaIdentity, progress: chapNum)
                     }
                 }
             }

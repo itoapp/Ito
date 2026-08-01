@@ -23,19 +23,36 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable {
 
 @MainActor
 public class HistoryManager: ObservableObject {
-    public static let shared = HistoryManager()
+    public static let shared = HistoryManager(
+        dbPool: AppDatabase.shared.dbPool,
+        libraryManager: .shared
+    )
 
     @Published public private(set) var history: [HistoryEntry] = []
 
     private let dbPool: DatabasePool
+    private let libraryManager: LibraryManager
     private var observationCancellable: DatabaseCancellable?
+    private var settingsStore: AppSettingsStore?
 
-    private let legacyDefaultsKey = "ito_reading_history"
-
-    private init() {
-        self.dbPool = AppDatabase.shared.dbPool
-        migrateFromUserDefaults()
+    public init(dbPool: DatabasePool, libraryManager: LibraryManager) {
+        self.dbPool = dbPool
+        self.libraryManager = libraryManager
         startObservation()
+    }
+
+    func configure(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
+    }
+
+    public func reload() async throws {
+        let records = try await dbPool.read { db in
+            try ReadingHistoryRecord
+                .order(ReadingHistoryRecord.Columns.readAt.desc)
+                .limit(200)
+                .fetchAll(db)
+        }
+        history = records.map { HistoryEntry(record: $0) }
     }
 
     // MARK: - Observation
@@ -64,10 +81,9 @@ public class HistoryManager: ObservableObject {
     // MARK: - Add History
 
     public func addManga(_ manga: Manga, chapterKey: String, chapterTitle: String, pluginId: String) {
-        let isIncognito = UserDefaults.standard.bool(forKey: "Ito.IncognitoMode")
-        if isIncognito { return }
+        guard settingsStore?.incognitoMode == false else { return }
 
-        let libraryItemId = LibraryManager.shared.isSaved(id: manga.key) ? manga.key : nil
+        let libraryItemId = libraryManager.isSaved(id: manga.key) ? manga.key : nil
 
         let record = ReadingHistoryRecord(
             libraryItemId: libraryItemId,
@@ -82,10 +98,9 @@ public class HistoryManager: ObservableObject {
     }
 
     public func addNovel(_ novel: Novel, chapterKey: String, chapterTitle: String, pluginId: String) {
-        let isIncognito = UserDefaults.standard.bool(forKey: "Ito.IncognitoMode")
-        if isIncognito { return }
+        guard settingsStore?.incognitoMode == false else { return }
 
-        let libraryItemId = LibraryManager.shared.isSaved(id: novel.key) ? novel.key : nil
+        let libraryItemId = libraryManager.isSaved(id: novel.key) ? novel.key : nil
 
         let record = ReadingHistoryRecord(
             libraryItemId: libraryItemId,
@@ -100,10 +115,9 @@ public class HistoryManager: ObservableObject {
     }
 
     public func addAnime(_ anime: Anime, episodeKey: String, episodeTitle: String, pluginId: String) {
-        let isIncognito = UserDefaults.standard.bool(forKey: "Ito.IncognitoMode")
-        if isIncognito { return }
+        guard settingsStore?.incognitoMode == false else { return }
 
-        let libraryItemId = LibraryManager.shared.isSaved(id: anime.key) ? anime.key : nil
+        let libraryItemId = libraryManager.isSaved(id: anime.key) ? anime.key : nil
 
         let record = ReadingHistoryRecord(
             libraryItemId: libraryItemId,
@@ -155,44 +169,4 @@ public class HistoryManager: ObservableObject {
         }
     }
 
-    // MARK: - Migration from UserDefaults
-
-    private func migrateFromUserDefaults() {
-        // Legacy HistoryEntry stored in UserDefaults as JSON
-        struct LegacyHistoryEntry: Codable {
-            let item: LibraryItem
-            var lastReadAt: Date
-            var chapterTitle: String?
-        }
-
-        guard let data = UserDefaults.standard.data(forKey: legacyDefaultsKey),
-              let legacy = try? JSONDecoder().decode([LegacyHistoryEntry].self, from: data) else {
-            return
-        }
-
-        Task {
-            do {
-                try await dbPool.write { db in
-                    for entry in legacy {
-                        let record = ReadingHistoryRecord(
-                            libraryItemId: entry.item.id,
-                            mediaKey: entry.item.id,
-                            title: entry.item.title,
-                            coverUrl: entry.item.coverUrl,
-                            pluginId: entry.item.pluginId,
-                            chapterKey: entry.chapterTitle ?? "unknown",
-                            chapterTitle: entry.chapterTitle,
-                            readAt: entry.lastReadAt
-                        )
-                        try record.insert(db)
-                    }
-                }
-                // Clean up legacy data
-                UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
-                AppLogger.general.debug("\("[HistoryManager] Migrated \(legacy.count)") entries from UserDefaults")
-            } catch {
-                AppLogger.general.error("[HistoryManager] Migration failed: \(error)")
-            }
-        }
-    }
 }

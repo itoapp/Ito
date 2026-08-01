@@ -9,6 +9,15 @@ struct NovelReaderView: View {
     @State var currentChapter: Novel.Chapter
 
     @EnvironmentObject var progressManager: ReadProgressManager
+    @EnvironmentObject var trackerManager: TrackerManager
+    @EnvironmentObject var settingsStore: AppSettingsStore
+    @EnvironmentObject var discordRPCManager: DiscordRPCManager
+    @EnvironmentObject var historyManager: HistoryManager
+    @EnvironmentObject var pluginManager: PluginManager
+
+    private var mediaIdentity: MediaIdentity {
+        MediaIdentity(pluginId: pluginId, itemId: novel.key)
+    }
 
     struct LoadedChapter: Identifiable, Equatable {
         let id = UUID()
@@ -25,13 +34,16 @@ struct NovelReaderView: View {
     @State private var isLoadingNext = false
     @State private var errorMessage: String?
 
-    // Appearance settings
-    @AppStorage("Ito.NovelFontSize") private var fontSize: Double = 18.0
-    @AppStorage("Ito.NovelLineSpacing") private var lineSpacing: Double = 8.0
-    @AppStorage("Ito.NovelFontFamily") private var fontFamily: NovelFont = .system
-    @AppStorage("Ito.NovelTheme") private var theme: NovelTheme = .system
-    @AppStorage("Ito.NovelIsPaging") private var isPaging: Bool = false
-    @AppStorage("Ito.NovelPrefetchChapters") private var prefetchChapters: Bool = true
+    private var fontSize: Double { settingsStore.novelFontSize }
+    private var lineSpacing: Double { settingsStore.novelLineSpacing }
+    private var fontFamily: NovelFont {
+        NovelFont(rawValue: settingsStore.novelFontFamily.rawValue) ?? .system
+    }
+    private var theme: NovelTheme {
+        NovelTheme(rawValue: settingsStore.novelTheme.rawValue) ?? .system
+    }
+    private var isPaging: Bool { settingsStore.novelIsPaging }
+    private var prefetchChapters: Bool { settingsStore.novelPrefetchChapters }
 
     @State private var showUI = true
     @State private var showSettings = false
@@ -198,12 +210,46 @@ struct NovelReaderView: View {
                     Spacer()
 
                     NovelReaderSettingsView(
-                        fontSize: $fontSize,
-                        lineSpacing: $lineSpacing,
-                        fontFamily: $fontFamily,
-                        theme: $theme,
-                        isPaging: $isPaging,
-                        prefetchChapters: $prefetchChapters
+                        fontSize: binding(
+                            settingsStore.novelFontSize,
+                            key: AppPreferenceCatalog.novelFontSize
+                        ),
+                        lineSpacing: binding(
+                            settingsStore.novelLineSpacing,
+                            key: AppPreferenceCatalog.novelLineSpacing
+                        ),
+                        fontFamily: Binding(
+                            get: { fontFamily },
+                            set: { value in
+                                guard let preference = NovelFontPreference(rawValue: value.rawValue) else { return }
+                                Task {
+                                    try? await settingsStore.set(
+                                        preference,
+                                        for: AppPreferenceCatalog.novelFontFamily
+                                    )
+                                }
+                            }
+                        ),
+                        theme: Binding(
+                            get: { theme },
+                            set: { value in
+                                guard let preference = NovelThemePreference(rawValue: value.rawValue) else { return }
+                                Task {
+                                    try? await settingsStore.set(
+                                        preference,
+                                        for: AppPreferenceCatalog.novelTheme
+                                    )
+                                }
+                            }
+                        ),
+                        isPaging: binding(
+                            settingsStore.novelIsPaging,
+                            key: AppPreferenceCatalog.novelIsPaging
+                        ),
+                        prefetchChapters: binding(
+                            settingsStore.novelPrefetchChapters,
+                            key: AppPreferenceCatalog.novelPrefetchChapters
+                        )
                     )
                     .frame(height: 280)
                     .padding(.bottom, safeAreaBottom)
@@ -222,12 +268,12 @@ struct NovelReaderView: View {
             await loadInitialChapter()
         }
         .onAppear {
-            let anilistId = TrackerManager.shared.getMediaId(for: novel.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
             let scanlator = currentChapter.scanlator ?? "Official"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: novel.title,
                 state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)")",
                 activityType: 3,
@@ -238,12 +284,12 @@ struct NovelReaderView: View {
             )
         }
         .onChange(of: currentChapter.key) { _ in
-            let anilistId = TrackerManager.shared.getMediaId(for: novel.key, providerId: "anilist")
+            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
             let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = PluginManager.shared.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
+            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
             let scanlator = currentChapter.scanlator ?? "Official"
 
-            DiscordRPCManager.shared.setActivity(
+            discordRPCManager.setActivity(
                 details: novel.title,
                 state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)")",
                 activityType: 3,
@@ -254,8 +300,20 @@ struct NovelReaderView: View {
             )
         }
         .onDisappear {
-            DiscordRPCManager.shared.clearActivity()
+            discordRPCManager.clearActivity()
         }
+    }
+
+    private func binding<Value: Codable & Sendable>(
+        _ value: Value,
+        key: AppPreferenceKey<Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { value },
+            set: { newValue in
+                Task { try? await settingsStore.set(newValue, for: key) }
+            }
+        )
     }
 
     @ViewBuilder
@@ -326,20 +384,27 @@ extension NovelReaderView {
 
     private func updateTracking(for chap: Novel.Chapter) {
         let chapterTitleStr = chap.title ?? chap.key
-        HistoryManager.shared.addNovel(novel, chapterKey: chap.key, chapterTitle: chapterTitleStr, pluginId: pluginId)
-        self.progressManager.markAsRead(mangaId: novel.key, chapterId: chap.key, chapterNum: chap.chapter)
-
-        // Track progress
+        historyManager.addNovel(
+            novel,
+            chapterKey: chap.key,
+            chapterTitle: chapterTitleStr,
+            pluginId: pluginId
+        )
         Task {
+            try await progressManager.markAsRead(
+                media: mediaIdentity,
+                chapterId: chap.key,
+                chapterNum: chap.chapter
+            )
             if let chapterFloat = chap.chapter {
-                await TrackerManager.shared.updateProgress(localId: novel.key, progress: Int(chapterFloat))
+                await trackerManager.updateProgress(media: mediaIdentity, progress: Int(chapterFloat))
             } else {
                 let titleOrFallback = chap.title ?? chap.key
                 let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
                 if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
                     let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
                     if let chapNum = Int(numbersOnly) {
-                        await TrackerManager.shared.updateProgress(localId: novel.key, progress: chapNum)
+                        await trackerManager.updateProgress(media: mediaIdentity, progress: chapNum)
                     }
                 }
             }

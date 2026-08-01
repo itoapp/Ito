@@ -152,7 +152,7 @@ public final class SourceResolverViewModel: ObservableObject {
     public init(
         media: DiscoverMedia,
         repository: SourceMappingRepository = GRDBSourceMappingRepository(dbWriter: AppDatabase.shared.dbPool),
-        pluginManager: any PluginProviding = PluginManager.shared
+        pluginManager: any PluginProviding
     ) {
         self.media = media
         self.repository = repository

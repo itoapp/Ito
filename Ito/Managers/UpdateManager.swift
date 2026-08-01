@@ -7,10 +7,7 @@ import ito_runner
 
 @MainActor
 public class UpdateManager: ObservableObject {
-    public static let shared = UpdateManager()
-
-    /// Maps LibraryItem ID to the number of new chapters/episodes since last read
-    @Published public private(set) var newChapterCounts: [String: Int] = [:]
+    @Published private var newChapterCounts: [MediaIdentity: Int] = [:]
 
     /// Indicates if a refresh operation is currently actively running
     @Published public private(set) var isRefreshing: Bool = false
@@ -19,18 +16,20 @@ public class UpdateManager: ObservableObject {
     @Published public private(set) var totalItemsToCheck: Int = 0
     @Published public private(set) var itemsCheckedCurrentRun: Int = 0
 
-    private let defaultsKey = "Ito.NewChapterCounts"
-
     private let dbPool: DatabasePool
+    private let pluginManager: PluginManager?
+    private var settingsStore: AppSettingsStore?
 
     internal init(
-        dbPool: DatabasePool = AppDatabase.shared.dbPool,
-        loadsPersistedState: Bool = true
+        dbPool: DatabasePool,
+        pluginManager: PluginManager? = nil
     ) {
         self.dbPool = dbPool
-        if loadsPersistedState {
-            loadState()
-        }
+        self.pluginManager = pluginManager
+    }
+
+    func configure(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
     }
 
     // MARK: - Core Refresh Flow
@@ -42,7 +41,13 @@ public class UpdateManager: ObservableObject {
             return
         }
 
-        let items = LibraryManager.shared.items
+        let items: [LibraryItem]
+        do {
+            items = try await dbPool.read { db in try LibraryItem.fetchAll(db) }
+        } catch {
+            AppLogger.update.error("🔄 [UpdateManager] Failed to load library: \(error)")
+            return
+        }
         guard !items.isEmpty else {
             AppLogger.update.debug("🔄 [UpdateManager] No library items to check.")
             return
@@ -77,12 +82,12 @@ public class UpdateManager: ObservableObject {
 
         // Wait for PluginManager to finish loading plugins on cold start
         var waitAttempts = 0
-        while PluginManager.shared.installedPlugins.isEmpty && waitAttempts < 20 {
+        while pluginManager?.installedPlugins.isEmpty == true && waitAttempts < 20 {
             try? await Task.sleep(nanoseconds: 500_000_000)
             waitAttempts += 1
         }
 
-        guard !PluginManager.shared.installedPlugins.isEmpty else {
+        guard pluginManager?.installedPlugins.isEmpty == false else {
             AppLogger.update.debug("🔄 [UpdateManager] No plugins loaded, aborting.")
             return []
         }
@@ -91,7 +96,11 @@ public class UpdateManager: ObservableObject {
         var updatedItemsWithCounts: [(LibraryItem, Int)] = []
 
         // 1. Filter out completed/cancelled if setting is on
-        let skipCompleted = UserDefaults.standard.bool(forKey: UserDefaultsKeys.skipCompleted)
+        guard let settingsStore else {
+            AppLogger.update.error("🔄 [UpdateManager] Settings unavailable before durable bootstrap.")
+            return []
+        }
+        let skipCompleted = settingsStore.skipCompleted
         var candidates = items
         if skipCompleted {
             candidates = candidates.filter { item in
@@ -138,7 +147,6 @@ public class UpdateManager: ObservableObject {
 
         AppLogger.update.debug("\("🔄 [UpdateManager] Finished smart update. Found \(updatedItemsWithCounts.count)") new updates.")
         isRefreshing = false
-        saveState()
         return updatedItemsWithCounts
     }
 
@@ -169,7 +177,8 @@ public class UpdateManager: ObservableObject {
 
     private func checkSingleItem(_ item: LibraryItem) async -> Int? {
         do {
-            let runner = try await PluginManager.shared.getRunner(for: item.pluginId)
+            guard let pluginManager else { return nil }
+            let runner = try await pluginManager.getRunner(for: item.pluginId)
 
             let delta = await processUpdate(for: item) {
                 switch item.effectiveType {
@@ -223,9 +232,19 @@ public class UpdateManager: ObservableObject {
     ) async -> Int? {
         do {
             let update = try await fetchUpdate()
-            let committed = try await dbPool.write { db -> (oldCount: Int?, delta: Int)? in
+            let media = MediaIdentity(pluginId: item.pluginId, itemId: item.id)
+            let committed = try await dbPool.write { db -> (
+                oldCount: Int?,
+                delta: Int,
+                itemWasMissing: Bool
+            ) in
                 guard var dbItem = try LibraryItem.fetchOne(db, key: item.id) else {
-                    return nil
+                    _ = try LibraryItem.deleteOne(db, key: item.id)
+                    try UpdateBadgeRecord
+                        .filter(Column("pluginId") == media.pluginId)
+                        .filter(Column("canonicalMediaId") == media.canonicalMediaId)
+                        .deleteAll(db)
+                    return (nil, 0, true)
                 }
 
                 let oldCount = dbItem.knownChapterCount
@@ -239,11 +258,25 @@ public class UpdateManager: ObservableObject {
                     dbItem.status = status
                 }
                 try dbItem.update(db)
-                return (oldCount, delta)
+                if delta > 0 {
+                    try UpdateBadgeRecord(
+                        pluginId: media.pluginId,
+                        canonicalMediaId: media.canonicalMediaId,
+                        count: delta,
+                        updatedAt: checkedAt,
+                        provenance: .runtime
+                    ).save(db)
+                } else {
+                    try UpdateBadgeRecord
+                        .filter(Column("pluginId") == media.pluginId)
+                        .filter(Column("canonicalMediaId") == media.canonicalMediaId)
+                        .deleteAll(db)
+                }
+                return (oldCount, delta, false)
             }
 
-            guard let committed else {
-                newChapterCounts.removeValue(forKey: item.id)
+            if committed.itemWasMissing {
+                newChapterCounts.removeValue(forKey: media)
                 return nil
             }
 
@@ -251,9 +284,9 @@ public class UpdateManager: ObservableObject {
                 "🔄 [UpdateManager] \(item.title): \(String(describing: committed.oldCount)) known, \(update.freshCount) fresh/persisted -> \(committed.delta) new"
             )
             if committed.delta > 0 {
-                newChapterCounts[item.id] = committed.delta
+                newChapterCounts[media] = committed.delta
             } else {
-                newChapterCounts.removeValue(forKey: item.id)
+                newChapterCounts.removeValue(forKey: media)
             }
             return committed.delta
         } catch {
@@ -265,23 +298,51 @@ public class UpdateManager: ObservableObject {
     // MARK: - State Management
 
     @MainActor
-    public func clearBadge(for itemId: String) {
-        if newChapterCounts[itemId] != nil {
-            newChapterCounts.removeValue(forKey: itemId)
-            saveState()
-        }
+    public func badgeCount(for media: MediaIdentity) -> Int {
+        max(0, newChapterCounts[media] ?? 0)
     }
 
-    private func loadState() {
-        if let data = UserDefaults.standard.data(forKey: defaultsKey),
-           let decoded = try? JSONDecoder().decode([String: Int].self, from: data) {
-            self.newChapterCounts = decoded
-        }
+    public var totalBadgeCount: Int {
+        newChapterCounts.values.reduce(0, +)
     }
 
-    private func saveState() {
-        if let encoded = try? JSONEncoder().encode(newChapterCounts) {
-            UserDefaults.standard.set(encoded, forKey: defaultsKey)
+    public func advanceBaseline(
+        for itemId: String,
+        media: MediaIdentity,
+        knownChapterCount: Int
+    ) async throws {
+        try await dbPool.write { db in
+            if var item = try LibraryItem.fetchOne(db, key: itemId) {
+                item.knownChapterCount = knownChapterCount
+                try item.update(db)
+            }
+            try UpdateBadgeRecord
+                .filter(Column("pluginId") == media.pluginId)
+                .filter(Column("canonicalMediaId") == media.canonicalMediaId)
+                .deleteAll(db)
         }
+        newChapterCounts.removeValue(forKey: media)
+    }
+
+    public func clearBadge(for media: MediaIdentity) async throws {
+        _ = try await dbPool.write { db in
+            try UpdateBadgeRecord
+                .filter(Column("pluginId") == media.pluginId)
+                .filter(Column("canonicalMediaId") == media.canonicalMediaId)
+                .deleteAll(db)
+        }
+        newChapterCounts.removeValue(forKey: media)
+    }
+
+    public func reload() async throws {
+        let records = try await dbPool.read { db in
+            try UpdateBadgeRecord.fetchAll(db)
+        }
+        newChapterCounts = Dictionary(uniqueKeysWithValues: records.map {
+            (
+                MediaIdentity(pluginId: $0.pluginId, canonicalMediaId: $0.canonicalMediaId),
+                max(0, $0.count)
+            )
+        })
     }
 }

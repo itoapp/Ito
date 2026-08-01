@@ -38,8 +38,8 @@ private struct UpdateItem: Identifiable {
 }
 
 private struct BrowseContentView: View {
-    @ObservedObject private var pluginManager = PluginManager.shared
-    @ObservedObject private var repoManager = RepoManager.shared
+    @EnvironmentObject private var pluginManager: PluginManager
+    @EnvironmentObject private var repoManager: RepoManager
 
         @State private var showDeleteConfirmation = false
     @State private var pendingDeleteOffsets: IndexSet?

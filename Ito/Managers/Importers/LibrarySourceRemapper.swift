@@ -1,7 +1,8 @@
+import Combine
 import Foundation
 import GRDB
 
-struct LibrarySourceRemapper: Sendable {
+public final class LibrarySourceRemapper: ObservableObject, @unchecked Sendable {
     nonisolated struct Result: Equatable, Sendable {
         let remappedItemCount: Int
         let movedLinkCount: Int
@@ -15,6 +16,7 @@ struct LibrarySourceRemapper: Sendable {
         case destinationExists(String)
         case intraBatchDestinationCollision(destinationId: String, sourceItemIds: [String])
         case ambiguousHistoryAssociation(historyId: String, sourceItemIds: [String])
+        case mediaStateDestinationCollision(table: String, canonicalMediaId: String)
 
         var errorDescription: String? {
             switch self {
@@ -30,6 +32,8 @@ struct LibrarySourceRemapper: Sendable {
                 return "Multiple imported items would map to \"\(destinationId)\"."
             case .ambiguousHistoryAssociation(let historyId, _):
                 return "Reading history \"\(historyId)\" matches multiple imported items."
+            case .mediaStateDestinationCollision(let table, let canonicalMediaId):
+                return "\(table) already contains state for destination media \"\(canonicalMediaId)\"."
             }
         }
     }
@@ -42,6 +46,10 @@ struct LibrarySourceRemapper: Sendable {
     }
 
     let dbPool: DatabasePool
+
+    public init(dbPool: DatabasePool) {
+        self.dbPool = dbPool
+    }
 
     func remap(
         oldPluginId: String,
@@ -111,6 +119,20 @@ struct LibrarySourceRemapper: Sendable {
             }
 
             for mapping in mappings {
+                let sourceCanonicalId = ImportedMediaIdentity.canonicalMediaId(
+                    itemId: mapping.source.id,
+                    pluginId: oldPluginId
+                )
+                try preflightScopedState(
+                    db: db,
+                    oldPluginId: oldPluginId,
+                    newPluginId: newPluginId,
+                    sourceCanonicalMediaId: sourceCanonicalId,
+                    destinationCanonicalMediaId: sourceCanonicalId
+                )
+            }
+
+            for mapping in mappings {
                 let source = mapping.source
                 let destination = LibraryItem(
                     id: mapping.destinationId,
@@ -150,13 +172,211 @@ struct LibrarySourceRemapper: Sendable {
             }
 
             for mapping in mappings {
-                try LibraryItem.deleteOne(db, key: mapping.source.id)
+                let canonicalMediaId = ImportedMediaIdentity.canonicalMediaId(
+                    itemId: mapping.source.id,
+                    pluginId: oldPluginId
+                )
+                for table in [
+                    "readProgressKey",
+                    "readProgressNumber",
+                    "mediaReadProgress",
+                    "trackerLink",
+                    "updateBadge"
+                ] {
+                    try db.execute(
+                        sql: """
+                            UPDATE \(table)
+                            SET pluginId = ?
+                            WHERE pluginId = ? AND canonicalMediaId = ?
+                            """,
+                        arguments: [newPluginId, oldPluginId, canonicalMediaId]
+                    )
+                }
+            }
+
+            for mapping in mappings {
+                _ = try LibraryItem.deleteOne(db, key: mapping.source.id)
             }
 
             return Result(
                 remappedItemCount: mappings.count,
                 movedLinkCount: movedLinkCount,
                 movedHistoryCount: historyMappings.count
+            )
+        }
+    }
+
+    nonisolated private func preflightScopedState(
+        db: Database,
+        oldPluginId: String,
+        newPluginId: String,
+        sourceCanonicalMediaId: String,
+        destinationCanonicalMediaId: String
+    ) throws {
+        let scalarTables = ["mediaReadProgress", "updateBadge"]
+        for table in scalarTables {
+            let sourceExists = try Bool.fetchOne(
+                db,
+                sql: "SELECT EXISTS(SELECT 1 FROM \(table) WHERE pluginId = ? AND canonicalMediaId = ?)",
+                arguments: [oldPluginId, sourceCanonicalMediaId]
+            ) ?? false
+            let destinationExists = try Bool.fetchOne(
+                db,
+                sql: "SELECT EXISTS(SELECT 1 FROM \(table) WHERE pluginId = ? AND canonicalMediaId = ?)",
+                arguments: [newPluginId, destinationCanonicalMediaId]
+            ) ?? false
+            if sourceExists && destinationExists {
+                throw RemapError.mediaStateDestinationCollision(
+                    table: table,
+                    canonicalMediaId: destinationCanonicalMediaId
+                )
+            }
+        }
+
+        let keyedTables = [
+            ("readProgressKey", "chapterKey"),
+            ("readProgressNumber", "chapterNumber"),
+            ("trackerLink", "providerId")
+        ]
+        for (table, logicalKey) in keyedTables {
+            let collision = try Bool.fetchOne(
+                db,
+                sql: """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM \(table) source
+                        JOIN \(table) destination
+                          ON destination.\(logicalKey) = source.\(logicalKey)
+                        WHERE source.pluginId = ?
+                          AND source.canonicalMediaId = ?
+                          AND destination.pluginId = ?
+                          AND destination.canonicalMediaId = ?
+                    )
+                    """,
+                arguments: [
+                    oldPluginId,
+                    sourceCanonicalMediaId,
+                    newPluginId,
+                    destinationCanonicalMediaId
+                ]
+            ) ?? false
+            if collision {
+                throw RemapError.mediaStateDestinationCollision(
+                    table: table,
+                    canonicalMediaId: destinationCanonicalMediaId
+                )
+            }
+        }
+    }
+
+    func relink(
+        pluginId: String,
+        possibleSourceItemIds: [String],
+        destinationItemId: String,
+        title: String,
+        coverUrl: String?,
+        rawPayload: Data
+    ) async throws -> Result {
+        try await dbPool.write { db in
+            guard let source = try possibleSourceItemIds.lazy.compactMap({
+                try LibraryItem.fetchOne(db, key: $0)
+            }).first else {
+                throw RemapError.sourceNotFound(possibleSourceItemIds.joined(separator: ","))
+            }
+            guard source.pluginId == pluginId else {
+                throw RemapError.sourceOwnershipMismatch(
+                    itemId: source.id,
+                    expectedPluginId: pluginId,
+                    actualPluginId: source.pluginId
+                )
+            }
+            guard source.id != destinationItemId else {
+                throw RemapError.noOpMapping(itemId: source.id)
+            }
+            guard try LibraryItem.fetchOne(db, key: destinationItemId) == nil else {
+                throw RemapError.destinationExists(destinationItemId)
+            }
+
+            let sourceCanonicalMediaId = ImportedMediaIdentity.canonicalMediaId(
+                itemId: source.id,
+                pluginId: pluginId
+            )
+            let destinationCanonicalMediaId = ImportedMediaIdentity.canonicalMediaId(
+                itemId: destinationItemId,
+                pluginId: pluginId
+            )
+            try preflightScopedState(
+                db: db,
+                oldPluginId: pluginId,
+                newPluginId: pluginId,
+                sourceCanonicalMediaId: sourceCanonicalMediaId,
+                destinationCanonicalMediaId: destinationCanonicalMediaId
+            )
+
+            try LibraryItem(
+                id: destinationItemId,
+                title: title,
+                coverUrl: coverUrl,
+                pluginId: pluginId,
+                isAnime: source.isAnime,
+                pluginType: source.pluginType,
+                rawPayload: rawPayload,
+                anilistId: source.anilistId,
+                status: source.status,
+                lastCheckedAt: source.lastCheckedAt,
+                lastUpdatedAt: source.lastUpdatedAt,
+                knownChapterCount: source.knownChapterCount
+            ).insert(db)
+
+            try db.execute(
+                sql: "UPDATE itemCategoryLink SET itemId = ? WHERE itemId = ?",
+                arguments: [destinationItemId, source.id]
+            )
+            let movedLinkCount = db.changesCount
+
+            let histories = try ReadingHistoryRecord
+                .filter(ReadingHistoryRecord.Columns.pluginId == pluginId)
+                .fetchAll(db)
+                .filter {
+                    ImportedMediaIdentity.historyIdentifiers(
+                        $0,
+                        match: source.id,
+                        pluginId: pluginId
+                    )
+                }
+            for history in histories {
+                try db.execute(
+                    sql: """
+                        UPDATE readingHistory
+                        SET libraryItemId = ?, mediaKey = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [destinationItemId, destinationItemId, history.id]
+                )
+            }
+
+            for table in [
+                "readProgressKey",
+                "readProgressNumber",
+                "mediaReadProgress",
+                "trackerLink",
+                "updateBadge"
+            ] {
+                try db.execute(
+                    sql: """
+                        UPDATE \(table)
+                        SET canonicalMediaId = ?
+                        WHERE pluginId = ? AND canonicalMediaId = ?
+                        """,
+                    arguments: [destinationCanonicalMediaId, pluginId, sourceCanonicalMediaId]
+                )
+            }
+
+            _ = try LibraryItem.deleteOne(db, key: source.id)
+            return Result(
+                remappedItemCount: 1,
+                movedLinkCount: movedLinkCount,
+                movedHistoryCount: histories.count
             )
         }
     }
