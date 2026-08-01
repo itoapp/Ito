@@ -92,7 +92,9 @@ struct DiscoverView: View {
                     }
 
                     ForEach(searchResults) { media in
-                        NavigationLink(destination: DiscoverDetailView(media: media)) {
+                        NavigationLink(
+                            destination: DiscoverDetailView(media: media, pluginManager: pluginManager)
+                        ) {
                             DiscoverSearchRow(media: media)
                         }
                         .onAppear {
@@ -266,6 +268,7 @@ struct DiscoverView: View {
 private struct DiscoverHomeView: View {
     @ObservedObject var manager: DiscoverManager
     @Binding var selectedType: DiscoverMediaType
+    @EnvironmentObject private var pluginManager: PluginManager
 
     var body: some View {
         ScrollView {
@@ -357,7 +360,9 @@ private struct DiscoverHomeView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(items) { media in
-                        NavigationLink(destination: DiscoverDetailView(media: media)) {
+                        NavigationLink(
+                            destination: DiscoverDetailView(media: media, pluginManager: pluginManager)
+                        ) {
                             DiscoverCardView(media: media)
                         }
                         .buttonStyle(.plain)
