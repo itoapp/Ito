@@ -172,6 +172,16 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         }
     }
 
+    public func renameCategory(id: String, to name: String) async throws {
+        try await dbPool.write { db in
+            guard var category = try LibraryCategory.fetchOne(db, key: id) else {
+                throw LibraryCategory.recordNotFound(key: ["id": id])
+            }
+            category.name = name
+            try category.update(db)
+        }
+    }
+
     public func deleteCategory(id: String) {
         Task {
             do {
