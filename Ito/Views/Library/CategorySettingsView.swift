@@ -1,6 +1,5 @@
 import OSLog
 import SwiftUI
-import GRDB
 
 struct CategorySettingsView: View {
     @EnvironmentObject private var libraryManager: LibraryManager
@@ -123,6 +122,9 @@ struct CategorySettingsView: View {
 struct EditCategoryView: View {
     let category: LibraryCategory
     @State private var name: String = ""
+    @State private var isSaving = false
+    @State private var showingRenameError = false
+    @EnvironmentObject private var libraryManager: LibraryManager
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -139,25 +141,30 @@ struct EditCategoryView: View {
         .onAppear {
             name = category.name
         }
+        .alert("List Not Renamed", isPresented: $showingRenameError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Your list couldn't be renamed. Please try again.")
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Done") {
                     let newName = name
-                    Task {
-                        // Rename logic here: fetch category and update in DB pool
+                    Task { @MainActor in
+                        isSaving = true
+                        defer { isSaving = false }
                         do {
-                            try await AppDatabase.shared.dbPool.write { db in
-                                var updated = category
-                                updated.name = newName
-                                try updated.update(db)
-                            }
+                            try await libraryManager.renameCategory(id: category.id, to: newName)
                             dismiss()
                         } catch {
                             AppLogger.database.error("Error renaming: \(error)")
+                            showingRenameError = true
                         }
                     }
                 }
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    isSaving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
             }
         }
     }
