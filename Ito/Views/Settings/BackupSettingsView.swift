@@ -2,6 +2,20 @@ import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct BackupPresentationOperationGate {
+    private(set) var isRunning = false
+
+    mutating func begin() -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        return true
+    }
+
+    mutating func end() {
+        isRunning = false
+    }
+}
+
 struct BackupSettingsView: View {
     @EnvironmentObject private var backupManager: BackupManager
 
@@ -10,10 +24,13 @@ struct BackupSettingsView: View {
     @State private var generatedBackup: BackupDocument?
 
     @State private var showImportOptions = false
+    @State private var showWipeConfirmation = false
     @State private var pendingImportURL: URL?
+    @State private var operationGate = BackupPresentationOperationGate()
 
     @State private var showConflictResolver = false
     @State private var activeConflicts: [MergeConflict] = []
+    @State private var activeConflictURL: URL?
 
     @State private var alertTitle = ""
     @State private var alertMessage = ""
@@ -22,7 +39,6 @@ struct BackupSettingsView: View {
     @State private var showRestoreReport = false
     @State private var activeRestoreReport: BackupRestoreReport?
     @State private var showRefreshPending = false
-    @State private var isAcknowledgingReport = false
 
     var body: some View {
         List {
@@ -40,7 +56,10 @@ struct BackupSettingsView: View {
             }
 
             Section(header: Text("Import"), footer: Text("Restoring from a backup allows you to completely replace your current library, or merge missing items into it.")) {
-                Button(action: { isImporting = true }) {
+                Button(action: {
+                    guard !operationGate.isRunning else { return }
+                    isImporting = true
+                }) {
                     HStack {
                         Label("Restore from Backup", systemImage: "square.and.arrow.down")
                         Spacer()
@@ -49,7 +68,7 @@ struct BackupSettingsView: View {
                         }
                     }
                 }
-                .disabled(backupManager.isRestoring || isImporting)
+                .disabled(backupManager.isRestoring || isImporting || operationGate.isRunning)
             }
         }
         .navigationTitle("Backup & Restore")
@@ -75,6 +94,7 @@ struct BackupSettingsView: View {
         ) { result in
             switch result {
             case .success(let urls):
+                guard !operationGate.isRunning else { return }
                 if let url = urls.first {
                     pendingImportURL = url
                     showImportOptions = true
@@ -91,6 +111,16 @@ struct BackupSettingsView: View {
                 }
             }
             Button("Wipe and Replace Library", role: .destructive) {
+                showWipeConfirmation = true
+            }
+            Button("Cancel", role: .cancel) {
+                pendingImportURL = nil
+            }
+        } message: {
+            Text("Merging keeps your existing library items and only adds missing ones. Wiping completely deletes your current library and replaces it with the backup.")
+        }
+        .alert("Wipe and Replace Library?", isPresented: $showWipeConfirmation) {
+            Button("Wipe and Replace", role: .destructive) {
                 if let url = pendingImportURL {
                     executeFinalImport(url: url, mode: .wipe)
                 }
@@ -99,10 +129,10 @@ struct BackupSettingsView: View {
                 pendingImportURL = nil
             }
         } message: {
-            Text("Merging keeps your existing library items and only adds missing ones. Wiping completely deletes your current library and replaces it with the backup.")
+            Text("This permanently deletes your current library before restoring the backup. This action cannot be undone.")
         }
         .sheet(isPresented: $showConflictResolver) {
-            if let pendingURL = pendingImportURL {
+            if let conflictURL = activeConflictURL {
                 MergeResolverView(
                     conflicts: $activeConflicts,
                     onResolve: {
@@ -111,26 +141,27 @@ struct BackupSettingsView: View {
                         for conflict in activeConflicts {
                             resolutions[conflict.id] = conflict.resolution
                         }
-                        executeFinalImport(url: pendingURL, mode: .merge, resolutions: resolutions)
+                        activeConflictURL = nil
+                        executeFinalImport(url: conflictURL, mode: .merge, resolutions: resolutions)
                     },
                     onCancel: {
                         showConflictResolver = false
+                        activeConflictURL = nil
                         pendingImportURL = nil
                     }
                 )
                 .interactiveDismissDisabled()
             }
         }
-        // General Alerts
         .alert(isPresented: $showAlert) {
             Alert(title: Text(alertTitle), message: Text(alertMessage), dismissButton: .default(Text("OK")))
         }
         .sheet(isPresented: $showRestoreReport) {
             if let report = activeRestoreReport {
                 BackupRestoreReportView(report: report) {
-                    guard !isAcknowledgingReport else { return }
-                    isAcknowledgingReport = true
+                    guard operationGate.begin() else { return }
                     Task {
+                        defer { operationGate.end() }
                         do {
                             _ = try await backupManager.acknowledgeRestoreReport()
                             activeRestoreReport = backupManager.lastRestoreReport
@@ -138,7 +169,6 @@ struct BackupSettingsView: View {
                         } catch {
                             showError("Acknowledgment Failed", error.localizedDescription)
                         }
-                        isAcknowledgingReport = false
                     }
                 }
                 .interactiveDismissDisabled()
@@ -146,7 +176,9 @@ struct BackupSettingsView: View {
         }
         .alert("Restore committed; refresh pending", isPresented: $showRefreshPending) {
             Button("Retry") {
+                guard operationGate.begin() else { return }
                 Task {
+                    defer { operationGate.end() }
                     do {
                         try await backupManager.retryCommittedRefresh()
                         activeRestoreReport = backupManager.lastRestoreReport
@@ -175,15 +207,16 @@ struct BackupSettingsView: View {
     }
 
     private func executeMergeAnalysis(url: URL) {
+        guard operationGate.begin() else { return }
         Task {
+            defer { operationGate.end() }
             do {
                 let conflicts = try await backupManager.analyzeMerge(from: url)
                 if conflicts.isEmpty {
-                    // Fast track: no structural differences found
-                    executeFinalImport(url: url, mode: .merge)
+                    await performFinalImport(url: url, mode: .merge)
                 } else {
-                    // Surface UI resolver
                     self.activeConflicts = conflicts
+                    self.activeConflictURL = url
                     self.showConflictResolver = true
                 }
             } catch {
@@ -193,25 +226,34 @@ struct BackupSettingsView: View {
     }
 
     private func executeFinalImport(url: URL, mode: BackupRestoreMode, resolutions: [String: ConflictResolution] = [:]) {
+        guard operationGate.begin() else { return }
         Task {
-            do {
-                let report = try await backupManager.restoreBackup(
-                    from: url,
-                    mode: mode,
-                    resolvedConflicts: resolutions
-                )
-                activeRestoreReport = report
-                showRestoreReport = true
-                pendingImportURL = nil
-            } catch BackupRestoreError.restoreCommittedRefreshPending {
-                showRefreshPending = true
-                pendingImportURL = nil
-            } catch {
-                alertTitle = "Restore Failed"
-                alertMessage = error.localizedDescription
-                showAlert = true
-                pendingImportURL = nil
-            }
+            defer { operationGate.end() }
+            await performFinalImport(url: url, mode: mode, resolutions: resolutions)
+        }
+    }
+
+    private func performFinalImport(url: URL, mode: BackupRestoreMode, resolutions: [String: ConflictResolution] = [:]) async {
+        do {
+            let report = try await backupManager.restoreBackup(
+                from: url,
+                mode: mode,
+                resolvedConflicts: resolutions
+            )
+            activeRestoreReport = report
+            showRestoreReport = true
+            activeConflictURL = nil
+            pendingImportURL = nil
+        } catch BackupRestoreError.restoreCommittedRefreshPending {
+            showRefreshPending = true
+            activeConflictURL = nil
+            pendingImportURL = nil
+        } catch {
+            alertTitle = "Restore Failed"
+            alertMessage = error.localizedDescription
+            showAlert = true
+            activeConflictURL = nil
+            pendingImportURL = nil
         }
     }
 
