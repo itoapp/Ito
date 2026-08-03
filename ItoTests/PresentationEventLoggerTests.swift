@@ -62,6 +62,20 @@ final class PresentationEventLoggerTests: XCTestCase {
         XCTAssertTrue(PresentationLogFormatter.format(ignoredStale).contains("outcome=ignored_stale"))
     }
 
+    func testPartialFailureIsAClosedTypedOutcome() {
+        let partial = PresentationLogEvent.finished(
+            feature: .search,
+            operationID: operationID,
+            outcome: .partiallySucceeded(.pluginExecution)
+        )
+
+        XCTAssertEqual(partial.outcome, .partiallySucceeded(.pluginExecution))
+        XCTAssertEqual(
+            PresentationLogFormatter.format(partial),
+            "presentation feature=search kind=operation operation_id=01234567-89ab-cdef-0123-456789abcdef phase=finished outcome=partial_failure error_category=plugin_execution"
+        )
+    }
+
     func testPluginTrapUsesClosedPluginExecutionKindAndErrorCategory() {
         let event = PresentationLogEvent.finished(
             feature: .search,

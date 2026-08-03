@@ -69,6 +69,7 @@ public final class DurableStateBootstrap: ObservableObject {
     @Published public private(set) var notificationManager: NotificationManager?
     @Published public private(set) var backupManager: BackupManager?
     @Published public private(set) var librarySourceRemapper: LibrarySourceRemapper?
+    @Published private(set) var appScope: AppScope?
 
     private let migration: @MainActor @Sendable () async throws -> Void
     private let extensions: [any DurableStateBootstrapExtension]
@@ -416,6 +417,7 @@ public final class DurableStateBootstrap: ObservableObject {
         notificationManager = runtime.notificationManager
         backupManager = runtime.backupManager
         librarySourceRemapper = runtime.librarySourceRemapper
+        appScope = AppScope.prepared(pluginManager: runtime.pluginManager)
     }
 
     private func clearRuntime() {
@@ -435,6 +437,7 @@ public final class DurableStateBootstrap: ObservableObject {
         notificationManager = nil
         backupManager = nil
         librarySourceRemapper = nil
+        appScope = nil
     }
 
     private var hasCompleteRuntimeDependencies: Bool {
@@ -453,6 +456,7 @@ public final class DurableStateBootstrap: ObservableObject {
             && notificationManager != nil
             && backupManager != nil
             && librarySourceRemapper != nil
+            && appScope != nil
     }
 
     private static func production() -> DurableStateBootstrap {

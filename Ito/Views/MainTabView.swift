@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct MainTabView: View {
+    let appScope: AppScope
+
     var body: some View {
         ZStack {
             TabView {
@@ -19,7 +21,7 @@ struct MainTabView: View {
                         Label("Discover", systemImage: "sparkles")
                     }
 
-                SearchView()
+                appScope.viewFactory.makeSearchView()
                     .tabItem {
                         Label("Search", systemImage: "magnifyingglass")
                     }
@@ -41,6 +43,6 @@ struct MainTabView: View {
 
 struct MainTabView_Previews: PreviewProvider {
     static var previews: some View {
-        MainTabView()
+        Text("MainTabView requires a prepared runtime")
     }
 }
