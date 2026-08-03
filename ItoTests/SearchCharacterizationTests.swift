@@ -1,5 +1,5 @@
-import SwiftUI
 import XCTest
+import ito_runner
 @testable import Ito
 
 @MainActor
@@ -17,21 +17,22 @@ final class SearchCharacterizationTests: XCTestCase {
         XCTAssertEqual(store.savedValues, [["One Piece"]])
     }
 
-    func testEmptyOrClearedQueryResetsSearchState() {
+    func testEmptyOrClearedQueryResetsSearchState() async {
         let executor = RecordingSearchExecutor(plugins: [.manga()])
         let store = InMemoryRecentSearchStore()
         let viewModel = makeViewModel(executor: executor, store: store)
-        viewModel.searchResults = ["Existing": [.result(id: "old")]]
-        viewModel.activeTasks = ["plugin.manga"]
-        viewModel.isSearching = true
+
+        viewModel.performSearch(query: "existing")
+        await waitUntil { !viewModel.isSearching }
+        XCTAssertFalse(viewModel.searchResults.isEmpty)
 
         viewModel.performSearch(query: " \n\t ")
 
         XCTAssertTrue(viewModel.searchResults.isEmpty)
         XCTAssertTrue(viewModel.activeTasks.isEmpty)
         XCTAssertFalse(viewModel.isSearching)
-        XCTAssertTrue(executor.invocations.isEmpty)
-        XCTAssertTrue(store.savedValues.isEmpty)
+        XCTAssertEqual(executor.invocations.map(\.query), ["existing"])
+        XCTAssertEqual(store.savedValues, [["existing"]])
     }
 
     func testAutomaticSearchDebouncesRapidInputUsingTheSevenHundredMillisecondContract() async {
@@ -41,7 +42,8 @@ final class SearchCharacterizationTests: XCTestCase {
         let viewModel = SearchViewModel(
             searchExecutor: executor,
             recentSearchStore: store,
-            debounceMilliseconds: 10
+            debounceMilliseconds: 10,
+            presentationLogger: PresentationEventCaptureSpy()
         )
 
         viewModel.searchText = "first"
@@ -114,16 +116,7 @@ final class SearchCharacterizationTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: UserDefaultsRecentSearchStore.key))
     }
 
-    func testMissingExecutorOrAvailablePluginEndsWithoutPersistingQuery() {
-        let missingStore = InMemoryRecentSearchStore()
-        let missingExecutorViewModel = makeViewModel(store: missingStore)
-
-        missingExecutorViewModel.performSearch(query: "query")
-
-        XCTAssertFalse(missingExecutorViewModel.isSearching)
-        XCTAssertTrue(missingExecutorViewModel.searchResults.isEmpty)
-        XCTAssertTrue(missingStore.savedValues.isEmpty)
-
+    func testNoAvailablePluginEndsWithoutPersistingQuery() {
         let emptyExecutor = RecordingSearchExecutor(plugins: [])
         let emptyStore = InMemoryRecentSearchStore()
         let emptyExecutorViewModel = makeViewModel(executor: emptyExecutor, store: emptyStore)
@@ -219,7 +212,7 @@ final class SearchCharacterizationTests: XCTestCase {
         XCTAssertEqual(viewModel.searchResults["Manga Plugin"]?.last?.id, "result-24")
     }
 
-    func testFailureIsLoggedContinuesToNextPluginAndDoesNotPublishFailedResults() async throws {
+    func testFailureContinuesToNextPluginAndDoesNotPublishFailedResults() async {
         let executor = RecordingSearchExecutor(
             plugins: [
                 .init(id: "plugin.a", name: "Alpha", kind: .manga),
@@ -238,14 +231,11 @@ final class SearchCharacterizationTests: XCTestCase {
         XCTAssertEqual(viewModel.searchResults["Beta"]?.map(\.id), ["success"])
         XCTAssertTrue(executor.evictedPluginIDs.isEmpty)
 
-        let source = try searchViewModelSource()
-        XCTAssertTrue(source.contains("AppLogger.ui.error"))
-        XCTAssertTrue(source.contains("Failed for"))
     }
 
     func testWasmTrapFailureEvictsRunner() async {
         let executor = RecordingSearchExecutor(plugins: [.manga()])
-        executor.errorsByPluginID["plugin.manga"] = SearchStubError.wasmTrap
+        executor.errorsByPluginID["plugin.manga"] = SearchPluginExecutionError.pluginTrap
         let viewModel = makeViewModel(executor: executor)
 
         viewModel.performSearch(query: "query")
@@ -284,13 +274,14 @@ final class SearchCharacterizationTests: XCTestCase {
     }
 
     private func makeViewModel(
-        executor: (any SearchPluginExecuting)? = nil,
+        executor: any SearchPluginExecuting = RecordingSearchExecutor(plugins: []),
         store: InMemoryRecentSearchStore = InMemoryRecentSearchStore()
     ) -> SearchViewModel {
         SearchViewModel(
             searchExecutor: executor,
             recentSearchStore: store,
-            debounceMilliseconds: nil
+            debounceMilliseconds: nil,
+            presentationLogger: PresentationEventCaptureSpy()
         )
     }
 
@@ -306,13 +297,6 @@ final class SearchCharacterizationTests: XCTestCase {
         XCTFail("Condition was not met before timeout", file: file, line: line)
     }
 
-    private func searchViewModelSource() throws -> String {
-        let repositoryRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let sourceURL = repositoryRoot.appendingPathComponent("Ito/ViewModels/SearchViewModel.swift")
-        return try String(contentsOf: sourceURL, encoding: .utf8)
-    }
 }
 
 @MainActor
@@ -434,14 +418,11 @@ private final class SuspendingSearchExecutor: SearchPluginExecuting {
 
 private enum SearchStubError: Error, CustomStringConvertible {
     case failure
-    case wasmTrap
 
     var description: String {
         switch self {
         case .failure:
             return "failure"
-        case .wasmTrap:
-            return "wasmTrap: corrupted runner"
         }
     }
 }
@@ -463,12 +444,17 @@ private extension SearchPluginDescriptor {
 private extension PluginSearchResult {
     @MainActor
     static func result(id: String) -> Self {
-        .init(
+        let runner = ItoRunner()
+        return .init(
             id: id,
             title: id,
             cover: nil,
             subtitle: nil,
-            destination: AnyView(EmptyView())
+            destination: .manga(
+                pluginID: "plugin.manga",
+                context: ItoRunnerSearchContext(runner: runner),
+                media: Manga(key: id, title: id)
+            )
         )
     }
 }

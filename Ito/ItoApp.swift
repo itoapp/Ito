@@ -111,7 +111,8 @@ private struct BootstrapGateView: View {
                let historyManager = bootstrap.historyManager,
                let notificationManager = bootstrap.notificationManager,
                let backupManager = bootstrap.backupManager,
-               let librarySourceRemapper = bootstrap.librarySourceRemapper {
+               let librarySourceRemapper = bootstrap.librarySourceRemapper,
+               let appScope = bootstrap.appScope {
                 DurableApplicationView(
                     settingsStore: settingsStore,
                     progressManager: progressManager,
@@ -126,7 +127,8 @@ private struct BootstrapGateView: View {
                     historyManager: historyManager,
                     notificationManager: notificationManager,
                     backupManager: backupManager,
-                    librarySourceRemapper: librarySourceRemapper
+                    librarySourceRemapper: librarySourceRemapper,
+                    appScope: appScope
                 )
             } else {
                 BootstrapFailureView(
@@ -185,6 +187,7 @@ private struct DurableApplicationView: View {
     let notificationManager: NotificationManager
     let backupManager: BackupManager
     let librarySourceRemapper: LibrarySourceRemapper
+    let appScope: AppScope
     private let trackerCredentialLifecycle: TrackerCredentialLifecycle
     @Environment(\.scenePhase) private var scenePhase
 
@@ -202,7 +205,8 @@ private struct DurableApplicationView: View {
         historyManager: HistoryManager,
         notificationManager: NotificationManager,
         backupManager: BackupManager,
-        librarySourceRemapper: LibrarySourceRemapper
+        librarySourceRemapper: LibrarySourceRemapper,
+        appScope: AppScope
     ) {
         self.settingsStore = settingsStore
         self.progressManager = progressManager
@@ -218,11 +222,12 @@ private struct DurableApplicationView: View {
         self.notificationManager = notificationManager
         self.backupManager = backupManager
         self.librarySourceRemapper = librarySourceRemapper
+        self.appScope = appScope
         trackerCredentialLifecycle = TrackerCredentialLifecycle(manager: trackerManager)
     }
 
     var body: some View {
-        MainTabView()
+        MainTabView(appScope: appScope)
             .environmentObject(progressManager)
             .environmentObject(trackerManager)
             .environmentObject(updateManager)

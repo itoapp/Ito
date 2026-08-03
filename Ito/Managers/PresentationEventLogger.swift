@@ -24,6 +24,7 @@ public enum PresentationErrorCategory: String, Equatable, Sendable {
 
 public enum PresentationEventOutcome: Equatable, Sendable {
     case succeeded
+    case partiallySucceeded(PresentationErrorCategory)
     case failed(PresentationErrorCategory)
     case cancelled
     case ignoredStale
@@ -32,6 +33,8 @@ public enum PresentationEventOutcome: Equatable, Sendable {
         switch self {
         case .succeeded:
             return "succeeded"
+        case .partiallySucceeded:
+            return "partial_failure"
         case .failed:
             return "failed"
         case .cancelled:
@@ -42,8 +45,12 @@ public enum PresentationEventOutcome: Equatable, Sendable {
     }
 
     fileprivate var errorCategory: PresentationErrorCategory? {
-        guard case .failed(let category) = self else { return nil }
-        return category
+        switch self {
+        case .partiallySucceeded(let category), .failed(let category):
+            return category
+        case .succeeded, .cancelled, .ignoredStale:
+            return nil
+        }
     }
 }
 

@@ -1,40 +1,37 @@
-import Foundation
 import Combine
-import OSLog
-import SwiftUI
+import Foundation
 
 @MainActor
-public class SearchViewModel: ObservableObject {
+public final class SearchViewModel: ObservableObject {
     static let automaticSearchDebounceMilliseconds = 700
+    private static let resultLimit = 25
+    private static let recentSearchLimit = 10
 
-    @Published public var searchText: String = ""
+    @Published public var searchText = ""
     @Published public var searchScope: SearchScope = .all
-    @Published public var searchResults: [String: [PluginSearchResult]] = [:]
-    @Published public var isSearching: Bool = false
-    @Published public var activeTasks: Set<String> = []
-    @Published public var recentSearches: [String] = []
+    @Published public private(set) var state: SearchPresentationState = .idle
+    @Published public private(set) var recentSearches: [String]
 
-    private var cancellables = Set<AnyCancellable>()
-    private var currentTasks: [Task<Void, Never>] = []
-    private var searchSessionID = UUID()
-    private var searchExecutor: (any SearchPluginExecuting)?
+    public var searchResults: SearchResults { state.results }
+    public var isSearching: Bool { state.isLoading }
+    public var activeTasks: Set<String> { state.activePluginIDs }
+
+    private let searchExecutor: any SearchPluginExecuting
     private let recentSearchStore: any RecentSearchPersisting
-
-    public convenience init() {
-        self.init(
-            searchExecutor: nil,
-            recentSearchStore: UserDefaultsRecentSearchStore(),
-            debounceMilliseconds: Self.automaticSearchDebounceMilliseconds
-        )
-    }
+    private let presentationLogger: any PresentationEventLogging
+    private var cancellables = Set<AnyCancellable>()
+    private var currentTask: Task<Void, Never>?
+    private var currentOperationID: UUID?
 
     init(
-        searchExecutor: (any SearchPluginExecuting)?,
+        searchExecutor: any SearchPluginExecuting,
         recentSearchStore: any RecentSearchPersisting,
-        debounceMilliseconds: Int?
+        debounceMilliseconds: Int?,
+        presentationLogger: any PresentationEventLogging
     ) {
         self.searchExecutor = searchExecutor
         self.recentSearchStore = recentSearchStore
+        self.presentationLogger = presentationLogger
         self.recentSearches = recentSearchStore.load()
 
         if let debounceMilliseconds {
@@ -42,140 +39,297 @@ public class SearchViewModel: ObservableObject {
                 .dropFirst()
                 .debounce(for: .milliseconds(debounceMilliseconds), scheduler: RunLoop.main)
                 .sink { [weak self] query, _ in
-                    // If the user clears the search, don't auto-search but definitely wipe the old results
                     self?.performSearch(query: query)
                 }
                 .store(in: &cancellables)
         }
     }
 
-    public func configure(pluginManager: PluginManager) {
-        self.searchExecutor = PluginManagerSearchExecutor(pluginManager: pluginManager)
-    }
-
     public func performSearch(query: String) {
-        // Cancel any existing tasks from a previous search
-        currentTasks.forEach { $0.cancel() }
-        currentTasks.removeAll()
+        cancelCurrentOperation(publishCancelledState: false)
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            self.searchResults = [:]
-            self.isSearching = false
-            self.activeTasks.removeAll()
+        guard !trimmed.isEmpty else {
+            state = .idle
             return
         }
 
-        self.isSearching = true
-        self.searchResults.removeAll()
-        self.activeTasks.removeAll()
+        let operationID = UUID()
+        currentOperationID = operationID
+        presentationLogger.log(.started(feature: .search, operationID: operationID))
 
-        // Track unique execution run
-        let sessionID = UUID()
-        self.searchSessionID = sessionID
-
-        guard let searchExecutor else {
-            isSearching = false
-            return
-        }
-        let plugins = searchExecutor.plugins.sorted { $0.name < $1.name }
-
-        // Filter plugins based on the currently selected scope!
-        var validPlugins: [SearchPluginDescriptor] = []
-        for plugin in plugins {
-            switch searchScope {
-            case .all:
-                validPlugins.append(plugin)
-            case .manga:
-                if plugin.kind == .manga { validPlugins.append(plugin) }
-            case .anime:
-                if plugin.kind == .anime { validPlugins.append(plugin) }
-            case .novel:
-                if plugin.kind == .novel { validPlugins.append(plugin) }
-            }
-        }
-
-        if validPlugins.isEmpty {
-            self.isSearching = false
+        let plugins = filteredPlugins().sorted { $0.name < $1.name }
+        guard !plugins.isEmpty else {
+            state = .failure(.pluginUnavailable)
+            finishOperation(
+                operationID,
+                outcome: .failed(.pluginUnavailable)
+            )
             return
         }
 
-        // Save to Recent Searches dynamically capping at 10 items
-        if !recentSearches.contains(trimmed) {
-            recentSearches.insert(trimmed, at: 0)
-            if recentSearches.count > 10 {
-                recentSearches.removeLast()
-            }
-            recentSearchStore.save(recentSearches)
+        addRecentSearch(trimmed)
+        let initialActivePluginIDs = Set(plugins.map(\.id))
+        state = .loading(results: [:], activePluginIDs: initialActivePluginIDs)
+
+        currentTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await execute(
+                plugins: plugins,
+                query: trimmed,
+                operationID: operationID
+            )
         }
+    }
 
-        for plugin in validPlugins {
-            activeTasks.insert(plugin.id)
-        }
-
-        // IMPORTANT: ItoRunner WASM host functions use DispatchSemaphore to bridge
-        // sync WASM ↔ async Swift. Each in-flight call blocks one thread from the
-        // cooperative thread pool. Running too many searches concurrently exhausts
-        // the pool and deadlocks. We run searches SERIALLY to avoid this.
-        let searchPlugins = validPlugins
-        let searchQuery = trimmed
-        let task = Task { @MainActor in
-            for plugin in searchPlugins {
-                // Bail out if a newer search has started
-                guard !Task.isCancelled, self.searchSessionID == sessionID else {
-                    AppLogger.ui.debug("🔍 [Search] Session invalidated, stopping")
-                    break
-                }
-
-                do {
-                    let searchResults = try await searchExecutor.search(
-                        plugin: plugin,
-                        query: searchQuery,
-                        limit: 25
-                    )
-                    guard !Task.isCancelled else { break }
-                    let results = Array(searchResults.prefix(25))
-
-                    let sessionValid = self.searchSessionID == sessionID
-                    if sessionValid && !results.isEmpty {
-                        AppLogger.ui.debug("🔍 [Search] \(plugin.name) → \(results.count) results added to UI")
-                        self.searchResults[plugin.name] = results
-                    } else if !sessionValid {
-                        AppLogger.ui.debug("🔍 [Search] \(plugin.name) → DROPPED (session expired)")
-                    } else {
-                        AppLogger.ui.debug("🔍 [Search] \(plugin.name) → 0 mapped results, skipping")
-                    }
-                } catch is CancellationError {
-                    AppLogger.ui.debug("🔍 [Search] Cancelled for \(plugin.name)")
-                    break
-                } catch {
-                    AppLogger.ui.error("🔍 [Search] Failed for \(plugin.name): \(error)")
-                    // If a WASM trap occurred, the runner state may be corrupted.
-                    // Evict it so the next use creates a fresh instance.
-                    if "\(error)".contains("wasmTrap") || "\(error)".contains("Trap") {
-                        AppLogger.ui.debug("🔍 [Search] Evicting corrupted runner for \(plugin.id)")
-                        searchExecutor.evictRunner(for: plugin.id)
-                    }
-                }
-
-                // Mark this plugin as done
-                if self.searchSessionID == sessionID {
-                    self.activeTasks.remove(plugin.id)
-                }
-            }
-
-            // All done (or cancelled)
-            if self.searchSessionID == sessionID {
-                self.activeTasks.removeAll()
-                self.isSearching = false
-                AppLogger.ui.debug("🔍 [Search] All search tasks complete")
-            }
-        }
-        currentTasks = [task]
+    public func cancelSearch() {
+        cancelCurrentOperation(publishCancelledState: true)
     }
 
     public func clearRecentSearches() {
         recentSearches.removeAll()
         recentSearchStore.clear()
+    }
+
+    public func isPluginActive(named pluginName: String) -> Bool {
+        let activePluginIDs = activeTasks
+        return searchExecutor.plugins.contains { plugin in
+            plugin.name == pluginName && activePluginIDs.contains(plugin.id)
+        }
+    }
+
+    private func execute(
+        plugins: [SearchPluginDescriptor],
+        query: String,
+        operationID: UUID
+    ) async {
+        var results: SearchResults = [:]
+        var failures: [SearchFailure] = []
+        var successfulPluginCount = 0
+        var activePluginIDs = Set(plugins.map(\.id))
+
+        for plugin in plugins {
+            guard isCurrent(operationID), !Task.isCancelled else {
+                ignoreStaleResult(for: operationID)
+                return
+            }
+
+            presentationLogger.log(
+                .started(
+                    feature: .search,
+                    kind: .pluginExecution,
+                    operationID: operationID
+                )
+            )
+
+            do {
+                let pluginResults = try await searchExecutor.search(
+                    plugin: plugin,
+                    query: query,
+                    limit: Self.resultLimit
+                )
+
+                guard isCurrent(operationID), !Task.isCancelled else {
+                    ignoreStaleResult(for: operationID)
+                    return
+                }
+
+                successfulPluginCount += 1
+                let cappedResults = Array(pluginResults.prefix(Self.resultLimit))
+                if !cappedResults.isEmpty {
+                    results[plugin.name] = cappedResults
+                }
+                presentationLogger.log(
+                    .finished(
+                        feature: .search,
+                        kind: .pluginExecution,
+                        operationID: operationID,
+                        outcome: .succeeded
+                    )
+                )
+            } catch is CancellationError {
+                guard isCurrent(operationID) else {
+                    ignoreStaleResult(for: operationID)
+                    return
+                }
+                presentationLogger.log(
+                    .finished(
+                        feature: .search,
+                        kind: .pluginExecution,
+                        operationID: operationID,
+                        outcome: .cancelled
+                    )
+                )
+                state = .cancelled
+                finishOperation(operationID, outcome: .cancelled)
+                return
+            } catch {
+                guard isCurrent(operationID), !Task.isCancelled else {
+                    ignoreStaleResult(for: operationID)
+                    return
+                }
+                let failure = classify(error)
+                failures.append(failure)
+                if failure == .pluginTrap {
+                    searchExecutor.evictRunner(for: plugin.id)
+                }
+                presentationLogger.log(
+                    .finished(
+                        feature: .search,
+                        kind: .pluginExecution,
+                        operationID: operationID,
+                        outcome: .failed(failure.presentationCategory)
+                    )
+                )
+            }
+
+            activePluginIDs.remove(plugin.id)
+            state = .loading(results: results, activePluginIDs: activePluginIDs)
+        }
+
+        guard isCurrent(operationID), !Task.isCancelled else {
+            ignoreStaleResult(for: operationID)
+            return
+        }
+
+        publishTerminalState(
+            results: results,
+            failures: failures,
+            successfulPluginCount: successfulPluginCount,
+            operationID: operationID
+        )
+    }
+
+    private func publishTerminalState(
+        results: SearchResults,
+        failures: [SearchFailure],
+        successfulPluginCount: Int,
+        operationID: UUID
+    ) {
+        if failures.isEmpty {
+            state = results.isEmpty ? .empty : .content(results: results)
+            finishOperation(operationID, outcome: .succeeded)
+            return
+        }
+
+        let failure = aggregateFailure(failures)
+        if successfulPluginCount > 0 {
+            state = .partialFailure(
+                results: results,
+                failedPluginCount: failures.count
+            )
+            finishOperation(
+                operationID,
+                outcome: .partiallySucceeded(failure.presentationCategory)
+            )
+        } else {
+            state = .failure(failure)
+            finishOperation(
+                operationID,
+                outcome: .failed(failure.presentationCategory)
+            )
+        }
+    }
+
+    private func cancelCurrentOperation(publishCancelledState: Bool) {
+        guard let operationID = currentOperationID else {
+            currentTask?.cancel()
+            currentTask = nil
+            return
+        }
+
+        currentTask?.cancel()
+        currentTask = nil
+        currentOperationID = nil
+        logCancellation(for: operationID)
+        if publishCancelledState {
+            state = .cancelled
+        }
+    }
+
+    private func finishOperation(
+        _ operationID: UUID,
+        outcome: PresentationEventOutcome
+    ) {
+        guard isCurrent(operationID) else { return }
+        presentationLogger.log(
+            .finished(
+                feature: .search,
+                operationID: operationID,
+                outcome: outcome
+            )
+        )
+        currentOperationID = nil
+        currentTask = nil
+    }
+
+    private func logCancellation(for operationID: UUID) {
+        presentationLogger.log(
+            .finished(
+                feature: .search,
+                operationID: operationID,
+                outcome: .cancelled
+            )
+        )
+    }
+
+    private func ignoreStaleResult(for operationID: UUID) {
+        presentationLogger.log(
+            .finished(
+                feature: .search,
+                operationID: operationID,
+                outcome: .ignoredStale
+            )
+        )
+    }
+
+    private func isCurrent(_ operationID: UUID) -> Bool {
+        currentOperationID == operationID
+    }
+
+    private func filteredPlugins() -> [SearchPluginDescriptor] {
+        searchExecutor.plugins.filter { plugin in
+            switch searchScope {
+            case .all:
+                return true
+            case .manga:
+                return plugin.kind == .manga
+            case .anime:
+                return plugin.kind == .anime
+            case .novel:
+                return plugin.kind == .novel
+            }
+        }
+    }
+
+    private func addRecentSearch(_ query: String) {
+        guard !recentSearches.contains(query) else { return }
+        recentSearches.insert(query, at: 0)
+        if recentSearches.count > Self.recentSearchLimit {
+            recentSearches.removeLast()
+        }
+        recentSearchStore.save(recentSearches)
+    }
+
+    private func classify(_ error: any Error) -> SearchFailure {
+        guard let error = error as? SearchPluginExecutionError else {
+            return .pluginExecution
+        }
+        switch error {
+        case .pluginUnavailable:
+            return .pluginUnavailable
+        case .pluginExecution:
+            return .pluginExecution
+        case .pluginTrap:
+            return .pluginTrap
+        }
+    }
+
+    private func aggregateFailure(_ failures: [SearchFailure]) -> SearchFailure {
+        if failures.contains(.pluginTrap) { return .pluginTrap }
+        if failures.allSatisfy({ $0 == .pluginUnavailable }) {
+            return .pluginUnavailable
+        }
+        return .pluginExecution
     }
 }
