@@ -1,11 +1,12 @@
-import OSLog
 import Foundation
 import Combine
+import OSLog
 import SwiftUI
-import ito_runner
 
 @MainActor
 public class SearchViewModel: ObservableObject {
+    static let automaticSearchDebounceMilliseconds = 700
+
     @Published public var searchText: String = ""
     @Published public var searchScope: SearchScope = .all
     @Published public var searchResults: [String: [PluginSearchResult]] = [:]
@@ -16,23 +17,40 @@ public class SearchViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var currentTasks: [Task<Void, Never>] = []
     private var searchSessionID = UUID()
-    private var pluginManager: PluginManager?
+    private var searchExecutor: (any SearchPluginExecuting)?
+    private let recentSearchStore: any RecentSearchPersisting
 
-    public init() {
-        self.recentSearches = UserDefaults.standard.stringArray(forKey: "Ito.RecentSearches") ?? []
+    public convenience init() {
+        self.init(
+            searchExecutor: nil,
+            recentSearchStore: UserDefaultsRecentSearchStore(),
+            debounceMilliseconds: Self.automaticSearchDebounceMilliseconds
+        )
+    }
 
-        Publishers.CombineLatest($searchText, $searchScope)
-            .dropFirst()
-            .debounce(for: .milliseconds(700), scheduler: RunLoop.main)
-            .sink { [weak self] query, _ in
-                // If the user clears the search, don't auto-search but definitely wipe the old results
-                self?.performSearch(query: query)
-            }
-            .store(in: &cancellables)
+    init(
+        searchExecutor: (any SearchPluginExecuting)?,
+        recentSearchStore: any RecentSearchPersisting,
+        debounceMilliseconds: Int?
+    ) {
+        self.searchExecutor = searchExecutor
+        self.recentSearchStore = recentSearchStore
+        self.recentSearches = recentSearchStore.load()
+
+        if let debounceMilliseconds {
+            Publishers.CombineLatest($searchText, $searchScope)
+                .dropFirst()
+                .debounce(for: .milliseconds(debounceMilliseconds), scheduler: RunLoop.main)
+                .sink { [weak self] query, _ in
+                    // If the user clears the search, don't auto-search but definitely wipe the old results
+                    self?.performSearch(query: query)
+                }
+                .store(in: &cancellables)
+        }
     }
 
     public func configure(pluginManager: PluginManager) {
-        self.pluginManager = pluginManager
+        self.searchExecutor = PluginManagerSearchExecutor(pluginManager: pluginManager)
     }
 
     public func performSearch(query: String) {
@@ -56,24 +74,24 @@ public class SearchViewModel: ObservableObject {
         let sessionID = UUID()
         self.searchSessionID = sessionID
 
-        guard let pluginManager else {
+        guard let searchExecutor else {
             isSearching = false
             return
         }
-        let plugins = pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }
+        let plugins = searchExecutor.plugins.sorted { $0.name < $1.name }
 
         // Filter plugins based on the currently selected scope!
-        var validPlugins: [InstalledPlugin] = []
+        var validPlugins: [SearchPluginDescriptor] = []
         for plugin in plugins {
             switch searchScope {
             case .all:
                 validPlugins.append(plugin)
             case .manga:
-                if plugin.info.type == .manga { validPlugins.append(plugin) }
+                if plugin.kind == .manga { validPlugins.append(plugin) }
             case .anime:
-                if plugin.info.type == .anime { validPlugins.append(plugin) }
+                if plugin.kind == .anime { validPlugins.append(plugin) }
             case .novel:
-                if plugin.info.type == .novel { validPlugins.append(plugin) }
+                if plugin.kind == .novel { validPlugins.append(plugin) }
             }
         }
 
@@ -88,7 +106,7 @@ public class SearchViewModel: ObservableObject {
             if recentSearches.count > 10 {
                 recentSearches.removeLast()
             }
-            UserDefaults.standard.set(recentSearches, forKey: "Ito.RecentSearches")
+            recentSearchStore.save(recentSearches)
         }
 
         for plugin in validPlugins {
@@ -110,80 +128,33 @@ public class SearchViewModel: ObservableObject {
                 }
 
                 do {
-                    AppLogger.ui.debug("\("🔍 [Search] Getting runner for \(plugin.info.name)")...")
-                    let runner = try await pluginManager.getRunner(for: plugin.id)
-
-                    guard !Task.isCancelled, self.searchSessionID == sessionID else { break }
-
-                    AppLogger.ui.debug("\("🔍 [Search] Searching \(plugin.info.name)") for '\(searchQuery)'...")
-                    var results: [PluginSearchResult] = []
-
-                    switch plugin.info.type {
-                    case .manga:
-                        let res = try await runner.getSearchMangaList(query: searchQuery, page: 1, filters: nil)
-                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") WASM returned \(res.entries.count) raw manga entries (hasNextPage: \(res.hasNextPage))")
-                        guard !Task.isCancelled else { break }
-                        results = res.entries.prefix(25).map { manga in
-                            PluginSearchResult(
-                                id: manga.key,
-                                title: manga.title,
-                                cover: manga.cover,
-                                subtitle: manga.displayStatus,
-                                pluginName: plugin.info.name,
-                                destination: AnyView(MediaDetailView(runner: runner, media: manga, pluginId: plugin.id) { try await runner.getMangaUpdate(manga: $0) })
-                            )
-                        }
-                    case .anime:
-                        let res = try await runner.getSearchAnimeList(query: searchQuery, page: 1, filters: nil)
-                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") WASM returned \(res.entries.count) raw anime entries (hasNextPage: \(res.hasNextPage))")
-                        guard !Task.isCancelled else { break }
-                        results = res.entries.prefix(25).map { anime in
-                            PluginSearchResult(
-                                id: anime.key,
-                                title: anime.title,
-                                cover: anime.cover,
-                                subtitle: anime.displayStatus,
-                                pluginName: plugin.info.name,
-                                destination: AnyView(MediaDetailView(runner: runner, media: anime, pluginId: plugin.id) { try await runner.getAnimeUpdate(anime: $0) })
-                            )
-                        }
-                    case .novel:
-                        let res = try await runner.getSearchNovelList(query: searchQuery, page: 1, filters: nil)
-                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") WASM returned \(res.entries.count) raw novel entries (hasNextPage: \(res.hasNextPage))")
-                        guard !Task.isCancelled else { break }
-                        results = res.entries.prefix(25).map { novel in
-                            PluginSearchResult(
-                                id: novel.key,
-                                title: novel.title,
-                                cover: novel.cover,
-                                subtitle: novel.displayStatus,
-                                pluginName: plugin.info.name,
-                                destination: AnyView(MediaDetailView(runner: runner, media: novel, pluginId: plugin.id) { try await runner.getNovelUpdate(novel: $0) })
-                            )
-                        }
-                    @unknown default:
-                        break
-                    }
+                    let searchResults = try await searchExecutor.search(
+                        plugin: plugin,
+                        query: searchQuery,
+                        limit: 25
+                    )
+                    guard !Task.isCancelled else { break }
+                    let results = Array(searchResults.prefix(25))
 
                     let sessionValid = self.searchSessionID == sessionID
                     if sessionValid && !results.isEmpty {
-                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") → \(results.count) results added to UI")
-                        self.searchResults[plugin.info.name] = results
+                        AppLogger.ui.debug("🔍 [Search] \(plugin.name) → \(results.count) results added to UI")
+                        self.searchResults[plugin.name] = results
                     } else if !sessionValid {
-                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") → DROPPED (session expired)")
+                        AppLogger.ui.debug("🔍 [Search] \(plugin.name) → DROPPED (session expired)")
                     } else {
-                        AppLogger.ui.debug("\("🔍 [Search] \(plugin.info.name)") → 0 mapped results, skipping")
+                        AppLogger.ui.debug("🔍 [Search] \(plugin.name) → 0 mapped results, skipping")
                     }
                 } catch is CancellationError {
-                    AppLogger.ui.debug("🔍 [Search] Cancelled for \(plugin.info.name)")
+                    AppLogger.ui.debug("🔍 [Search] Cancelled for \(plugin.name)")
                     break
                 } catch {
-                    AppLogger.ui.error("\("🔍 [Search] Failed for \(plugin.info.name)"): \(error)")
+                    AppLogger.ui.error("🔍 [Search] Failed for \(plugin.name): \(error)")
                     // If a WASM trap occurred, the runner state may be corrupted.
                     // Evict it so the next use creates a fresh instance.
                     if "\(error)".contains("wasmTrap") || "\(error)".contains("Trap") {
                         AppLogger.ui.debug("🔍 [Search] Evicting corrupted runner for \(plugin.id)")
-                        pluginManager.evictRunner(for: plugin.id)
+                        searchExecutor.evictRunner(for: plugin.id)
                     }
                 }
 
@@ -205,6 +176,6 @@ public class SearchViewModel: ObservableObject {
 
     public func clearRecentSearches() {
         recentSearches.removeAll()
-        UserDefaults.standard.removeObject(forKey: "Ito.RecentSearches")
+        recentSearchStore.clear()
     }
 }

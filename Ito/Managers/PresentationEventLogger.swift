@@ -1,0 +1,126 @@
+import Foundation
+import OSLog
+
+public enum PresentationFeature: String, Equatable, Sendable {
+    case search
+}
+
+public enum PresentationEventKind: String, Equatable, Sendable {
+    case operation
+    case pluginExecution = "plugin_execution"
+}
+
+public enum PresentationEventPhase: String, Equatable, Sendable {
+    case started
+    case finished
+}
+
+public enum PresentationErrorCategory: String, Equatable, Sendable {
+    case pluginUnavailable = "plugin_unavailable"
+    case pluginExecution = "plugin_execution"
+    case pluginTrap = "plugin_trap"
+    case unknown
+}
+
+public enum PresentationEventOutcome: Equatable, Sendable {
+    case succeeded
+    case failed(PresentationErrorCategory)
+    case cancelled
+    case ignoredStale
+
+    fileprivate var formattedValue: String {
+        switch self {
+        case .succeeded:
+            return "succeeded"
+        case .failed:
+            return "failed"
+        case .cancelled:
+            return "cancelled"
+        case .ignoredStale:
+            return "ignored_stale"
+        }
+    }
+
+    fileprivate var errorCategory: PresentationErrorCategory? {
+        guard case .failed(let category) = self else { return nil }
+        return category
+    }
+}
+
+public struct PresentationLogEvent: Equatable, Sendable {
+    public let feature: PresentationFeature
+    public let kind: PresentationEventKind
+    public let operationID: UUID
+    public let phase: PresentationEventPhase
+    public let outcome: PresentationEventOutcome?
+
+    private init(
+        feature: PresentationFeature,
+        kind: PresentationEventKind,
+        operationID: UUID,
+        phase: PresentationEventPhase,
+        outcome: PresentationEventOutcome?
+    ) {
+        self.feature = feature
+        self.kind = kind
+        self.operationID = operationID
+        self.phase = phase
+        self.outcome = outcome
+    }
+
+    public static func started(
+        feature: PresentationFeature,
+        kind: PresentationEventKind = .operation,
+        operationID: UUID
+    ) -> Self {
+        Self(
+            feature: feature,
+            kind: kind,
+            operationID: operationID,
+            phase: .started,
+            outcome: nil
+        )
+    }
+
+    public static func finished(
+        feature: PresentationFeature,
+        kind: PresentationEventKind = .operation,
+        operationID: UUID,
+        outcome: PresentationEventOutcome
+    ) -> Self {
+        Self(
+            feature: feature,
+            kind: kind,
+            operationID: operationID,
+            phase: .finished,
+            outcome: outcome
+        )
+    }
+}
+
+public protocol PresentationEventLogging {
+    func log(_ event: PresentationLogEvent)
+}
+
+public enum PresentationLogFormatter {
+    public static func format(_ event: PresentationLogEvent) -> String {
+        let outcome = event.outcome?.formattedValue ?? "none"
+        let errorCategory = event.outcome?.errorCategory?.rawValue ?? "none"
+        let operationID = event.operationID.uuidString.lowercased()
+
+        return "presentation feature=\(event.feature.rawValue) kind=\(event.kind.rawValue) operation_id=\(operationID) phase=\(event.phase.rawValue) outcome=\(outcome) error_category=\(errorCategory)"
+    }
+}
+
+public struct OSLogPresentationEventLogger: PresentationEventLogging {
+    private let logger: Logger
+
+    public init(logger: Logger = AppLogger.ui) {
+        self.logger = logger
+    }
+
+    public func log(_ event: PresentationLogEvent) {
+        let message = PresentationLogFormatter.format(event)
+        logger.info("\(message, privacy: .public)")
+    }
+}
