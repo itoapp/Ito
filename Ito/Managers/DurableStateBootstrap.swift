@@ -417,7 +417,10 @@ public final class DurableStateBootstrap: ObservableObject {
         notificationManager = runtime.notificationManager
         backupManager = runtime.backupManager
         librarySourceRemapper = runtime.librarySourceRemapper
-        appScope = AppScope.prepared(pluginManager: runtime.pluginManager)
+        appScope = AppScope.prepared(
+            pluginManager: runtime.pluginManager,
+            repoManager: runtime.repoManager
+        )
     }
 
     private func clearRuntime() {

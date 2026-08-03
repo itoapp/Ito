@@ -1,83 +1,207 @@
-import Foundation
 import Combine
-import SwiftUI
+import Foundation
 import ito_runner
 
 @MainActor
-public class BrowseViewModel: ObservableObject {
-    @Published public var errorMessage: String?
-    @Published public var showDeleteConfirmation = false
-    @Published public var pendingDeleteOffsets: IndexSet?
-    @Published public var isInstallingUpdate: String?
-
-    public let pluginManager: PluginManager
-    public let repoManager: RepoManager
-
-    public init(repoManager: RepoManager, pluginManager: PluginManager) {
-        self.repoManager = repoManager
-        self.pluginManager = pluginManager
-    }
-
-    public var sortedPlugins: [InstalledPlugin] {
-        pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }
+public final class BrowseViewModel: ObservableObject {
+    public enum Phase: Equatable {
+        case loading
+        case empty
+        case content
     }
 
     public struct UpdateItem: Identifiable {
         public var id: String { pkg.id }
         public let pkg: RepoPackage
-        public let repoUrl: String
-        public init(pkg: RepoPackage, repoUrl: String) {
-            self.pkg = pkg
-            self.repoUrl = repoUrl
+        public let repoURL: String
+    }
+
+    public struct PluginGroup: Identifiable {
+        public var id: String { String(describing: type) }
+        public let type: PluginType
+        public let plugins: [InstalledPlugin]
+    }
+
+    @Published public var showDeleteConfirmation = false
+    @Published public var showRepositories = false
+    @Published public private(set) var isInstallingUpdate: String?
+    @Published public private(set) var isRefreshing = false
+    @Published public private(set) var isProcessingPluginFile = false
+    @Published public private(set) var pendingDeletePluginID: String?
+    @Published private var installedPlugins: [String: InstalledPlugin]
+    @Published private var repositories: [Repository]
+
+    private let repositoryManager: any BrowseRepositoryManaging
+    private let pluginManager: any BrowsePluginManaging
+    private let fileOperations: any BrowsePluginFileOperating
+    private let messagePresenter: any BrowseMessagePresenting
+    private var pendingDeletePlugin: InstalledPlugin?
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(
+        repositoryManager: any BrowseRepositoryManaging,
+        pluginManager: any BrowsePluginManaging,
+        fileOperations: any BrowsePluginFileOperating,
+        messagePresenter: any BrowseMessagePresenting
+    ) {
+        self.repositoryManager = repositoryManager
+        self.pluginManager = pluginManager
+        self.fileOperations = fileOperations
+        self.messagePresenter = messagePresenter
+        installedPlugins = pluginManager.installedPlugins
+        repositories = repositoryManager.repositories
+
+        pluginManager.installedPluginsPublisher
+            .sink { @MainActor [weak self] plugins in
+                self?.installedPlugins = plugins
+            }
+            .store(in: &cancellables)
+
+        repositoryManager.repositoriesPublisher
+            .sink { @MainActor [weak self] repositories in
+                self?.repositories = repositories
+            }
+            .store(in: &cancellables)
+    }
+
+    public var phase: Phase {
+        if isInstallingUpdate != nil || isRefreshing || isProcessingPluginFile {
+            return .loading
+        }
+        return installedPlugins.isEmpty ? .empty : .content
+    }
+
+    public var sortedPlugins: [InstalledPlugin] {
+        installedPlugins.values.sorted { $0.info.name < $1.info.name }
+    }
+
+    public var pluginGroups: [PluginGroup] {
+        let types: [PluginType] = [.anime, .manga, .novel]
+        return types.compactMap { type in
+            let plugins = sortedPlugins.filter { $0.info.type == type }
+            return plugins.isEmpty ? nil : PluginGroup(type: type, plugins: plugins)
         }
     }
 
     public var availableUpdates: [UpdateItem] {
         var updates: [String: UpdateItem] = [:]
-        for repo in repoManager.repositories {
-            guard let packages = repo.index?.packages else { continue }
-            for pkg in packages {
-                if let installed = pluginManager.installedPlugins[pkg.id] {
-                    if installed.info.version.compare(pkg.version, options: .numeric) == .orderedAscending {
-                        if let existing = updates[pkg.id] {
-                            if existing.pkg.version.compare(pkg.version, options: .numeric) == .orderedAscending {
-                                updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
-                            }
-                        } else {
-                            updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
-                        }
-                    }
+        for repository in repositories {
+            guard let packages = repository.index?.packages else { continue }
+            for package in packages {
+                guard let installed = installedPlugins[package.id],
+                      installed.info.version.compare(
+                        package.version,
+                        options: .numeric
+                      ) == .orderedAscending else {
+                    continue
                 }
+
+                if let existing = updates[package.id],
+                   existing.pkg.version.compare(
+                    package.version,
+                    options: .numeric
+                   ) != .orderedAscending {
+                    continue
+                }
+                updates[package.id] = UpdateItem(pkg: package, repoURL: repository.url)
             }
         }
-        return Array(updates.values).sorted { $0.pkg.name < $1.pkg.name }
+        return updates.values.sorted { $0.pkg.name < $1.pkg.name }
+    }
+
+    public func openRepositories() {
+        showRepositories = true
+    }
+
+    public func refreshRepositories() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        await repositoryManager.refreshAll()
     }
 
     public func installUpdate(_ updateItem: UpdateItem) async {
+        guard isInstallingUpdate == nil else { return }
         isInstallingUpdate = updateItem.id
         defer { isInstallingUpdate = nil }
+
         do {
-            try await repoManager.installPackage(updateItem.pkg, repositoryUrl: updateItem.repoUrl)
+            try await repositoryManager.installPackage(
+                updateItem.pkg,
+                repositoryURL: updateItem.repoURL
+            )
         } catch {
-            errorMessage = "Update failed: \(error.localizedDescription)"
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if errorMessage?.hasPrefix("Update failed") == true {
-                errorMessage = nil
-            }
+            messagePresenter.present(.updateFailed(reason: error.localizedDescription))
         }
     }
 
-    public func performDelete(at offsets: IndexSet) async {
-        let toDelete = offsets.map { sortedPlugins[$0] }
-        let fileManager = FileManager.default
+    public func requestDelete(_ plugin: InstalledPlugin) {
+        guard !isProcessingPluginFile else { return }
+        pendingDeletePlugin = plugin
+        pendingDeletePluginID = plugin.id
+        showDeleteConfirmation = true
+    }
 
-        for plugin in toDelete {
-            do {
-                try fileManager.removeItem(at: plugin.url)
-            } catch {
-                errorMessage = "Failed to remove \(plugin.info.name): \(error.localizedDescription)"
-            }
+    public func cancelDelete() {
+        guard !isProcessingPluginFile else { return }
+        pendingDeletePlugin = nil
+        pendingDeletePluginID = nil
+        showDeleteConfirmation = false
+    }
+
+    public func confirmDelete() async {
+        guard let plugin = pendingDeletePlugin, !isProcessingPluginFile else { return }
+        showDeleteConfirmation = false
+        isProcessingPluginFile = true
+        defer {
+            pendingDeletePlugin = nil
+            pendingDeletePluginID = nil
+            isProcessingPluginFile = false
         }
-        await pluginManager.reloadInstalledPlugins()
+
+        do {
+            try fileOperations.deletePluginFile(at: plugin.url)
+            await pluginManager.reloadInstalledPlugins()
+        } catch {
+            messagePresenter.present(
+                .deleteFailed(
+                    pluginName: plugin.info.name,
+                    reason: error.localizedDescription
+                )
+            )
+        }
+    }
+
+    @discardableResult
+    public func importPluginFile(
+        at url: URL,
+        source: BrowseImportSource
+    ) async -> Bool {
+        guard fileOperations.supportsPluginFile(at: url) else {
+            messagePresenter.present(.unsupportedPluginFile)
+            return false
+        }
+        guard !isProcessingPluginFile else { return false }
+
+        isProcessingPluginFile = true
+        defer { isProcessingPluginFile = false }
+
+        do {
+            try fileOperations.installPluginFile(from: url)
+            await pluginManager.reloadInstalledPlugins()
+            return true
+        } catch BrowsePluginFileError.pluginsDirectoryUnavailable {
+            messagePresenter.present(.pluginDirectoryUnavailable)
+            return false
+        } catch {
+            messagePresenter.present(
+                .importFailed(source: source, reason: error.localizedDescription)
+            )
+            return false
+        }
+    }
+
+    public func reportDropLoadingFailure(_ error: (any Error)?) {
+        messagePresenter.present(.dropLoadFailed(reason: String(describing: error)))
     }
 }

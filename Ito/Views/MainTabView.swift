@@ -11,7 +11,7 @@ struct MainTabView: View {
                         Label("Library", systemImage: "books.vertical")
                     }
 
-                BrowseView()
+                appScope.viewFactory.makeBrowseView()
                     .tabItem {
                         Label("Browse", systemImage: "globe")
                     }

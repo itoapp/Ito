@@ -1,0 +1,696 @@
+import Combine
+import XCTest
+import ito_runner
+@testable import Ito
+
+@MainActor
+final class BrowseViewModelTests: XCTestCase {
+    func testInitialInstalledPluginStateIsPublishedImmediately() {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "manga": makePlugin(id: "manga", name: "Manga", type: .manga)
+        ])
+        let viewModel = makeViewModel(plugins: plugins)
+
+        XCTAssertEqual(viewModel.sortedPlugins.map(\.id), ["manga"])
+        XCTAssertEqual(viewModel.phase, .content)
+    }
+
+    func testDerivedPluginOrderingGroupingAndUpdateSectionsRemainStable() {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "novel": makePlugin(id: "novel", name: "Zulu", type: .novel),
+            "anime": makePlugin(id: "anime", name: "Alpha", type: .anime),
+            "manga": makePlugin(id: "manga", name: "Middle", type: .manga)
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(packages: [
+                makePackage(id: "manga", name: "Middle", version: "2.0")
+            ])
+        ])
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories)
+
+        XCTAssertEqual(viewModel.sortedPlugins.map(\.id), ["anime", "manga", "novel"])
+        XCTAssertEqual(viewModel.pluginGroups.map(\.type), [.anime, .manga, .novel])
+        XCTAssertEqual(viewModel.pluginGroups.map { $0.plugins.map(\.id) }, [["anime"], ["manga"], ["novel"]])
+        XCTAssertEqual(viewModel.availableUpdates.map(\.id), ["manga"])
+    }
+
+    func testUpdateAvailabilityUsesNewestPackageAndStableNameOrdering() {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "alpha": makePlugin(id: "alpha", name: "Alpha", version: "1.0", type: .anime),
+            "zulu": makePlugin(id: "zulu", name: "Zulu", version: "1.0", type: .manga)
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(url: "https://one.example", packages: [
+                makePackage(id: "zulu", name: "Zulu", version: "1.5"),
+                makePackage(id: "alpha", name: "Alpha", version: "2.0")
+            ]),
+            makeRepository(url: "https://two.example", packages: [
+                makePackage(id: "zulu", name: "Zulu", version: "3.0"),
+                makePackage(id: "missing", name: "Missing", version: "9.0")
+            ])
+        ])
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories)
+
+        XCTAssertEqual(viewModel.availableUpdates.map(\.id), ["alpha", "zulu"])
+        XCTAssertEqual(viewModel.availableUpdates.map(\.pkg.version), ["2.0", "3.0"])
+        XCTAssertEqual(viewModel.availableUpdates.map(\.repoURL), ["https://one.example", "https://two.example"])
+    }
+
+    func testStartingUpdateInvokesDependencyExactlyOnce() async throws {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "plugin": makePlugin(id: "plugin", name: "Plugin")
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(packages: [makePackage(id: "plugin", name: "Plugin", version: "2.0")])
+        ])
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories)
+        let update = try XCTUnwrap(viewModel.availableUpdates.first)
+
+        await viewModel.installUpdate(update)
+
+        XCTAssertEqual(repositories.installInvocations.count, 1)
+        XCTAssertEqual(repositories.installInvocations.first?.packageID, "plugin")
+    }
+
+    func testSuccessfulUpdateRepublishesPluginState() async throws {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "plugin": makePlugin(id: "plugin", name: "Plugin", version: "1.0")
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(packages: [makePackage(id: "plugin", name: "Plugin", version: "2.0")])
+        ])
+        repositories.onInstall = {
+            plugins.installedPlugins = [
+                "plugin": self.makePlugin(id: "plugin", name: "Plugin", version: "2.0")
+            ]
+        }
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories)
+
+        await viewModel.installUpdate(try XCTUnwrap(viewModel.availableUpdates.first))
+
+        XCTAssertEqual(viewModel.sortedPlugins.first?.info.version, "2.0")
+        XCTAssertTrue(viewModel.availableUpdates.isEmpty)
+    }
+
+    func testFailedUpdatePreservesPluginAndSurfacesTypedMessage() async throws {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "plugin": makePlugin(id: "plugin", name: "Plugin", version: "1.0")
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(packages: [makePackage(id: "plugin", name: "Plugin", version: "2.0")])
+        ])
+        repositories.installError = BrowseTestFailure.failed
+        let messages = BrowseMessagePresenterSpy()
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories, messages: messages)
+
+        await viewModel.installUpdate(try XCTUnwrap(viewModel.availableUpdates.first))
+
+        XCTAssertEqual(viewModel.sortedPlugins.first?.info.version, "1.0")
+        XCTAssertEqual(messages.messages, [.updateFailed(reason: "fixture failure")])
+        XCTAssertEqual(viewModel.phase, .content)
+    }
+
+    func testDeleteRequestDoesNotTouchFilesBeforeConfirmation() {
+        let plugin = makePlugin(id: "plugin", name: "Plugin")
+        let files = BrowsePluginFileOperationsSpy()
+        let viewModel = makeViewModel(
+            plugins: BrowsePluginManagerSpy(installedPlugins: [plugin.id: plugin]),
+            files: files
+        )
+
+        viewModel.requestDelete(plugin)
+
+        XCTAssertTrue(viewModel.showDeleteConfirmation)
+        XCTAssertEqual(viewModel.pendingDeletePluginID, plugin.id)
+        XCTAssertEqual(files.deleteInvocations, [])
+    }
+
+    func testCancellingDeletePerformsNoFileOperation() async {
+        let plugin = makePlugin(id: "plugin", name: "Plugin")
+        let files = BrowsePluginFileOperationsSpy()
+        let viewModel = makeViewModel(
+            plugins: BrowsePluginManagerSpy(installedPlugins: [plugin.id: plugin]),
+            files: files
+        )
+
+        viewModel.requestDelete(plugin)
+        viewModel.cancelDelete()
+        await viewModel.confirmDelete()
+
+        XCTAssertFalse(viewModel.showDeleteConfirmation)
+        XCTAssertNil(viewModel.pendingDeletePluginID)
+        XCTAssertEqual(files.deleteInvocations, [])
+    }
+
+    func testConfirmedDeleteInvokesFileBoundaryExactlyOnce() async {
+        let plugin = makePlugin(id: "plugin", name: "Plugin")
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [plugin.id: plugin])
+        plugins.onReload = { plugins.installedPlugins = [:] }
+        let files = BrowsePluginFileOperationsSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files)
+
+        viewModel.requestDelete(plugin)
+        await viewModel.confirmDelete()
+
+        XCTAssertEqual(files.deleteInvocations, [plugin.url])
+        XCTAssertEqual(plugins.reloadCallCount, 1)
+    }
+
+    func testFailedDeletePreservesVisiblePluginAndSurfacesError() async {
+        let plugin = makePlugin(id: "plugin", name: "Plugin")
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [plugin.id: plugin])
+        let files = BrowsePluginFileOperationsSpy()
+        files.deleteError = BrowseTestFailure.failed
+        let messages = BrowseMessagePresenterSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files, messages: messages)
+
+        viewModel.requestDelete(plugin)
+        await viewModel.confirmDelete()
+
+        XCTAssertEqual(viewModel.sortedPlugins.map(\.id), [plugin.id])
+        XCTAssertEqual(plugins.reloadCallCount, 0)
+        XCTAssertEqual(messages.messages, [.deleteFailed(pluginName: "Plugin", reason: "fixture failure")])
+    }
+
+    func testSuccessfulDeleteRefreshesOnlyAfterFileOperationSucceeds() async {
+        let plugin = makePlugin(id: "plugin", name: "Plugin")
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [plugin.id: plugin])
+        let files = BrowsePluginFileOperationsSpy()
+        files.onDelete = {
+            XCTAssertEqual(plugins.reloadCallCount, 0)
+        }
+        plugins.onReload = { plugins.installedPlugins = [:] }
+        let viewModel = makeViewModel(plugins: plugins, files: files)
+
+        viewModel.requestDelete(plugin)
+        await viewModel.confirmDelete()
+
+        XCTAssertTrue(viewModel.sortedPlugins.isEmpty)
+        XCTAssertEqual(viewModel.phase, .empty)
+    }
+
+    func testRapidDuplicateDeleteConfirmationsDoNotOverlap() async {
+        let plugin = makePlugin(id: "plugin", name: "Plugin")
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [plugin.id: plugin])
+        plugins.suspendReload = true
+        let files = BrowsePluginFileOperationsSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files)
+        viewModel.requestDelete(plugin)
+
+        let first = Task { await viewModel.confirmDelete() }
+        await waitUntil { plugins.reloadCallCount == 1 }
+        await viewModel.confirmDelete()
+
+        XCTAssertEqual(files.deleteInvocations.count, 1)
+        plugins.resumeReload()
+        await first.value
+    }
+
+    func testSupportedDroppedPluginUsesExistingImportAndReloadPath() async {
+        let plugins = BrowsePluginManagerSpy()
+        let files = BrowsePluginFileOperationsSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files)
+        let URL = URL(fileURLWithPath: "/tmp/plugin.ito")
+
+        let accepted = await viewModel.importPluginFile(at: URL, source: .drop)
+
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(files.installInvocations, [URL])
+        XCTAssertEqual(plugins.reloadCallCount, 1)
+    }
+
+    func testUnsupportedDropIsRejectedWithoutMutation() async {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "existing": makePlugin(id: "existing", name: "Existing")
+        ])
+        let files = BrowsePluginFileOperationsSpy()
+        let messages = BrowseMessagePresenterSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files, messages: messages)
+
+        let accepted = await viewModel.importPluginFile(
+            at: URL(fileURLWithPath: "/tmp/not-a-plugin.zip"),
+            source: .drop
+        )
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(files.installInvocations, [])
+        XCTAssertEqual(plugins.reloadCallCount, 0)
+        XCTAssertEqual(viewModel.sortedPlugins.map(\.id), ["existing"])
+        XCTAssertEqual(messages.messages, [.unsupportedPluginFile])
+    }
+
+    func testFailedDropImportPreservesExistingStateAndSurfacesError() async {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "existing": makePlugin(id: "existing", name: "Existing")
+        ])
+        let files = BrowsePluginFileOperationsSpy()
+        files.installError = BrowseTestFailure.failed
+        let messages = BrowseMessagePresenterSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files, messages: messages)
+
+        let accepted = await viewModel.importPluginFile(
+            at: URL(fileURLWithPath: "/tmp/plugin.ito"),
+            source: .drop
+        )
+
+        XCTAssertFalse(accepted)
+        XCTAssertEqual(plugins.reloadCallCount, 0)
+        XCTAssertEqual(viewModel.sortedPlugins.map(\.id), ["existing"])
+        XCTAssertEqual(messages.messages, [.importFailed(source: .drop, reason: "fixture failure")])
+    }
+
+    func testDropImportsAreSerialized() async {
+        let plugins = BrowsePluginManagerSpy()
+        plugins.suspendReload = true
+        let files = BrowsePluginFileOperationsSpy()
+        let viewModel = makeViewModel(plugins: plugins, files: files)
+        let firstURL = URL(fileURLWithPath: "/tmp/first.ito")
+        let secondURL = URL(fileURLWithPath: "/tmp/second.ito")
+
+        let first = Task { await viewModel.importPluginFile(at: firstURL, source: .drop) }
+        await waitUntil { plugins.reloadCallCount == 1 }
+        let secondAccepted = await viewModel.importPluginFile(at: secondURL, source: .drop)
+
+        XCTAssertFalse(secondAccepted)
+        XCTAssertEqual(files.installInvocations, [firstURL])
+        plugins.resumeReload()
+        let firstAccepted = await first.value
+        XCTAssertTrue(firstAccepted)
+    }
+
+    func testProductionFileAdapterInstallsIntoExistingPluginsLocation() throws {
+        let fixture = try BrowseFileFixture()
+        defer { fixture.cleanup() }
+        let sourceURL = fixture.root.appendingPathComponent("plugin.ito")
+        try Data("new plugin".utf8).write(to: sourceURL)
+        let files = LocalBrowsePluginFileOperations(
+            applicationSupportDirectory: fixture.applicationSupport
+        )
+
+        try files.installPluginFile(from: sourceURL)
+
+        let installedURL = fixture.applicationSupport
+            .appendingPathComponent("Plugins")
+            .appendingPathComponent("plugin.ito")
+        XCTAssertEqual(try Data(contentsOf: installedURL), Data("new plugin".utf8))
+
+        try Data("updated plugin".utf8).write(to: sourceURL)
+        try files.installPluginFile(from: sourceURL)
+        XCTAssertEqual(try Data(contentsOf: installedURL), Data("updated plugin".utf8))
+    }
+
+    func testProductionFileAdapterReplacesOnlyAfterStagingSucceeds() throws {
+        let fixture = try BrowseFileFixture()
+        defer { fixture.cleanup() }
+        let pluginsDirectory = fixture.applicationSupport.appendingPathComponent("Plugins")
+        try FileManager.default.createDirectory(
+            at: pluginsDirectory,
+            withIntermediateDirectories: true
+        )
+        let installedURL = pluginsDirectory.appendingPathComponent("plugin.ito")
+        try Data("existing plugin".utf8).write(to: installedURL)
+        let missingSource = fixture.root.appendingPathComponent("plugin.ito")
+        let files = LocalBrowsePluginFileOperations(
+            applicationSupportDirectory: fixture.applicationSupport
+        )
+
+        XCTAssertThrowsError(try files.installPluginFile(from: missingSource))
+
+        XCTAssertEqual(try Data(contentsOf: installedURL), Data("existing plugin".utf8))
+    }
+
+    func testProductionFileAdapterDeletesOnlyRequestedPluginFile() throws {
+        let fixture = try BrowseFileFixture()
+        defer { fixture.cleanup() }
+        let pluginsDirectory = fixture.applicationSupport.appendingPathComponent("Plugins")
+        try FileManager.default.createDirectory(
+            at: pluginsDirectory,
+            withIntermediateDirectories: true
+        )
+        let selectedURL = pluginsDirectory.appendingPathComponent("selected.ito")
+        let retainedURL = pluginsDirectory.appendingPathComponent("retained.ito")
+        try Data().write(to: selectedURL)
+        try Data().write(to: retainedURL)
+        let files = LocalBrowsePluginFileOperations(
+            applicationSupportDirectory: fixture.applicationSupport
+        )
+
+        try files.deletePluginFile(at: selectedURL)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: selectedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retainedURL.path))
+    }
+
+    func testLoadingPhaseIsRepresentedDuringActiveUpdate() async throws {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "plugin": makePlugin(id: "plugin", name: "Plugin")
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(packages: [makePackage(id: "plugin", name: "Plugin", version: "2.0")])
+        ])
+        repositories.suspendInstall = true
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories)
+        let update = try XCTUnwrap(viewModel.availableUpdates.first)
+
+        let task = Task { await viewModel.installUpdate(update) }
+        await waitUntil { repositories.installInvocations.count == 1 }
+
+        XCTAssertEqual(viewModel.phase, .loading)
+        XCTAssertEqual(viewModel.isInstallingUpdate, "plugin")
+        repositories.resumeInstall()
+        await task.value
+        XCTAssertEqual(viewModel.phase, .content)
+    }
+
+    func testEmptyPhaseIsRepresented() {
+        let viewModel = makeViewModel()
+
+        XCTAssertEqual(viewModel.phase, .empty)
+        XCTAssertTrue(viewModel.sortedPlugins.isEmpty)
+    }
+
+    func testErrorPresentationIsRecoverable() async throws {
+        let plugins = BrowsePluginManagerSpy(installedPlugins: [
+            "plugin": makePlugin(id: "plugin", name: "Plugin")
+        ])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [
+            makeRepository(packages: [makePackage(id: "plugin", name: "Plugin", version: "2.0")])
+        ])
+        let messages = BrowseMessagePresenterSpy()
+        let viewModel = makeViewModel(plugins: plugins, repositories: repositories, messages: messages)
+        let update = try XCTUnwrap(viewModel.availableUpdates.first)
+        repositories.installError = BrowseTestFailure.failed
+
+        await viewModel.installUpdate(update)
+        repositories.installError = nil
+        await viewModel.installUpdate(update)
+
+        XCTAssertEqual(repositories.installInvocations.count, 2)
+        XCTAssertEqual(messages.messages.count, 1)
+        XCTAssertEqual(viewModel.phase, .content)
+    }
+
+    func testBrowseViewModelIdentityIsStableAcrossFactoryRecomputation() {
+        let scope = makeScope()
+
+        let first = scope.rootModels.browseViewModel
+        _ = scope.viewFactory.makeBrowseView()
+        let second = scope.rootModels.browseViewModel
+        _ = scope.viewFactory.makeBrowseView()
+        let third = scope.viewFactory.rootModels.browseViewModel
+
+        XCTAssertTrue(first === second)
+        XCTAssertTrue(second === third)
+    }
+
+    func testSourceContractsKeepBrowseBoundariesNarrowAndRootStable() throws {
+        let modelSource = try sourceFile("Ito/ViewModels/BrowseViewModel.swift")
+        let viewSource = try sourceFile("Ito/Views/Browse/BrowseView.swift")
+        let appSource = try sourceFile("Ito/ItoApp.swift")
+
+        for forbidden in [
+            "FileManager.default",
+            "UIApplication.shared",
+            "SnackBarManager.shared",
+            "AppMessageCenter",
+            "func configure("
+        ] {
+            XCTAssertFalse(modelSource.contains(forbidden), "Found forbidden BrowseViewModel source: \(forbidden)")
+        }
+
+        let rootStart = try XCTUnwrap(viewSource.range(of: "struct BrowseView: View"))
+        let contentStart = try XCTUnwrap(viewSource.range(of: "private struct BrowseContentView: View"))
+        let rootSource = String(viewSource[rootStart.lowerBound..<contentStart.lowerBound])
+        XCTAssertTrue(rootSource.contains("NavigationView"))
+        XCTAssertFalse(rootSource.contains("@ObservedObject"))
+        XCTAssertTrue(viewSource.contains(".confirmationDialog("))
+        XCTAssertTrue(viewSource.contains("await viewModel.confirmDelete()"))
+
+        XCTAssertTrue(appSource.contains("url.scheme == \"ito\", url.host == \"repo\", url.path == \"/add\""))
+        for forbidden in ["AppRouter", "pendingRepository", "acknowledgmentToken"] {
+            XCTAssertFalse(modelSource.contains(forbidden))
+            XCTAssertFalse(viewSource.contains(forbidden))
+            XCTAssertFalse(appSource.contains(forbidden))
+        }
+    }
+
+    private func makeViewModel(
+        plugins: BrowsePluginManagerSpy = BrowsePluginManagerSpy(),
+        repositories: BrowseRepositoryManagerSpy = BrowseRepositoryManagerSpy(),
+        files: BrowsePluginFileOperationsSpy = BrowsePluginFileOperationsSpy(),
+        messages: BrowseMessagePresenterSpy = BrowseMessagePresenterSpy()
+    ) -> BrowseViewModel {
+        BrowseViewModel(
+            repositoryManager: repositories,
+            pluginManager: plugins,
+            fileOperations: files,
+            messagePresenter: messages
+        )
+    }
+
+    private func makeScope() -> AppScope {
+        AppScope(
+            preparedDependencies: PreparedApplicationDependencies(
+                searchExecutor: BrowseSearchExecutor(),
+                recentSearchStore: BrowseRecentSearchStore(),
+                searchDebounceMilliseconds: nil,
+                presentationLogger: PresentationEventCaptureSpy(),
+                browseRepositoryManager: BrowseRepositoryManagerSpy(),
+                browsePluginManager: BrowsePluginManagerSpy(),
+                browseFileOperations: BrowsePluginFileOperationsSpy(),
+                browseMessagePresenter: BrowseMessagePresenterSpy()
+            )
+        )
+    }
+
+    private func makePlugin(
+        id: String,
+        name: String,
+        version: String = "1.0",
+        type: PluginType = .manga
+    ) -> InstalledPlugin {
+        InstalledPlugin(
+            url: URL(fileURLWithPath: "/plugins/\(id).ito"),
+            info: PluginInfo(
+                id: id,
+                name: name,
+                version: version,
+                minAppVersion: "1.0",
+                type: type
+            ),
+            iconData: nil
+        )
+    }
+
+    private func makePackage(id: String, name: String, version: String) -> RepoPackage {
+        RepoPackage(
+            id: id,
+            name: name,
+            version: version,
+            minAppVersion: "1.0",
+            downloadUrl: "\(id).ito",
+            iconUrl: nil,
+            sha256: "fixture",
+            pluginType: "manga",
+            archived: false,
+            archivedReason: nil,
+            archivedDate: nil
+        )
+    }
+
+    private func makeRepository(
+        url: String = "https://repo.example",
+        packages: [RepoPackage]
+    ) -> Repository {
+        Repository(
+            url: url,
+            index: RepoIndex(
+                repoName: "Fixture",
+                repoUrl: url,
+                description: "",
+                packages: packages
+            )
+        )
+    }
+
+    private func waitUntil(
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: @escaping @MainActor () -> Bool
+    ) async {
+        for _ in 0..<500 {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Condition was not met before timeout", file: file, line: line)
+    }
+
+    private func sourceFile(_ path: String) throws -> String {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: repositoryRoot.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+}
+
+private enum BrowseTestFailure: LocalizedError {
+    case failed
+
+    var errorDescription: String? { "fixture failure" }
+}
+
+private struct BrowseFileFixture {
+    let root: URL
+    let applicationSupport: URL
+
+    init() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BrowseViewModelTests-\(UUID().uuidString)")
+        applicationSupport = root.appendingPathComponent("Application Support")
+        try FileManager.default.createDirectory(
+            at: applicationSupport,
+            withIntermediateDirectories: true
+        )
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+@MainActor
+private final class BrowsePluginManagerSpy: BrowsePluginManaging {
+    @Published var installedPlugins: [String: InstalledPlugin]
+    private(set) var reloadCallCount = 0
+    var onReload: (() -> Void)?
+    var suspendReload = false
+    private var reloadContinuation: CheckedContinuation<Void, Never>?
+
+    init(installedPlugins: [String: InstalledPlugin] = [:]) {
+        self.installedPlugins = installedPlugins
+    }
+
+    var installedPluginsPublisher: AnyPublisher<[String: InstalledPlugin], Never> {
+        $installedPlugins.eraseToAnyPublisher()
+    }
+
+    func reloadInstalledPlugins() async {
+        reloadCallCount += 1
+        if suspendReload {
+            await withCheckedContinuation { reloadContinuation = $0 }
+        }
+        onReload?()
+    }
+
+    func resumeReload() {
+        suspendReload = false
+        reloadContinuation?.resume()
+        reloadContinuation = nil
+    }
+}
+
+@MainActor
+private final class BrowseRepositoryManagerSpy: BrowseRepositoryManaging {
+    struct InstallInvocation {
+        let packageID: String
+        let repositoryURL: String
+    }
+
+    @Published var repositories: [Repository]
+    private(set) var installInvocations: [InstallInvocation] = []
+    private(set) var refreshCallCount = 0
+    var installError: (any Error)?
+    var onInstall: (() -> Void)?
+    var suspendInstall = false
+    private var installContinuation: CheckedContinuation<Void, Never>?
+
+    init(repositories: [Repository] = []) {
+        self.repositories = repositories
+    }
+
+    var repositoriesPublisher: AnyPublisher<[Repository], Never> {
+        $repositories.eraseToAnyPublisher()
+    }
+
+    func installPackage(_ package: RepoPackage, repositoryURL: String) async throws {
+        installInvocations.append(.init(packageID: package.id, repositoryURL: repositoryURL))
+        if suspendInstall {
+            await withCheckedContinuation { installContinuation = $0 }
+        }
+        if let installError { throw installError }
+        onInstall?()
+    }
+
+    func refreshAll() async {
+        refreshCallCount += 1
+    }
+
+    func resumeInstall() {
+        suspendInstall = false
+        installContinuation?.resume()
+        installContinuation = nil
+    }
+}
+
+@MainActor
+private final class BrowsePluginFileOperationsSpy: BrowsePluginFileOperating {
+    private(set) var installInvocations: [URL] = []
+    private(set) var deleteInvocations: [URL] = []
+    var installError: (any Error)?
+    var deleteError: (any Error)?
+    var onDelete: (() -> Void)?
+
+    func supportsPluginFile(at URL: URL) -> Bool {
+        URL.pathExtension.lowercased() == "ito"
+    }
+
+    func installPluginFile(from URL: URL) throws {
+        installInvocations.append(URL)
+        if let installError { throw installError }
+    }
+
+    func deletePluginFile(at URL: URL) throws {
+        deleteInvocations.append(URL)
+        onDelete?()
+        if let deleteError { throw deleteError }
+    }
+}
+
+@MainActor
+private final class BrowseMessagePresenterSpy: BrowseMessagePresenting {
+    private(set) var messages: [BrowseMessage] = []
+
+    func present(_ message: BrowseMessage) {
+        messages.append(message)
+    }
+}
+
+@MainActor
+private final class BrowseSearchExecutor: SearchPluginExecuting {
+    let plugins: [SearchPluginDescriptor] = []
+
+    func search(
+        plugin: SearchPluginDescriptor,
+        query: String,
+        limit: Int
+    ) async throws -> [PluginSearchResult] {
+        _ = plugin
+        _ = query
+        _ = limit
+        return []
+    }
+
+    func evictRunner(for pluginID: String) {
+        _ = pluginID
+    }
+}
+
+@MainActor
+private final class BrowseRecentSearchStore: RecentSearchPersisting {
+    func load() -> [String] { [] }
+    func save(_ searches: [String]) { _ = searches }
+    func clear() {}
+}
