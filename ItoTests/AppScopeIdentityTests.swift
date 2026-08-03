@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import Ito
 
@@ -34,7 +35,11 @@ final class AppScopeIdentityTests: XCTestCase {
             searchExecutor: executor,
             recentSearchStore: store,
             searchDebounceMilliseconds: nil,
-            presentationLogger: PresentationEventCaptureSpy()
+            presentationLogger: PresentationEventCaptureSpy(),
+            browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+            browsePluginManager: AppScopeBrowsePluginManager(),
+            browseFileOperations: AppScopeBrowseFileOperations(),
+            browseMessagePresenter: AppScopeBrowseMessagePresenter()
         )
         let scope = AppScope(preparedDependencies: dependencies)
 
@@ -102,12 +107,12 @@ final class AppScopeIdentityTests: XCTestCase {
         }
         for unmigratedTab in [
             "LibraryView()",
-            "BrowseView()",
             "DiscoverView()",
             "SettingsView()"
         ] {
             XCTAssertTrue(tabSource.contains(unmigratedTab))
         }
+        XCTAssertTrue(tabSource.contains("appScope.viewFactory.makeBrowseView()"))
     }
 
     private func makeScope() -> AppScope {
@@ -116,7 +121,11 @@ final class AppScopeIdentityTests: XCTestCase {
                 searchExecutor: AppScopeSearchExecutor(),
                 recentSearchStore: AppScopeRecentStore(),
                 searchDebounceMilliseconds: nil,
-                presentationLogger: PresentationEventCaptureSpy()
+                presentationLogger: PresentationEventCaptureSpy(),
+                browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+                browsePluginManager: AppScopeBrowsePluginManager(),
+                browseFileOperations: AppScopeBrowseFileOperations(),
+                browseMessagePresenter: AppScopeBrowseMessagePresenter()
             )
         )
     }
@@ -166,4 +175,53 @@ private final class AppScopeRecentStore: RecentSearchPersisting {
     }
 
     func clear() {}
+}
+
+@MainActor
+private final class AppScopeBrowsePluginManager: BrowsePluginManaging {
+    let installedPlugins: [String: InstalledPlugin] = [:]
+
+    var installedPluginsPublisher: AnyPublisher<[String: InstalledPlugin], Never> {
+        Just(installedPlugins).eraseToAnyPublisher()
+    }
+
+    func reloadInstalledPlugins() async {}
+}
+
+@MainActor
+private final class AppScopeBrowseRepositoryManager: BrowseRepositoryManaging {
+    let repositories: [Repository] = []
+
+    var repositoriesPublisher: AnyPublisher<[Repository], Never> {
+        Just(repositories).eraseToAnyPublisher()
+    }
+
+    func installPackage(_ package: RepoPackage, repositoryURL: String) async throws {
+        _ = package
+        _ = repositoryURL
+    }
+
+    func refreshAll() async {}
+}
+
+@MainActor
+private final class AppScopeBrowseFileOperations: BrowsePluginFileOperating {
+    func supportsPluginFile(at url: URL) -> Bool {
+        url.pathExtension == "ito"
+    }
+
+    func installPluginFile(from url: URL) throws {
+        _ = url
+    }
+
+    func deletePluginFile(at url: URL) throws {
+        _ = url
+    }
+}
+
+@MainActor
+private final class AppScopeBrowseMessagePresenter: BrowseMessagePresenting {
+    func present(_ message: BrowseMessage) {
+        _ = message
+    }
 }

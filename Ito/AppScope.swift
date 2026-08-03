@@ -6,13 +6,24 @@ struct PreparedApplicationDependencies {
     let recentSearchStore: any RecentSearchPersisting
     let searchDebounceMilliseconds: Int?
     let presentationLogger: any PresentationEventLogging
+    let browseRepositoryManager: any BrowseRepositoryManaging
+    let browsePluginManager: any BrowsePluginManaging
+    let browseFileOperations: any BrowsePluginFileOperating
+    let browseMessagePresenter: any BrowseMessagePresenting
 
-    static func production(pluginManager: PluginManager) -> Self {
+    static func production(
+        pluginManager: PluginManager,
+        repoManager: RepoManager
+    ) -> Self {
         Self(
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: .standard),
             searchDebounceMilliseconds: SearchViewModel.automaticSearchDebounceMilliseconds,
-            presentationLogger: OSLogPresentationEventLogger()
+            presentationLogger: OSLogPresentationEventLogger(),
+            browseRepositoryManager: repoManager,
+            browsePluginManager: pluginManager,
+            browseFileOperations: LocalBrowsePluginFileOperations(),
+            browseMessagePresenter: SnackBarBrowseMessagePresenter()
         )
     }
 }
@@ -20,7 +31,9 @@ struct PreparedApplicationDependencies {
 @MainActor
 final class RootModelStore {
     private let makeSearchViewModel: () -> SearchViewModel
+    private let makeBrowseViewModel: () -> BrowseViewModel
     private var storedSearchViewModel: SearchViewModel?
+    private var storedBrowseViewModel: BrowseViewModel?
 
     init(preparedDependencies: PreparedApplicationDependencies) {
         makeSearchViewModel = {
@@ -29,6 +42,14 @@ final class RootModelStore {
                 recentSearchStore: preparedDependencies.recentSearchStore,
                 debounceMilliseconds: preparedDependencies.searchDebounceMilliseconds,
                 presentationLogger: preparedDependencies.presentationLogger
+            )
+        }
+        makeBrowseViewModel = {
+            BrowseViewModel(
+                repositoryManager: preparedDependencies.browseRepositoryManager,
+                pluginManager: preparedDependencies.browsePluginManager,
+                fileOperations: preparedDependencies.browseFileOperations,
+                messagePresenter: preparedDependencies.browseMessagePresenter
             )
         }
     }
@@ -42,6 +63,17 @@ final class RootModelStore {
 
     var hasLoadedSearchViewModel: Bool {
         storedSearchViewModel != nil
+    }
+
+    var browseViewModel: BrowseViewModel {
+        if let storedBrowseViewModel { return storedBrowseViewModel }
+        let viewModel = makeBrowseViewModel()
+        storedBrowseViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedBrowseViewModel: Bool {
+        storedBrowseViewModel != nil
     }
 }
 
@@ -58,9 +90,15 @@ final class AppScope {
         self.viewFactory = AppViewFactory(rootModels: rootModels)
     }
 
-    static func prepared(pluginManager: PluginManager) -> AppScope {
+    static func prepared(
+        pluginManager: PluginManager,
+        repoManager: RepoManager
+    ) -> AppScope {
         AppScope(
-            preparedDependencies: .production(pluginManager: pluginManager)
+            preparedDependencies: .production(
+                pluginManager: pluginManager,
+                repoManager: repoManager
+            )
         )
     }
 }

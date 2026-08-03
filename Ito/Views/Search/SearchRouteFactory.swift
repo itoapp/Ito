@@ -20,6 +20,10 @@ struct AppViewFactory {
             routeFactory: searchRouteFactory
         )
     }
+
+    func makeBrowseView() -> BrowseView {
+        BrowseView(viewModel: rootModels.browseViewModel)
+    }
 }
 
 struct SearchRouteFactory {

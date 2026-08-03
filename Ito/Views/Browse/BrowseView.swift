@@ -1,7 +1,6 @@
-import OSLog
+import NukeUI
 import SwiftUI
 import UniformTypeIdentifiers
-import NukeUI
 import ito_runner
 
 extension UTType {
@@ -11,109 +10,65 @@ extension UTType {
 }
 
 // MARK: - BrowseView
-// Thin wrapper that owns the NavigationView. It does NOT observe any
-// ObservableObject so its body is evaluated exactly once, keeping the
-// NavigationView identity (and therefore the navigation stack) stable
-// even when PluginManager or RepoManager publish changes.
 
+// This wrapper deliberately does not observe the model. AppScope owns the stable
+// model while the child content view observes it, preserving NavigationView identity.
 struct BrowseView: View {
+    let viewModel: BrowseViewModel
+
     var body: some View {
         NavigationView {
-            BrowseContentView()
+            BrowseContentView(viewModel: viewModel)
         }
         .navigationViewStyle(.stack)
     }
 }
 
 // MARK: - BrowseContentView
-// All observable state lives here. Because this view is a *child* of
-// NavigationView (not the view that owns it), re-renders caused by
-// PluginManager / RepoManager changes do NOT destabilise the
-// navigation stack.
-
-private struct UpdateItem: Identifiable {
-    var id: String { pkg.id }
-    let pkg: RepoPackage
-    let repoUrl: String
-}
 
 private struct BrowseContentView: View {
-    @EnvironmentObject private var pluginManager: PluginManager
-    @EnvironmentObject private var repoManager: RepoManager
-
-        @State private var showDeleteConfirmation = false
-    @State private var pendingDeleteOffsets: IndexSet?
-    @State private var isInstallingUpdate: String? // plugin id currently updating
-    @State private var showRepositories = false // Drives programmatic navigation
-
-    private var sortedPlugins: [InstalledPlugin] {
-        pluginManager.installedPlugins.values.sorted { $0.info.name < $1.info.name }
-    }
-
-    private var availableUpdates: [UpdateItem] {
-        var updates: [String: UpdateItem] = [:]
-        for repo in repoManager.repositories {
-            guard let packages = repo.index?.packages else { continue }
-            for pkg in packages {
-                if let installed = pluginManager.installedPlugins[pkg.id] {
-                    if installed.info.version.compare(pkg.version, options: .numeric) == .orderedAscending {
-                        if let existing = updates[pkg.id] {
-                            if existing.pkg.version.compare(pkg.version, options: .numeric) == .orderedAscending {
-                                updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
-                            }
-                        } else {
-                            updates[pkg.id] = UpdateItem(pkg: pkg, repoUrl: repo.url)
-                        }
-                    }
-                }
-            }
-        }
-        return Array(updates.values).sorted { $0.pkg.name < $1.pkg.name }
-    }
+    @ObservedObject var viewModel: BrowseViewModel
 
     var body: some View {
         ZStack {
-            NavigationLink(destination: RepositoriesView(), isActive: $showRepositories) {
+            NavigationLink(
+                destination: RepositoriesView(),
+                isActive: $viewModel.showRepositories
+            ) {
                 EmptyView()
-            }.hidden()
+            }
+            .hidden()
 
-            if pluginManager.installedPlugins.isEmpty {
+            if viewModel.sortedPlugins.isEmpty {
                 emptyStateView
             } else {
                 pluginListView
             }
-
-                    }
+        }
         .contentShape(Rectangle())
         .onDrop(of: [.item, .fileURL, .ito], isTargeted: nil) { providers in
             handleDrop(providers: providers)
         }
         .onOpenURL { url in
-            AppLogger.ui.debug("System routed .onOpenURL trigger with \(url)")
-            Task { await handleOpenURL(url) }
+            handleOpenURL(url)
         }
         .navigationTitle("Browse")
         .navigationBarItems(trailing: repositoriesButton)
-        // Destructive delete confirmation
         .confirmationDialog(
             "Remove Plugin",
-            isPresented: $showDeleteConfirmation,
+            isPresented: $viewModel.showDeleteConfirmation,
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
-                if let offsets = pendingDeleteOffsets {
-                    performDelete(at: offsets)
-                }
+                Task { await viewModel.confirmDelete() }
             }
             Button("Cancel", role: .cancel) {
-                pendingDeleteOffsets = nil
+                viewModel.cancelDelete()
             }
         } message: {
             Text("This plugin will be permanently removed from your device.")
         }
     }
-
-    // MARK: - Subviews
 
     private var emptyStateView: some View {
         VStack(spacing: 16) {
@@ -132,7 +87,7 @@ private struct BrowseContentView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
 
-            Button(action: { showRepositories = true }) {
+            Button(action: viewModel.openRepositories) {
                 Label("Browse Repositories", systemImage: "globe")
                     .font(.subheadline.weight(.medium))
                     .padding(.horizontal, 20)
@@ -148,23 +103,21 @@ private struct BrowseContentView: View {
 
     private var pluginListView: some View {
         List {
-            let updates = availableUpdates
-
-            if !updates.isEmpty {
+            if !viewModel.availableUpdates.isEmpty {
                 Section {
-                    ForEach(updates) { updateItem in
+                    ForEach(viewModel.availableUpdates) { updateItem in
                         UpdateRowView(
                             updateItem: updateItem,
-                            isInstalling: isInstallingUpdate == updateItem.id
+                            isInstalling: viewModel.isInstallingUpdate == updateItem.id
                         ) {
-                            Task { await installUpdate(updateItem) }
+                            Task { await viewModel.installUpdate(updateItem) }
                         }
                     }
                 } header: {
                     HStack {
                         Text("Updates Available")
                         Spacer()
-                        Text("\(updates.count)")
+                        Text("\(viewModel.availableUpdates.count)")
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
@@ -176,16 +129,13 @@ private struct BrowseContentView: View {
             }
 
             Section {
-                ForEach(sortedPlugins, id: \.id) { plugin in
+                ForEach(viewModel.sortedPlugins, id: \.id) { plugin in
                     NavigationLink(destination: SourceView(plugin: plugin)) {
                         PluginRowView(plugin: plugin)
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {
-                            if let index = sortedPlugins.firstIndex(where: { $0.id == plugin.id }) {
-                                pendingDeleteOffsets = IndexSet(integer: index)
-                                showDeleteConfirmation = true
-                            }
+                            viewModel.requestDelete(plugin)
                         } label: {
                             Label("Remove", systemImage: "trash")
                         }
@@ -195,156 +145,61 @@ private struct BrowseContentView: View {
                 HStack {
                     Text("Installed")
                     Spacer()
-                    Text("\(sortedPlugins.count)")
+                    Text("\(viewModel.sortedPlugins.count)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .refreshable {
-            await repoManager.refreshAll()
+            await viewModel.refreshRepositories()
         }
     }
 
-        private var repositoriesButton: some View {
-        Button(action: { showRepositories = true }) {
+    private var repositoriesButton: some View {
+        Button(action: viewModel.openRepositories) {
             Image(systemName: "globe")
         }
         .accessibilityLabel("Repositories")
         .accessibilityHint("Manage plugin repositories")
     }
 
-    // MARK: - Actions
-
-    private func installUpdate(_ updateItem: UpdateItem) async {
-        isInstallingUpdate = updateItem.id
-        defer { isInstallingUpdate = nil }
-        do {
-            try await repoManager.installPackage(updateItem.pkg, repositoryUrl: updateItem.repoUrl)
-        } catch {
-            await MainActor.run {
-                withAnimation {
-                    SnackBarManager.shared.showError("Update failed: \(error.localizedDescription)")
-                }
-            }
-
-        }
-    }
-
-    private func getPluginsDirectory() -> URL? {
-        let fileManager = FileManager.default
-        guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
-        let pluginsDir = appSupportDir.appendingPathComponent("Plugins")
-
-        if !fileManager.fileExists(atPath: pluginsDir.path) {
-            do {
-                try fileManager.createDirectory(at: pluginsDir, withIntermediateDirectories: true)
-            } catch {
-                AppLogger.ui.error("Failed to create plugins directory: \(error)")
-                return nil
-            }
-        }
-        return pluginsDir
-    }
-
-    private func performDelete(at offsets: IndexSet) {
-        Task {
-            let toDelete = offsets.map { sortedPlugins[$0] }
-            let fileManager = FileManager.default
-
-            for plugin in toDelete {
-                do {
-                    try fileManager.removeItem(at: plugin.url)
-                } catch {
-                    await MainActor.run {
-                        withAnimation {
-                            SnackBarManager.shared.showError("Failed to remove \(plugin.info.name): \(error.localizedDescription)")
-                        }
-                    }
-                }
-            }
-            await pluginManager.reloadInstalledPlugins()
-        }
-    }
-
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        AppLogger.ui.debug("\("Received drop with \(providers.count)") providers")
-        guard let provider = providers.first else { return false }
-
-        let itoType = UTType.ito.identifier
-        let archiveType = UTType.archive.identifier
-        let zipType = UTType.zip.identifier
-        let fileURLType = UTType.fileURL.identifier
-
-        var loadedType: String?
-        if provider.hasItemConformingToTypeIdentifier(itoType) {
-            loadedType = itoType
-        } else if provider.hasItemConformingToTypeIdentifier(archiveType) {
-            loadedType = archiveType
-        } else if provider.hasItemConformingToTypeIdentifier(zipType) {
-            loadedType = zipType
-        } else if provider.hasItemConformingToTypeIdentifier(fileURLType) {
-            loadedType = fileURLType
+        guard let provider = providers.first,
+              let typeIdentifier = supportedTypeIdentifier(for: provider) else {
+            return false
         }
 
-        guard let typeToLoad = loadedType else { return false }
-
-        provider.loadFileRepresentation(forTypeIdentifier: typeToLoad) { url, error in
-            guard let tempURL = url else {
-                Task { @MainActor in
-                    SnackBarManager.shared.showError("Failed to load dropped file: \(String(describing: error))")
-                }
-                return
-            }
-
-            guard tempURL.pathExtension.lowercased() == "ito" else {
-                Task { @MainActor in
-                    SnackBarManager.shared.showError("Please drop a valid .ito plugin file.")
-                }
-                return
-            }
-
-            let fileManager = FileManager.default
+        provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { url, error in
             Task { @MainActor in
-                guard let pluginsDir = self.getPluginsDirectory() else {
-                    SnackBarManager.shared.showError("Failed to access plugins directory.")
+                guard let url else {
+                    viewModel.reportDropLoadingFailure(error)
                     return
                 }
-                let destinationURL = pluginsDir.appendingPathComponent(tempURL.lastPathComponent)
-
-                do {
-                    if fileManager.fileExists(atPath: destinationURL.path) {
-                        try fileManager.removeItem(at: destinationURL)
-                    }
-                    try fileManager.copyItem(at: tempURL, to: destinationURL)
-                    Task { await pluginManager.reloadInstalledPlugins() }
-                } catch {
-                    SnackBarManager.shared.showError("File copy error: \(error.localizedDescription)")
-                }
+                _ = await viewModel.importPluginFile(at: url, source: .drop)
             }
         }
         return true
     }
 
-    private func handleOpenURL(_ url: URL) async {
-        let secured = url.startAccessingSecurityScopedResource()
-        defer { if secured { url.stopAccessingSecurityScopedResource() } }
+    private func supportedTypeIdentifier(for provider: NSItemProvider) -> String? {
+        [
+            UTType.ito.identifier,
+            UTType.archive.identifier,
+            UTType.zip.identifier,
+            UTType.fileURL.identifier
+        ].first(where: provider.hasItemConformingToTypeIdentifier)
+    }
 
-        let fileManager = FileManager.default
-        guard let pluginsDir = getPluginsDirectory() else {
-            await MainActor.run { SnackBarManager.shared.showError("Failed to access plugins directory.") }
-            return
-        }
-        let destinationURL = pluginsDir.appendingPathComponent(url.lastPathComponent)
+    private func handleOpenURL(_ url: URL) {
+        guard url.isFileURL || url.pathExtension.lowercased() == "ito" else { return }
 
-        do {
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try fileManager.removeItem(at: destinationURL)
+        Task { @MainActor in
+            let secured = url.startAccessingSecurityScopedResource()
+            defer {
+                if secured { url.stopAccessingSecurityScopedResource() }
             }
-            try fileManager.copyItem(at: url, to: destinationURL)
-            await pluginManager.reloadInstalledPlugins()
-        } catch {
-            await MainActor.run { SnackBarManager.shared.showError("URL Open error: \(error.localizedDescription)") }
+            _ = await viewModel.importPluginFile(at: url, source: .openURL)
         }
     }
 }
@@ -352,14 +207,14 @@ private struct BrowseContentView: View {
 // MARK: - UpdateRowView
 
 private struct UpdateRowView: View {
-    let updateItem: UpdateItem
+    let updateItem: BrowseViewModel.UpdateItem
     let isInstalling: Bool
     let onUpdate: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             if let icon = updateItem.pkg.iconUrl,
-               let url = URL(string: "\(updateItem.repoUrl)/\(icon)") {
+               let url = URL(string: "\(updateItem.repoURL)/\(icon)") {
                 LazyImage(url: url) { state in
                     if let image = state.image {
                         image.resizable().aspectRatio(contentMode: .fill)
@@ -471,6 +326,6 @@ struct PluginTypeBadge: View {
 
 struct BrowseView_Previews: PreviewProvider {
     static var previews: some View {
-        BrowseView()
+        Text("BrowseView requires a prepared runtime")
     }
 }
