@@ -27,6 +27,19 @@ actor LegacyTokenStore: LegacyTokenStoring {
         self.key = key
     }
 
+    #if DEBUG
+    init(
+        suiteName: String,
+        key: String = LegacyTokenStore.anilistTokenKey
+    ) {
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            fatalError("Failed to create isolated defaults suite.")
+        }
+        self.defaults = defaults
+        self.key = key
+    }
+    #endif
+
     func token() -> String? {
         defaults.string(forKey: key)
     }

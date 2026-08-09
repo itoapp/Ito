@@ -18,6 +18,9 @@ struct BackupPresentationOperationGate {
 
 struct BackupSettingsView: View {
     @EnvironmentObject private var backupManager: BackupManager
+    #if DEBUG
+    @ObservedObject private var uiTestFixtures = UITestLaunchFixtureCoordinator.shared
+    #endif
 
     @State private var isExporting = false
     @State private var isImporting = false
@@ -42,6 +45,15 @@ struct BackupSettingsView: View {
 
     var body: some View {
         List {
+            #if DEBUG
+            if UITestLaunchConfiguration.current.backupWipeEnabled {
+                Section("UI Test Fixture") {
+                    Text(uiTestFixtures.backupFixtureState.rawValue)
+                        .accessibilityIdentifier("backup-fixture-state")
+                }
+            }
+            #endif
+
             Section(header: Text("Export")) {
                 Button(action: exportBackup) {
                     HStack {
@@ -58,6 +70,14 @@ struct BackupSettingsView: View {
             Section(header: Text("Import"), footer: Text("Restoring from a backup allows you to completely replace your current library, or merge missing items into it.")) {
                 Button(action: {
                     guard !operationGate.isRunning else { return }
+                    #if DEBUG
+                    if UITestLaunchConfiguration.current.backupWipeEnabled {
+                        guard let backupURL = uiTestFixtures.backupURL else { return }
+                        pendingImportURL = backupURL
+                        showImportOptions = true
+                        return
+                    }
+                    #endif
                     isImporting = true
                 }) {
                     HStack {
@@ -69,6 +89,7 @@ struct BackupSettingsView: View {
                     }
                 }
                 .disabled(backupManager.isRestoring || isImporting || operationGate.isRunning)
+                .disabled(uiTestRestoreUnavailable)
             }
         }
         .navigationTitle("Backup & Restore")
@@ -206,6 +227,15 @@ struct BackupSettingsView: View {
         }
     }
 
+    private var uiTestRestoreUnavailable: Bool {
+        #if DEBUG
+        return UITestLaunchConfiguration.current.backupWipeEnabled
+            && uiTestFixtures.backupURL == nil
+        #else
+        return false
+        #endif
+    }
+
     private func executeMergeAnalysis(url: URL) {
         guard operationGate.begin() else { return }
         Task {
@@ -255,6 +285,9 @@ struct BackupSettingsView: View {
             activeConflictURL = nil
             pendingImportURL = nil
         }
+        #if DEBUG
+        await uiTestFixtures.refreshBackupFixtureState()
+        #endif
     }
 
     private func showError(_ title: String, _ message: String) {

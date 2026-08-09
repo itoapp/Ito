@@ -9,21 +9,23 @@ struct PreparedApplicationDependencies {
     let browseRepositoryManager: any BrowseRepositoryManaging
     let browsePluginManager: any BrowsePluginManaging
     let browseFileOperations: any BrowsePluginFileOperating
-    let browseMessagePresenter: any BrowseMessagePresenting
 
     static func production(
         pluginManager: PluginManager,
-        repoManager: RepoManager
+        repoManager: RepoManager,
+        recentSearchDefaults: UserDefaults = .standard,
+        browsePluginsDirectory: URL? = nil
     ) -> Self {
         Self(
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
-            recentSearchStore: UserDefaultsRecentSearchStore(defaults: .standard),
+            recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
             searchDebounceMilliseconds: SearchViewModel.automaticSearchDebounceMilliseconds,
             presentationLogger: OSLogPresentationEventLogger(),
             browseRepositoryManager: repoManager,
             browsePluginManager: pluginManager,
-            browseFileOperations: LocalBrowsePluginFileOperations(),
-            browseMessagePresenter: SnackBarBrowseMessagePresenter()
+            browseFileOperations: LocalBrowsePluginFileOperations(
+                pluginsDirectory: browsePluginsDirectory
+            )
         )
     }
 }
@@ -35,7 +37,11 @@ final class RootModelStore {
     private var storedSearchViewModel: SearchViewModel?
     private var storedBrowseViewModel: BrowseViewModel?
 
-    init(preparedDependencies: PreparedApplicationDependencies) {
+    init(
+        preparedDependencies: PreparedApplicationDependencies,
+        repositoryIntentRouter: any BrowseRepositoryIntentRouting,
+        browseMessagePresenter: any BrowseMessagePresenting
+    ) {
         makeSearchViewModel = {
             SearchViewModel(
                 searchExecutor: preparedDependencies.searchExecutor,
@@ -49,7 +55,8 @@ final class RootModelStore {
                 repositoryManager: preparedDependencies.browseRepositoryManager,
                 pluginManager: preparedDependencies.browsePluginManager,
                 fileOperations: preparedDependencies.browseFileOperations,
-                messagePresenter: preparedDependencies.browseMessagePresenter
+                messagePresenter: browseMessagePresenter,
+                repositoryIntentRouter: repositoryIntentRouter
             )
         }
     }
@@ -82,22 +89,38 @@ final class AppScope {
     let dependencies: PreparedApplicationDependencies
     let rootModels: RootModelStore
     let viewFactory: AppViewFactory
+    let router: AppRouter
+    let messageCenter: AppMessageCenter
 
-    init(preparedDependencies: PreparedApplicationDependencies) {
+    init(
+        preparedDependencies: PreparedApplicationDependencies,
+        router: AppRouter = AppRouter(),
+        messageCenter: AppMessageCenter = AppMessageCenter()
+    ) {
         dependencies = preparedDependencies
-        let rootModels = RootModelStore(preparedDependencies: preparedDependencies)
+        self.router = router
+        self.messageCenter = messageCenter
+        let rootModels = RootModelStore(
+            preparedDependencies: preparedDependencies,
+            repositoryIntentRouter: router,
+            browseMessagePresenter: AppMessageBrowseMessagePresenter(messageCenter: messageCenter)
+        )
         self.rootModels = rootModels
         self.viewFactory = AppViewFactory(rootModels: rootModels)
     }
 
     static func prepared(
         pluginManager: PluginManager,
-        repoManager: RepoManager
+        repoManager: RepoManager,
+        recentSearchDefaults: UserDefaults = .standard,
+        browsePluginsDirectory: URL? = nil
     ) -> AppScope {
         AppScope(
             preparedDependencies: .production(
                 pluginManager: pluginManager,
-                repoManager: repoManager
+                repoManager: repoManager,
+                recentSearchDefaults: recentSearchDefaults,
+                browsePluginsDirectory: browsePluginsDirectory
             )
         )
     }

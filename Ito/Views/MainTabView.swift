@@ -4,39 +4,72 @@ struct MainTabView: View {
     let appScope: AppScope
 
     var body: some View {
+        MainTabContentView(
+            appScope: appScope,
+            router: appScope.router,
+            messageCenter: appScope.messageCenter
+        )
+    }
+}
+
+private struct MainTabContentView: View {
+    let appScope: AppScope
+    @ObservedObject var router: AppRouter
+    @ObservedObject var messageCenter: AppMessageCenter
+
+    var body: some View {
         ZStack {
-            TabView {
+            TabView(selection: $router.selectedTab) {
                 LibraryView()
                     .tabItem {
                         Label("Library", systemImage: "books.vertical")
                     }
+                    .tag(AppRootTab.library)
 
                 appScope.viewFactory.makeBrowseView()
                     .tabItem {
                         Label("Browse", systemImage: "globe")
                     }
+                    .tag(AppRootTab.browse)
 
                 DiscoverView()
                     .tabItem {
                         Label("Discover", systemImage: "sparkles")
                     }
+                    .tag(AppRootTab.discover)
 
                 appScope.viewFactory.makeSearchView()
                     .tabItem {
                         Label("Search", systemImage: "magnifyingglass")
                     }
+                    .tag(AppRootTab.search)
 
                 SettingsView()
                     .tabItem {
                         Label("Settings", systemImage: "gearshape")
                     }
+                    .tag(AppRootTab.settings)
             }
 
-            // Present frictionless save snipes globally
             VStack {
                 Spacer()
-                SnackBarOverlay()
+                SnackBarOverlay(messageCenter: messageCenter)
             }
+
+            #if DEBUG
+            if UITestLaunchConfiguration.current.repositoryDeepLinkEnabled {
+                VStack {
+                    Button("Redeliver Repository Deep Link") {
+                        UITestLaunchFixtureCoordinator.shared
+                            .redeliverRepositoryDeepLink(using: router)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("redeliver-repository-deep-link")
+                    Spacer()
+                }
+                .padding(.top, 8)
+            }
+            #endif
         }
     }
 }

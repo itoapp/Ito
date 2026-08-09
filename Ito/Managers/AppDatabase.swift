@@ -19,7 +19,30 @@ public final class AppDatabase: Sendable {
     private init() throws {
         let fileManager = FileManager.default
         let appSupportURL = try fileManager.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        #if DEBUG
+        let launchConfiguration = UITestLaunchConfiguration.current
+        let directoryURL: URL
+        if launchConfiguration.isEnabled {
+            let fixtureRootURL = try UITestLaunchConfiguration.fixtureRootURL(
+                fileManager: fileManager
+            )
+            if launchConfiguration.resetsStorage,
+               fileManager.fileExists(atPath: fixtureRootURL.path) {
+                try fileManager.removeItem(at: fixtureRootURL)
+            }
+            directoryURL = fixtureRootURL.appendingPathComponent(
+                UITestLaunchConfiguration.fixtureDatabaseDirectoryName,
+                isDirectory: true
+            )
+        } else {
+            directoryURL = appSupportURL.appendingPathComponent(
+                UITestLaunchConfiguration.productionDatabaseDirectoryName,
+                isDirectory: true
+            )
+        }
+        #else
         let directoryURL = appSupportURL.appendingPathComponent("Database", isDirectory: true)
+        #endif
 
         if !fileManager.fileExists(atPath: directoryURL.path) {
             try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)

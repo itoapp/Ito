@@ -53,6 +53,11 @@ nonisolated public struct Repository: Codable, Identifiable, Equatable, Sendable
     public var index: RepoIndex?
 }
 
+public enum RepositoryAdditionResult: Equatable {
+    case added
+    case alreadyPresent
+}
+
 @MainActor
 public class RepoManager: ObservableObject {
     @Published public private(set) var repositories: [Repository] = []
@@ -66,18 +71,30 @@ public class RepoManager: ObservableObject {
     public init(
         dbPool: DatabasePool,
         pluginManager: PluginManager? = nil,
-        indexFetcher: @escaping @Sendable (URL) async throws -> Data = { url in
-            let (data, response) = try await URLSession.shared.data(from: url)
-            if let response = response as? HTTPURLResponse,
-               !(200...299).contains(response.statusCode) {
-                throw URLError(URLError.Code(rawValue: response.statusCode))
-            }
-            return data
-        }
+        indexFetcher: (@Sendable (URL) async throws -> Data)? = nil
     ) {
         self.dbPool = dbPool
         self.pluginManager = pluginManager
-        self.indexFetcher = indexFetcher
+        if let indexFetcher {
+            self.indexFetcher = indexFetcher
+        } else {
+            #if DEBUG
+            if UITestLaunchConfiguration.current.repositoryDeepLinkEnabled {
+                self.indexFetcher = { url in
+                    try UITestLaunchConfiguration.repositoryIndexData(for: url)
+                }
+                return
+            }
+            #endif
+            self.indexFetcher = { url in
+                let (data, response) = try await URLSession.shared.data(from: url)
+                if let response = response as? HTTPURLResponse,
+                   !(200...299).contains(response.statusCode) {
+                    throw URLError(URLError.Code(rawValue: response.statusCode))
+                }
+                return data
+            }
+        }
     }
 
     public func reload() async throws {
@@ -108,14 +125,15 @@ public class RepoManager: ObservableObject {
         return normalized
     }
 
-    public func addRepository(url: String) async throws {
+    @discardableResult
+    public func addRepository(url: String) async throws -> RepositoryAdditionResult {
         let normalizedUrl = try normalizedURL(url)
         AppLogger.database.debug("🌍 [DEBUG-REPO] Attempting to add repository: \(normalizedUrl)")
 
         // Prevent duplicates
         guard !repositories.contains(where: { $0.url == normalizedUrl }) else {
             AppLogger.database.debug("🌍 [DEBUG-REPO] Repository already exists: \(normalizedUrl)")
-            return
+            return .alreadyPresent
         }
 
         var repo = Repository(url: normalizedUrl)
@@ -133,6 +151,7 @@ public class RepoManager: ObservableObject {
             repositories.append(repo)
             repositories.sort { $0.url < $1.url }
             AppLogger.database.debug("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
+            return .added
         } catch {
             AppLogger.database.error("🌍 [DEBUG-REPO] Failed to add repository: \(error)")
             throw error

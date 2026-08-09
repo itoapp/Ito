@@ -403,6 +403,160 @@ final class BrowseViewModelTests: XCTestCase {
         XCTAssertTrue(second === third)
     }
 
+    func testPendingRepositoryIntentIsConsumedAndAddedOnce() async throws {
+        let router = AppRouter()
+        let repositories = BrowseRepositoryManagerSpy()
+        let viewModel = makeViewModel(repositories: repositories, router: router)
+        router.handleRepositoryDeepLink(
+            repositoryDeepLink("https://fixture.example/repository")
+        )
+
+        await viewModel.consumePendingRepositoryIntents()
+
+        XCTAssertEqual(repositories.addInvocations, ["https://fixture.example/repository"])
+        XCTAssertNil(router.repositoryIntentDelivery)
+    }
+
+    func testSuccessfulRepositoryAdditionAcknowledgesExactToken() async throws {
+        let router = AppRouter()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://fixture.example"))
+        let token = try XCTUnwrap(router.repositoryIntentDelivery?.intent.token)
+        let viewModel = makeViewModel(router: router)
+
+        await viewModel.consumePendingRepositoryIntents()
+
+        XCTAssertNil(router.repositoryIntentDelivery)
+        router.acknowledgeRepositoryIntent(token: token)
+        XCTAssertNil(router.repositoryIntentDelivery)
+    }
+
+    func testDuplicateConsumeCallsDoNotAddRepositoryAgain() async {
+        let router = AppRouter()
+        let repositories = BrowseRepositoryManagerSpy()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://fixture.example"))
+        let viewModel = makeViewModel(repositories: repositories, router: router)
+
+        await viewModel.consumePendingRepositoryIntents()
+        await viewModel.consumePendingRepositoryIntents()
+        await viewModel.consumePendingRepositoryIntents()
+
+        XCTAssertEqual(repositories.addInvocations.count, 1)
+    }
+
+    func testWrongAcknowledgmentCannotClearNewerPendingIntent() async throws {
+        let router = AppRouter()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://one.example"))
+        let first = try XCTUnwrap(router.claimPendingRepositoryIntent())
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://two.example"))
+        router.acknowledgeRepositoryIntent(token: first.token)
+        let second = try XCTUnwrap(router.claimPendingRepositoryIntent())
+
+        router.acknowledgeRepositoryIntent(token: first.token)
+
+        XCTAssertEqual(router.repositoryIntentDelivery, .claimed(second))
+    }
+
+    func testFailedRepositoryAdditionPreservesStatePublishesOnceAndDoesNotRetry() async {
+        let existing = makeRepository(url: "https://existing.example", packages: [])
+        let repositories = BrowseRepositoryManagerSpy(repositories: [existing])
+        repositories.addError = BrowseTestFailure.failed
+        let messages = BrowseMessagePresenterSpy()
+        let router = AppRouter()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://failing.example"))
+        let viewModel = makeViewModel(
+            repositories: repositories,
+            messages: messages,
+            router: router
+        )
+
+        await viewModel.consumePendingRepositoryIntents()
+        await viewModel.consumePendingRepositoryIntents()
+
+        XCTAssertEqual(repositories.repositories, [existing])
+        XCTAssertEqual(repositories.addInvocations, ["https://failing.example"])
+        XCTAssertEqual(messages.messages, [.repositoryAddFailed])
+        XCTAssertNil(router.repositoryIntentDelivery)
+    }
+
+    func testAlreadyPresentRepositoryResultIsAcknowledgedWithoutError() async {
+        let repositories = BrowseRepositoryManagerSpy()
+        repositories.addResult = .alreadyPresent
+        let messages = BrowseMessagePresenterSpy()
+        let router = AppRouter()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://existing.example"))
+        let viewModel = makeViewModel(
+            repositories: repositories,
+            messages: messages,
+            router: router
+        )
+
+        await viewModel.consumePendingRepositoryIntents()
+
+        XCTAssertEqual(repositories.addInvocations.count, 1)
+        XCTAssertTrue(messages.messages.isEmpty)
+        XCTAssertNil(router.repositoryIntentDelivery)
+    }
+
+    func testRapidConsumeCallsDoNotOverlapRepositoryAdditions() async {
+        let repositories = BrowseRepositoryManagerSpy()
+        repositories.suspendAdd = true
+        let router = AppRouter()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://fixture.example"))
+        let viewModel = makeViewModel(repositories: repositories, router: router)
+
+        let first = Task { await viewModel.consumePendingRepositoryIntents() }
+        await waitUntil { repositories.addInvocations.count == 1 }
+        let second = Task { await viewModel.consumePendingRepositoryIntents() }
+        await Task.yield()
+
+        XCTAssertEqual(repositories.addInvocations.count, 1)
+        repositories.resumeAdd()
+        await first.value
+        await second.value
+    }
+
+    func testOldEpochCancellationDoesNotCommitPublishOrAcknowledgeSuspendedIntent() async throws {
+        let repositories = BrowseRepositoryManagerSpy()
+        repositories.suspendAdd = true
+        let messages = BrowseMessagePresenterSpy()
+        let router = AppRouter()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://fixture.example"))
+        var viewModel: BrowseViewModel? = makeViewModel(
+            repositories: repositories,
+            messages: messages,
+            router: router
+        )
+
+        await waitUntil { repositories.addInvocations.count == 1 }
+        let claimedIntent = try XCTUnwrap(router.repositoryIntentDelivery?.intent)
+        weak var releasedViewModel = viewModel
+
+        viewModel = nil
+        XCTAssertNil(releasedViewModel)
+        repositories.resumeAdd()
+        await waitUntil { repositories.cancelledAddCallCount == 1 }
+
+        XCTAssertTrue(repositories.committedAddInvocations.isEmpty)
+        XCTAssertTrue(messages.messages.isEmpty)
+        XCTAssertEqual(router.repositoryIntentDelivery, .claimed(claimedIntent))
+    }
+
+    func testLaterDistinctRepositoryIntentIsStillHandled() async {
+        let repositories = BrowseRepositoryManagerSpy()
+        let router = AppRouter()
+        let viewModel = makeViewModel(repositories: repositories, router: router)
+
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://one.example"))
+        await viewModel.consumePendingRepositoryIntents()
+        router.handleRepositoryDeepLink(repositoryDeepLink("https://two.example"))
+        await viewModel.consumePendingRepositoryIntents()
+
+        XCTAssertEqual(
+            repositories.addInvocations,
+            ["https://one.example", "https://two.example"]
+        )
+    }
+
     func testSourceContractsKeepBrowseBoundariesNarrowAndRootStable() throws {
         let modelSource = try sourceFile("Ito/ViewModels/BrowseViewModel.swift")
         let viewSource = try sourceFile("Ito/Views/Browse/BrowseView.swift")
@@ -412,7 +566,7 @@ final class BrowseViewModelTests: XCTestCase {
             "FileManager.default",
             "UIApplication.shared",
             "SnackBarManager.shared",
-            "AppMessageCenter",
+            "AppRouter",
             "func configure("
         ] {
             XCTAssertFalse(modelSource.contains(forbidden), "Found forbidden BrowseViewModel source: \(forbidden)")
@@ -426,25 +580,27 @@ final class BrowseViewModelTests: XCTestCase {
         XCTAssertTrue(viewSource.contains(".confirmationDialog("))
         XCTAssertTrue(viewSource.contains("await viewModel.confirmDelete()"))
 
-        XCTAssertTrue(appSource.contains("url.scheme == \"ito\", url.host == \"repo\", url.path == \"/add\""))
-        for forbidden in ["AppRouter", "pendingRepository", "acknowledgmentToken"] {
-            XCTAssertFalse(modelSource.contains(forbidden))
-            XCTAssertFalse(viewSource.contains(forbidden))
-            XCTAssertFalse(appSource.contains(forbidden))
-        }
+        XCTAssertTrue(modelSource.contains("BrowseRepositoryIntentRouting"))
+        XCTAssertTrue(modelSource.contains("consumePendingRepositoryIntents"))
+        XCTAssertTrue(appSource.contains("appScope.router.handleRepositoryDeepLink(url)"))
+        XCTAssertFalse(appSource.contains("repoManager.addRepository"))
+        XCTAssertFalse(viewSource.contains("pendingRepository"))
+        XCTAssertFalse(viewSource.contains("acknowledgmentToken"))
     }
 
     private func makeViewModel(
         plugins: BrowsePluginManagerSpy = BrowsePluginManagerSpy(),
         repositories: BrowseRepositoryManagerSpy = BrowseRepositoryManagerSpy(),
         files: BrowsePluginFileOperationsSpy = BrowsePluginFileOperationsSpy(),
-        messages: BrowseMessagePresenterSpy = BrowseMessagePresenterSpy()
+        messages: BrowseMessagePresenterSpy = BrowseMessagePresenterSpy(),
+        router: AppRouter = AppRouter()
     ) -> BrowseViewModel {
         BrowseViewModel(
             repositoryManager: repositories,
             pluginManager: plugins,
             fileOperations: files,
-            messagePresenter: messages
+            messagePresenter: messages,
+            repositoryIntentRouter: router
         )
     }
 
@@ -457,10 +613,18 @@ final class BrowseViewModelTests: XCTestCase {
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: BrowseRepositoryManagerSpy(),
                 browsePluginManager: BrowsePluginManagerSpy(),
-                browseFileOperations: BrowsePluginFileOperationsSpy(),
-                browseMessagePresenter: BrowseMessagePresenterSpy()
+                browseFileOperations: BrowsePluginFileOperationsSpy()
             )
         )
+    }
+
+    private func repositoryDeepLink(_ repositoryURL: String) -> URL {
+        var components = URLComponents()
+        components.scheme = "ito"
+        components.host = "repo"
+        components.path = "/add"
+        components.queryItems = [URLQueryItem(name: "url", value: repositoryURL)]
+        return components.url!
     }
 
     private func makePlugin(
@@ -601,11 +765,18 @@ private final class BrowseRepositoryManagerSpy: BrowseRepositoryManaging {
 
     @Published var repositories: [Repository]
     private(set) var installInvocations: [InstallInvocation] = []
+    private(set) var addInvocations: [String] = []
+    private(set) var committedAddInvocations: [String] = []
+    private(set) var cancelledAddCallCount = 0
     private(set) var refreshCallCount = 0
+    var addResult: RepositoryAdditionResult = .added
+    var addError: (any Error)?
+    var suspendAdd = false
     var installError: (any Error)?
     var onInstall: (() -> Void)?
     var suspendInstall = false
     private var installContinuation: CheckedContinuation<Void, Never>?
+    private var addContinuation: CheckedContinuation<Void, Never>?
 
     init(repositories: [Repository] = []) {
         self.repositories = repositories
@@ -613,6 +784,20 @@ private final class BrowseRepositoryManagerSpy: BrowseRepositoryManaging {
 
     var repositoriesPublisher: AnyPublisher<[Repository], Never> {
         $repositories.eraseToAnyPublisher()
+    }
+
+    func addRepository(url: String) async throws -> RepositoryAdditionResult {
+        addInvocations.append(url)
+        if suspendAdd {
+            await withCheckedContinuation { addContinuation = $0 }
+        }
+        if Task.isCancelled {
+            cancelledAddCallCount += 1
+            throw CancellationError()
+        }
+        if let addError { throw addError }
+        committedAddInvocations.append(url)
+        return addResult
     }
 
     func installPackage(_ package: RepoPackage, repositoryURL: String) async throws {
@@ -632,6 +817,12 @@ private final class BrowseRepositoryManagerSpy: BrowseRepositoryManaging {
         suspendInstall = false
         installContinuation?.resume()
         installContinuation = nil
+    }
+
+    func resumeAdd() {
+        suspendAdd = false
+        addContinuation?.resume()
+        addContinuation = nil
     }
 }
 
