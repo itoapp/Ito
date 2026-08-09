@@ -190,6 +190,9 @@ private struct DurableApplicationView: View {
     let appScope: AppScope
     private let trackerCredentialLifecycle: TrackerCredentialLifecycle
     @Environment(\.scenePhase) private var scenePhase
+    #if DEBUG
+    @State private var didPrepareUITestFixtures = false
+    #endif
 
     init(
         settingsStore: AppSettingsStore,
@@ -244,21 +247,20 @@ private struct DurableApplicationView: View {
             .environmentObject(librarySourceRemapper)
             .preferredColorScheme(settingsStore.appTheme.colorScheme)
             .onOpenURL { url in
-                guard url.scheme == "ito", url.host == "repo", url.path == "/add",
-                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                      let repoURL = components.queryItems?.first(where: { $0.name == "url" })?.value else {
-                    return
-                }
-                Task {
-                    do {
-                        try await repoManager.addRepository(url: repoURL)
-                    } catch {
-                        AppLogger.general.error("Failed to add repo via deep link: \(error)")
-                    }
-                }
+                appScope.router.handleRepositoryDeepLink(url)
             }
             .task {
                 await trackerCredentialLifecycle.appDidLaunch()
+                #if DEBUG
+                if !didPrepareUITestFixtures {
+                    didPrepareUITestFixtures = true
+                    await UITestLaunchFixtureCoordinator.shared.prepareIfNeeded(
+                        appScope: appScope,
+                        backupManager: backupManager,
+                        libraryManager: libraryManager
+                    )
+                }
+                #endif
             }
             .onChange(of: scenePhase) { phase in
                 guard phase == .active else { return }

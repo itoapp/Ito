@@ -38,8 +38,7 @@ final class AppScopeIdentityTests: XCTestCase {
             presentationLogger: PresentationEventCaptureSpy(),
             browseRepositoryManager: AppScopeBrowseRepositoryManager(),
             browsePluginManager: AppScopeBrowsePluginManager(),
-            browseFileOperations: AppScopeBrowseFileOperations(),
-            browseMessagePresenter: AppScopeBrowseMessagePresenter()
+            browseFileOperations: AppScopeBrowseFileOperations()
         )
         let scope = AppScope(preparedDependencies: dependencies)
 
@@ -115,6 +114,104 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(tabSource.contains("appScope.viewFactory.makeBrowseView()"))
     }
 
+    func testUITestFixtureStorageAndDefaultsAreIsolatedFromProduction() throws {
+        let appSupportURL = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let productionDatabaseURL = appSupportURL.appendingPathComponent(
+            UITestLaunchConfiguration.productionDatabaseDirectoryName,
+            isDirectory: true
+        )
+        let fixtureDatabaseURL = try UITestLaunchConfiguration.fixtureRootURL()
+            .appendingPathComponent(
+                UITestLaunchConfiguration.fixtureDatabaseDirectoryName,
+                isDirectory: true
+            )
+
+        XCTAssertNotEqual(
+            productionDatabaseURL.standardizedFileURL,
+            fixtureDatabaseURL.standardizedFileURL
+        )
+        XCTAssertNotEqual(
+            UITestLaunchConfiguration.fixtureDefaultsSuiteName,
+            Bundle.main.bundleIdentifier
+        )
+        XCTAssertNotEqual(
+            UITestLaunchConfiguration.fixtureTrackerKeychainService,
+            KeychainTrackerCredentialStore.productionService
+        )
+        XCTAssertTrue(
+            UITestLaunchConfiguration(
+                resetsStorage: true,
+                repositoryDeepLinkEnabled: false,
+                backupWipeEnabled: false
+            ).isEnabled
+        )
+    }
+
+    func testPreparedDependenciesUseInjectedDefaultsAndPluginDirectory() throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+
+        let suiteName = "AppScopeIdentityTests.\(UUID().uuidString)"
+        let fixtureDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { fixtureDefaults.removePersistentDomain(forName: suiteName) }
+        let recentSearchSentinel = "fixture-\(UUID().uuidString)"
+        fixtureDefaults.set(
+            [recentSearchSentinel],
+            forKey: UserDefaultsRecentSearchStore.key
+        )
+
+        let fixtureRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let pluginsDirectory = fixtureRoot.appendingPathComponent(
+            "Plugins",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+        let pluginSettings = PluginSettingsStore(dbPool: database.dbPool)
+        let pluginManager = PluginManager(
+            pluginSettingsStore: pluginSettings,
+            pluginsDirectory: pluginsDirectory
+        )
+        let repoManager = RepoManager(
+            dbPool: database.dbPool,
+            pluginManager: pluginManager
+        )
+        let dependencies = PreparedApplicationDependencies.production(
+            pluginManager: pluginManager,
+            repoManager: repoManager,
+            recentSearchDefaults: fixtureDefaults,
+            browsePluginsDirectory: pluginsDirectory
+        )
+
+        XCTAssertEqual(dependencies.recentSearchStore.load(), [recentSearchSentinel])
+        let fileOperations = try XCTUnwrap(
+            dependencies.browseFileOperations as? LocalBrowsePluginFileOperations
+        )
+        XCTAssertEqual(
+            fileOperations.configuredPluginsDirectory?.standardizedFileURL,
+            pluginsDirectory.standardizedFileURL
+        )
+
+        let sourceURL = fixtureRoot.appendingPathComponent("fixture.ito")
+        try FileManager.default.createDirectory(
+            at: fixtureRoot,
+            withIntermediateDirectories: true
+        )
+        try Data("fixture".utf8).write(to: sourceURL)
+        try fileOperations.installPluginFile(from: sourceURL)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: pluginsDirectory.appendingPathComponent("fixture.ito").path
+            )
+        )
+    }
+
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(
@@ -124,8 +221,7 @@ final class AppScopeIdentityTests: XCTestCase {
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: AppScopeBrowseRepositoryManager(),
                 browsePluginManager: AppScopeBrowsePluginManager(),
-                browseFileOperations: AppScopeBrowseFileOperations(),
-                browseMessagePresenter: AppScopeBrowseMessagePresenter()
+                browseFileOperations: AppScopeBrowseFileOperations()
             )
         )
     }
@@ -196,6 +292,11 @@ private final class AppScopeBrowseRepositoryManager: BrowseRepositoryManaging {
         Just(repositories).eraseToAnyPublisher()
     }
 
+    func addRepository(url: String) async throws -> RepositoryAdditionResult {
+        _ = url
+        return .added
+    }
+
     func installPackage(_ package: RepoPackage, repositoryURL: String) async throws {
         _ = package
         _ = repositoryURL
@@ -216,12 +317,5 @@ private final class AppScopeBrowseFileOperations: BrowsePluginFileOperating {
 
     func deletePluginFile(at url: URL) throws {
         _ = url
-    }
-}
-
-@MainActor
-private final class AppScopeBrowseMessagePresenter: BrowseMessagePresenting {
-    func present(_ message: BrowseMessage) {
-        _ = message
     }
 }

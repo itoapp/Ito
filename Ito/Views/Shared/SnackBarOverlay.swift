@@ -1,9 +1,9 @@
-import SwiftUI
 import Combine
+import SwiftUI
 
 public struct ToastMessage: Identifiable, Equatable {
-    public let id = UUID()
-    public enum Style {
+    public let id: UUID
+    public enum Style: Equatable {
         case success
         case error
         case info
@@ -15,6 +15,22 @@ public struct ToastMessage: Identifiable, Equatable {
     // For specific actions like 'Move' after saving
     public var actionId: String?
     public var actionTitle: String?
+
+    public init(
+        id: UUID = UUID(),
+        style: Style,
+        title: String,
+        message: String? = nil,
+        actionId: String? = nil,
+        actionTitle: String? = nil
+    ) {
+        self.id = id
+        self.style = style
+        self.title = title
+        self.message = message
+        self.actionId = actionId
+        self.actionTitle = actionTitle
+    }
 }
 
 @MainActor
@@ -65,20 +81,24 @@ public class SnackBarManager: ObservableObject {
     }
 }
 
-public struct SnackBarOverlay: View {
+struct SnackBarOverlay: View {
+    @ObservedObject private var messageCenter: AppMessageCenter
     @StateObject private var manager = SnackBarManager.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var showingSheetForId: String?
+    @State private var messageDismissTask: Task<Void, Never>?
 
-    public init() {}
+    init(messageCenter: AppMessageCenter) {
+        self.messageCenter = messageCenter
+    }
 
-    public var body: some View {
+    var body: some View {
         ZStack(alignment: .bottom) {
             Color.clear // Transparent root covering safe area
                 .ignoresSafeArea()
 
-            if manager.isShowing, let toast = manager.currentToast {
+            if let toast = currentToast {
                 HStack(spacing: 12) {
                     icon(for: toast.style)
                         .font(.title3)
@@ -130,6 +150,13 @@ public struct SnackBarOverlay: View {
                 .id(toast.id) // Ensure transition triggers on change
             }
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.7), value: currentToast?.id)
+        .onReceive(messageCenter.$currentMessage) { message in
+            scheduleDismissal(for: message)
+        }
+        .onDisappear {
+            messageDismissTask?.cancel()
+        }
         .safeAreaInset(edge: .bottom) {
             Color.clear.frame(height: 10) // Floats above home indicator
         }
@@ -138,6 +165,34 @@ public struct SnackBarOverlay: View {
             set: { showingSheetForId = $0?.id }
         )) { wrapper in
             CategoryAssignmentSheet(itemId: wrapper.id)
+        }
+    }
+
+    private var currentToast: ToastMessage? {
+        if let message = messageCenter.currentMessage {
+            let presentation = message.kind.presentation
+            return ToastMessage(
+                id: message.id,
+                style: presentation.style,
+                title: presentation.title,
+                message: presentation.detail
+            )
+        }
+        guard manager.isShowing else { return nil }
+        return manager.currentToast
+    }
+
+    private func scheduleDismissal(for message: AppMessage?) {
+        messageDismissTask?.cancel()
+        guard let message else { return }
+
+        let duration: UInt64 = message.kind.presentation.style == .error
+            ? 4_500_000_000
+            : 3_000_000_000
+        messageDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: duration)
+            guard !Task.isCancelled else { return }
+            messageCenter.dismiss(messageID: message.id)
         }
     }
 

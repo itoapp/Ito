@@ -79,6 +79,8 @@ public final class DurableStateBootstrap: ObservableObject {
     private let onReady: @MainActor @Sendable () -> Void
     private let sourceDatabaseURL: URL
     private let installedPluginsDirectory: URL?
+    private let runtimeDefaultsSuiteName: String?
+    private let trackerKeychainService: String
     private var preparationTask: Task<Bool, Never>?
     private var sourcesPrepared = false
     private var runtime: Runtime?
@@ -101,6 +103,7 @@ public final class DurableStateBootstrap: ObservableObject {
         let backupManager: BackupManager
         let librarySourceRemapper: LibrarySourceRemapper
         let restoreRefresher: BackupRestoreRefresher
+        let recentSearchDefaults: UserDefaults
     }
 
     public init(
@@ -111,7 +114,9 @@ public final class DurableStateBootstrap: ObservableObject {
         consumerConstructors: [DurableConsumerConstructor] = [],
         onReady: @escaping @MainActor @Sendable () -> Void = {},
         sourceDatabaseURL: URL,
-        installedPluginsDirectory: URL? = nil
+        installedPluginsDirectory: URL? = nil,
+        runtimeDefaultsSuiteName: String? = nil,
+        trackerKeychainService: String = "moe.itoapp.ito.tracker.oauth-token"
     ) {
         self.dbPool = dbPool
         self.migration = migration
@@ -121,6 +126,8 @@ public final class DurableStateBootstrap: ObservableObject {
         self.onReady = onReady
         self.sourceDatabaseURL = sourceDatabaseURL
         self.installedPluginsDirectory = installedPluginsDirectory
+        self.runtimeDefaultsSuiteName = runtimeDefaultsSuiteName
+        self.trackerKeychainService = trackerKeychainService
     }
 
     public func prepare() async -> Bool {
@@ -275,11 +282,28 @@ public final class DurableStateBootstrap: ObservableObject {
         let remapper = LibrarySourceRemapper(dbPool: dbPool)
         let updates = UpdateManager(dbPool: dbPool, pluginManager: plugins)
         let progress = ReadProgressManager(dbPool: dbPool)
+        #if DEBUG
+        let usernameDefaults: UserDefaults
+        let legacyTokenStore: LegacyTokenStore
+        if let runtimeDefaultsSuiteName {
+            guard let isolatedDefaults = UserDefaults(suiteName: runtimeDefaultsSuiteName) else {
+                fatalError("Failed to create isolated runtime defaults suite.")
+            }
+            usernameDefaults = isolatedDefaults
+            legacyTokenStore = LegacyTokenStore(suiteName: runtimeDefaultsSuiteName)
+        } else {
+            usernameDefaults = .standard
+            legacyTokenStore = LegacyTokenStore()
+        }
+        #else
+        let usernameDefaults = UserDefaults.standard
+        let legacyTokenStore = LegacyTokenStore()
+        #endif
         let tracker = TrackerManager(
             dbPool: dbPool,
-            credentialStore: KeychainTrackerCredentialStore(),
-            legacyTokenStore: LegacyTokenStore(defaults: .standard),
-            usernameDefaults: .standard
+            credentialStore: KeychainTrackerCredentialStore(service: trackerKeychainService),
+            legacyTokenStore: legacyTokenStore,
+            usernameDefaults: usernameDefaults
         )
         let repositories = RepoManager(dbPool: dbPool, pluginManager: plugins)
         let resolver = PluginResolver(
@@ -359,7 +383,8 @@ public final class DurableStateBootstrap: ObservableObject {
             notificationManager: notifications,
             backupManager: backup,
             librarySourceRemapper: remapper,
-            restoreRefresher: refresher
+            restoreRefresher: refresher,
+            recentSearchDefaults: usernameDefaults
         )
     }
 
@@ -419,7 +444,9 @@ public final class DurableStateBootstrap: ObservableObject {
         librarySourceRemapper = runtime.librarySourceRemapper
         appScope = AppScope.prepared(
             pluginManager: runtime.pluginManager,
-            repoManager: runtime.repoManager
+            repoManager: runtime.repoManager,
+            recentSearchDefaults: runtime.recentSearchDefaults,
+            browsePluginsDirectory: installedPluginsDirectory
         )
     }
 
@@ -463,18 +490,72 @@ public final class DurableStateBootstrap: ObservableObject {
     }
 
     private static func production() -> DurableStateBootstrap {
+        let domainName: String
+        let defaults: UserDefaults
+        let launchDefaultsSuiteName: String?
+        let trackerKeychainService: String
+        let installedPluginsDirectory: URL?
+        let extensions: [any DurableStateBootstrapExtension]
+        #if DEBUG
+        let launchConfiguration = UITestLaunchConfiguration.current
+        if launchConfiguration.isEnabled {
+            domainName = UITestLaunchConfiguration.fixtureDefaultsSuiteName
+            launchDefaultsSuiteName = domainName
+            trackerKeychainService = UITestLaunchConfiguration.fixtureTrackerKeychainService
+            guard let fixtureDefaults = UserDefaults(suiteName: domainName) else {
+                fatalError("Failed to create UI test defaults suite.")
+            }
+            if launchConfiguration.resetsStorage {
+                fixtureDefaults.removePersistentDomain(forName: domainName)
+                guard fixtureDefaults.persistentDomain(forName: domainName)?.isEmpty != false else {
+                    fatalError("Failed to reset UI test defaults suite.")
+                }
+            }
+            defaults = fixtureDefaults
+            let fixtureRootURL: URL
+            do {
+                fixtureRootURL = try UITestLaunchConfiguration.fixtureRootURL()
+            } catch {
+                fatalError("Failed to locate UI test fixture storage.")
+            }
+            let pluginsDirectory = fixtureRootURL.appendingPathComponent(
+                UITestLaunchConfiguration.fixturePluginsDirectoryName,
+                isDirectory: true
+            )
+            installedPluginsDirectory = pluginsDirectory
+            extensions = [InstalledPluginSuiteBootstrapExtension(
+                pluginsDirectory: pluginsDirectory
+            )]
+        } else {
+            domainName = Bundle.main.bundleIdentifier ?? "moe.itoapp.ito"
+            defaults = .standard
+            launchDefaultsSuiteName = nil
+            trackerKeychainService = KeychainTrackerCredentialStore.productionService
+            installedPluginsDirectory = nil
+            extensions = [InstalledPluginSuiteBootstrapExtension()]
+        }
+        #else
+        domainName = Bundle.main.bundleIdentifier ?? "moe.itoapp.ito"
+        defaults = .standard
+        launchDefaultsSuiteName = nil
+        trackerKeychainService = KeychainTrackerCredentialStore.productionService
+        installedPluginsDirectory = nil
+        extensions = [InstalledPluginSuiteBootstrapExtension()]
+        #endif
         let dbPool = AppDatabase.shared.dbPool
-        let domainName = Bundle.main.bundleIdentifier ?? "moe.itoapp.ito"
-        let domain = UserDefaultsLegacyDomain(defaults: .standard, domainName: domainName)
+        let domain = UserDefaultsLegacyDomain(defaults: defaults, domainName: domainName)
         let migrator = LegacyDefaultsMigrator(dbPool: dbPool, domain: domain)
         return DurableStateBootstrap(
             dbPool: dbPool,
             migration: {
                 try migrator.migrate()
             },
-            extensions: [InstalledPluginSuiteBootstrapExtension()],
+            extensions: extensions,
             scalarConsumerConfiguration: { _ in },
-            sourceDatabaseURL: AppDatabase.shared.databaseURL
+            sourceDatabaseURL: AppDatabase.shared.databaseURL,
+            installedPluginsDirectory: installedPluginsDirectory,
+            runtimeDefaultsSuiteName: launchDefaultsSuiteName,
+            trackerKeychainService: trackerKeychainService
         )
     }
 }

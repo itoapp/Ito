@@ -35,19 +35,23 @@ public final class BrowseViewModel: ObservableObject {
     private let pluginManager: any BrowsePluginManaging
     private let fileOperations: any BrowsePluginFileOperating
     private let messagePresenter: any BrowseMessagePresenting
+    private let repositoryIntentRouter: any BrowseRepositoryIntentRouting
     private var pendingDeletePlugin: InstalledPlugin?
+    private var repositoryIntentDrainTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
 
     init(
         repositoryManager: any BrowseRepositoryManaging,
         pluginManager: any BrowsePluginManaging,
         fileOperations: any BrowsePluginFileOperating,
-        messagePresenter: any BrowseMessagePresenting
+        messagePresenter: any BrowseMessagePresenting,
+        repositoryIntentRouter: any BrowseRepositoryIntentRouting
     ) {
         self.repositoryManager = repositoryManager
         self.pluginManager = pluginManager
         self.fileOperations = fileOperations
         self.messagePresenter = messagePresenter
+        self.repositoryIntentRouter = repositoryIntentRouter
         installedPlugins = pluginManager.installedPlugins
         repositories = repositoryManager.repositories
 
@@ -62,6 +66,16 @@ public final class BrowseViewModel: ObservableObject {
                 self?.repositories = repositories
             }
             .store(in: &cancellables)
+
+        repositoryIntentRouter.repositoryIntentPublisher
+            .sink { @MainActor [weak self] _ in
+                self?.startRepositoryIntentDrain()
+            }
+            .store(in: &cancellables)
+    }
+
+    deinit {
+        repositoryIntentDrainTask?.cancel()
     }
 
     public var phase: Phase {
@@ -203,5 +217,53 @@ public final class BrowseViewModel: ObservableObject {
 
     public func reportDropLoadingFailure(_ error: (any Error)?) {
         messagePresenter.present(.dropLoadFailed(reason: String(describing: error)))
+    }
+
+    public func consumePendingRepositoryIntents() async {
+        let task = startRepositoryIntentDrain()
+        await task.value
+    }
+
+    @discardableResult
+    private func startRepositoryIntentDrain() -> Task<Void, Never> {
+        if let repositoryIntentDrainTask {
+            return repositoryIntentDrainTask
+        }
+
+        let repositoryManager = self.repositoryManager
+        let messagePresenter = self.messagePresenter
+        let repositoryIntentRouter = self.repositoryIntentRouter
+        let task = Task { @MainActor [weak self] in
+            await Self.drainRepositoryIntents(
+                repositoryManager: repositoryManager,
+                messagePresenter: messagePresenter,
+                repositoryIntentRouter: repositoryIntentRouter
+            )
+            self?.repositoryIntentDrainTask = nil
+        }
+        repositoryIntentDrainTask = task
+        return task
+    }
+
+    private static func drainRepositoryIntents(
+        repositoryManager: any BrowseRepositoryManaging,
+        messagePresenter: any BrowseMessagePresenting,
+        repositoryIntentRouter: any BrowseRepositoryIntentRouting
+    ) async {
+        while !Task.isCancelled,
+              let intent = repositoryIntentRouter.claimPendingRepositoryIntent() {
+            do {
+                _ = try await repositoryManager.addRepository(
+                    url: intent.repositoryURL.absoluteString
+                )
+                guard !Task.isCancelled else { return }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                messagePresenter.present(.repositoryAddFailed)
+            }
+            repositoryIntentRouter.acknowledgeRepositoryIntent(token: intent.token)
+        }
     }
 }

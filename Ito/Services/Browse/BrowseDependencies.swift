@@ -14,6 +14,7 @@ protocol BrowseRepositoryManaging: AnyObject {
     var repositories: [Repository] { get }
     var repositoriesPublisher: AnyPublisher<[Repository], Never> { get }
 
+    func addRepository(url: String) async throws -> RepositoryAdditionResult
     func installPackage(_ package: RepoPackage, repositoryURL: String) async throws
     func refreshAll() async
 }
@@ -37,6 +38,7 @@ enum BrowseMessage: Equatable {
     case unsupportedPluginFile
     case pluginDirectoryUnavailable
     case importFailed(source: BrowseImportSource, reason: String)
+    case repositoryAddFailed
 }
 
 @MainActor
@@ -78,13 +80,16 @@ enum BrowsePluginFileError: LocalizedError {
 final class LocalBrowsePluginFileOperations: BrowsePluginFileOperating {
     private let fileManager: FileManager
     private let applicationSupportDirectory: URL?
+    let configuredPluginsDirectory: URL?
 
     init(
         fileManager: FileManager = .default,
-        applicationSupportDirectory: URL? = nil
+        applicationSupportDirectory: URL? = nil,
+        pluginsDirectory: URL? = nil
     ) {
         self.fileManager = fileManager
         self.applicationSupportDirectory = applicationSupportDirectory
+        self.configuredPluginsDirectory = pluginsDirectory
     }
 
     func supportsPluginFile(at url: URL) -> Bool {
@@ -120,6 +125,20 @@ final class LocalBrowsePluginFileOperations: BrowsePluginFileOperating {
     }
 
     private func pluginsDirectory() throws -> URL {
+        if let configuredPluginsDirectory {
+            if !fileManager.fileExists(atPath: configuredPluginsDirectory.path) {
+                do {
+                    try fileManager.createDirectory(
+                        at: configuredPluginsDirectory,
+                        withIntermediateDirectories: true
+                    )
+                } catch {
+                    throw BrowsePluginFileError.pluginsDirectoryUnavailable
+                }
+            }
+            return configuredPluginsDirectory
+        }
+
         let baseDirectory: URL
         if let applicationSupportDirectory {
             baseDirectory = applicationSupportDirectory
@@ -148,32 +167,35 @@ final class LocalBrowsePluginFileOperations: BrowsePluginFileOperating {
 }
 
 @MainActor
-final class SnackBarBrowseMessagePresenter: BrowseMessagePresenting {
+final class AppMessageBrowseMessagePresenter: BrowseMessagePresenting {
+    private let messageCenter: AppMessageCenter
+
+    init(messageCenter: AppMessageCenter) {
+        self.messageCenter = messageCenter
+    }
+
     func present(_ message: BrowseMessage) {
-        SnackBarManager.shared.showError(message.text)
+        messageCenter.publish(message.appMessageKind)
     }
 }
 
 private extension BrowseMessage {
-    var text: String {
+    var appMessageKind: AppMessageKind {
         switch self {
-        case .updateFailed(let reason):
-            return "Update failed: \(reason)"
-        case .deleteFailed(let pluginName, let reason):
-            return "Failed to remove \(pluginName): \(reason)"
-        case .dropLoadFailed(let reason):
-            return "Failed to load dropped file: \(reason)"
+        case .updateFailed:
+            return .browseUpdateFailed
+        case .deleteFailed:
+            return .browseDeleteFailed
+        case .dropLoadFailed:
+            return .browseDropLoadFailed
         case .unsupportedPluginFile:
-            return "Please drop a valid .ito plugin file."
+            return .browseUnsupportedPluginFile
         case .pluginDirectoryUnavailable:
-            return "Failed to access plugins directory."
-        case .importFailed(let source, let reason):
-            switch source {
-            case .drop:
-                return "File copy error: \(reason)"
-            case .openURL:
-                return "URL Open error: \(reason)"
-            }
+            return .browsePluginDirectoryUnavailable
+        case .importFailed(let source, _):
+            return .browseImportFailed(source)
+        case .repositoryAddFailed:
+            return .repositoryAddFailed
         }
     }
 }
