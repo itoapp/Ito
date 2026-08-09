@@ -23,6 +23,15 @@
       },
       "versions": [
         {
+          "version": "1.0.0-nightly.20260809.23",
+          "buildVersion": "23",
+          "date": "2026-08-09T10:05:15Z",
+          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260809-23/Ito-1.0.0-nightly.20260809.23-unsigned.ipa",
+          "size": 9761995,
+          "localizedDescription": "Automated unsigned nightly from main at 6c17793. This build may be unstable.",
+          "minOSVersion": "15.4"
+        },
+        {
           "version": "1.0.0-nightly.20260808.22",
           "buildVersion": "22",
           "date": "2026-08-08T10:05:50Z",
@@ -138,24 +147,15 @@
           "size": 9083561,
           "localizedDescription": "Automated unsigned nightly from main at 4f787dc. This build may be unstable.",
           "minOSVersion": "15.4"
-        },
-        {
-          "version": "1.0.0-nightly.20260726.9",
-          "buildVersion": "9",
-          "date": "2026-07-26T11:05:25Z",
-          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260726-9/Ito-1.0.0-nightly.20260726.9-unsigned.ipa",
-          "size": 9083727,
-          "localizedDescription": "Automated unsigned nightly from main at 4f787dc. This build may be unstable.",
-          "minOSVersion": "15.4"
         }
       ],
-      "version": "1.0.0-nightly.20260808.22",
-      "buildVersion": "22",
-      "date": "2026-08-08T10:05:50Z",
-      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260808-22/Ito-1.0.0-nightly.20260808.22-unsigned.ipa",
-      "size": 9745861,
+      "version": "1.0.0-nightly.20260809.23",
+      "buildVersion": "23",
+      "date": "2026-08-09T10:05:15Z",
+      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260809-23/Ito-1.0.0-nightly.20260809.23-unsigned.ipa",
+      "size": 9761995,
       "minOSVersion": "15.4",
-      "versionDescription": "Automated unsigned nightly from main at 73426f1. This build may be unstable."
+      "versionDescription": "Automated unsigned nightly from main at 6c17793. This build may be unstable."
     }
   ],
   "news": []
