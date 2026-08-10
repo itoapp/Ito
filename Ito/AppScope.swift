@@ -9,6 +9,36 @@ struct PreparedApplicationDependencies {
     let browseRepositoryManager: any BrowseRepositoryManaging
     let browsePluginManager: any BrowsePluginManaging
     let browseFileOperations: any BrowsePluginFileOperating
+    let discoverService: any DiscoverHomeFilterServing
+    let discoverCache: any DiscoverCaching
+    let discoverClock: any DiscoverClock
+    let discoverDebounceMilliseconds: Int?
+
+    init(
+        searchExecutor: any SearchPluginExecuting,
+        recentSearchStore: any RecentSearchPersisting,
+        searchDebounceMilliseconds: Int?,
+        presentationLogger: any PresentationEventLogging,
+        browseRepositoryManager: any BrowseRepositoryManaging,
+        browsePluginManager: any BrowsePluginManaging,
+        browseFileOperations: any BrowsePluginFileOperating,
+        discoverService: any DiscoverHomeFilterServing = DiscoverManager.shared,
+        discoverCache: any DiscoverCaching = InMemoryDiscoverCache(),
+        discoverClock: any DiscoverClock = SystemDiscoverClock(),
+        discoverDebounceMilliseconds: Int? = DiscoverViewModel.productionDebounceMilliseconds
+    ) {
+        self.searchExecutor = searchExecutor
+        self.recentSearchStore = recentSearchStore
+        self.searchDebounceMilliseconds = searchDebounceMilliseconds
+        self.presentationLogger = presentationLogger
+        self.browseRepositoryManager = browseRepositoryManager
+        self.browsePluginManager = browsePluginManager
+        self.browseFileOperations = browseFileOperations
+        self.discoverService = discoverService
+        self.discoverCache = discoverCache
+        self.discoverClock = discoverClock
+        self.discoverDebounceMilliseconds = discoverDebounceMilliseconds
+    }
 
     static func production(
         pluginManager: PluginManager,
@@ -34,8 +64,10 @@ struct PreparedApplicationDependencies {
 final class RootModelStore {
     private let makeSearchViewModel: () -> SearchViewModel
     private let makeBrowseViewModel: () -> BrowseViewModel
+    private let makeDiscoverViewModel: () -> DiscoverViewModel
     private var storedSearchViewModel: SearchViewModel?
     private var storedBrowseViewModel: BrowseViewModel?
+    private var storedDiscoverViewModel: DiscoverViewModel?
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -57,6 +89,14 @@ final class RootModelStore {
                 fileOperations: preparedDependencies.browseFileOperations,
                 messagePresenter: browseMessagePresenter,
                 repositoryIntentRouter: repositoryIntentRouter
+            )
+        }
+        makeDiscoverViewModel = {
+            DiscoverViewModel(
+                service: preparedDependencies.discoverService,
+                cache: preparedDependencies.discoverCache,
+                clock: preparedDependencies.discoverClock,
+                debounceMilliseconds: preparedDependencies.discoverDebounceMilliseconds
             )
         }
     }
@@ -81,6 +121,17 @@ final class RootModelStore {
 
     var hasLoadedBrowseViewModel: Bool {
         storedBrowseViewModel != nil
+    }
+
+    var discoverViewModel: DiscoverViewModel {
+        if let storedDiscoverViewModel { return storedDiscoverViewModel }
+        let viewModel = makeDiscoverViewModel()
+        storedDiscoverViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedDiscoverViewModel: Bool {
+        storedDiscoverViewModel != nil
     }
 }
 

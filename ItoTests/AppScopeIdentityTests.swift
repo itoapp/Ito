@@ -28,6 +28,30 @@ final class AppScopeIdentityTests: XCTestCase {
         )
     }
 
+    func testRepeatedRootAndTabRecomputationReturnsSameDiscoverViewModel() {
+        let scope = makeScope()
+
+        let first = scope.rootModels.discoverViewModel
+        _ = scope.viewFactory.makeDiscoverView()
+        let second = scope.viewFactory.rootModels.discoverViewModel
+        _ = scope.viewFactory.makeDiscoverView()
+        let third = scope.rootModels.discoverViewModel
+
+        XCTAssertTrue(first === second)
+        XCTAssertTrue(second === third)
+    }
+
+    func testNewPreparedRuntimeEpochReceivesNewDiscoverViewModel() {
+        let firstScope = makeScope()
+        let secondScope = makeScope()
+
+        XCTAssertFalse(firstScope === secondScope)
+        XCTAssertFalse(
+            firstScope.rootModels.discoverViewModel
+                === secondScope.rootModels.discoverViewModel
+        )
+    }
+
     func testSearchDependenciesAndModelAreNotDuplicated() {
         let executor = AppScopeSearchExecutor()
         let store = AppScopeRecentStore()
@@ -59,6 +83,43 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(scope.rootModels.hasLoadedSearchViewModel)
     }
 
+    func testDiscoverDependenciesAndModelAreNotDuplicated() {
+        let service = AppScopeDiscoverService()
+        let cache = InMemoryDiscoverCache()
+        let clock = AppScopeDiscoverClock()
+        let dependencies = PreparedApplicationDependencies(
+            searchExecutor: AppScopeSearchExecutor(),
+            recentSearchStore: AppScopeRecentStore(),
+            searchDebounceMilliseconds: nil,
+            presentationLogger: PresentationEventCaptureSpy(),
+            browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+            browsePluginManager: AppScopeBrowsePluginManager(),
+            browseFileOperations: AppScopeBrowseFileOperations(),
+            discoverService: service,
+            discoverCache: cache,
+            discoverClock: clock,
+            discoverDebounceMilliseconds: nil
+        )
+        let scope = AppScope(preparedDependencies: dependencies)
+
+        XCTAssertFalse(scope.rootModels.hasLoadedDiscoverViewModel)
+        let first = scope.rootModels.discoverViewModel
+        let second = scope.rootModels.discoverViewModel
+
+        XCTAssertTrue(first === second)
+        XCTAssertTrue(scope.dependencies.discoverService === service)
+        XCTAssertTrue(scope.dependencies.discoverCache === cache)
+        XCTAssertTrue(scope.dependencies.discoverClock === clock)
+    }
+
+    func testDiscoverConstructionIsLazyWithinPreparedScope() {
+        let scope = makeScope()
+
+        XCTAssertFalse(scope.rootModels.hasLoadedDiscoverViewModel)
+        _ = scope.viewFactory.makeDiscoverView()
+        XCTAssertTrue(scope.rootModels.hasLoadedDiscoverViewModel)
+    }
+
     func testAppScopeIsUnavailableBeforeRuntimePreparation() async throws {
         let database = try TestDatabase()
         defer { database.cleanup() }
@@ -76,6 +137,7 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(prepared)
         XCTAssertNotNil(bootstrap.appScope)
         XCTAssertFalse(try XCTUnwrap(bootstrap.appScope).rootModels.hasLoadedSearchViewModel)
+        XCTAssertFalse(try XCTUnwrap(bootstrap.appScope).rootModels.hasLoadedDiscoverViewModel)
     }
 
     func testUnmigratedTabsAndEnvironmentObjectFanOutRemainUnchanged() throws {
@@ -106,12 +168,12 @@ final class AppScopeIdentityTests: XCTestCase {
         }
         for unmigratedTab in [
             "LibraryView()",
-            "DiscoverView()",
             "SettingsView()"
         ] {
             XCTAssertTrue(tabSource.contains(unmigratedTab))
         }
         XCTAssertTrue(tabSource.contains("appScope.viewFactory.makeBrowseView()"))
+        XCTAssertTrue(tabSource.contains("appScope.viewFactory.makeDiscoverView()"))
     }
 
     func testUITestFixtureStorageAndDefaultsAreIsolatedFromProduction() throws {
@@ -317,5 +379,32 @@ private final class AppScopeBrowseFileOperations: BrowsePluginFileOperating {
 
     func deletePluginFile(at url: URL) throws {
         _ = url
+    }
+}
+
+@MainActor
+private final class AppScopeDiscoverService: DiscoverHomeFilterServing {
+    func loadHomeSection(
+        _ request: DiscoverHomeSectionRequest
+    ) async throws -> [DiscoverMedia] {
+        _ = request
+        return []
+    }
+
+    func search(_ request: DiscoverSearchRequest) async throws -> DiscoverPageResult {
+        _ = request
+        return DiscoverPageResult(media: [], hasNextPage: false)
+    }
+
+    func loadGenres() async throws -> [String] { [] }
+    func loadTags() async throws -> [DiscoverTag] { [] }
+}
+
+@MainActor
+private final class AppScopeDiscoverClock: DiscoverClock {
+    let now = Date(timeIntervalSince1970: 0)
+
+    func sleep(milliseconds: Int) async throws {
+        _ = milliseconds
     }
 }

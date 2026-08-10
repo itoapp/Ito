@@ -3,60 +3,48 @@ import NukeUI
 import Nuke
 
 struct DiscoverView: View {
-    @StateObject private var manager = DiscoverManager.shared
+    @StateObject private var viewModel: DiscoverViewModel
     @EnvironmentObject private var pluginManager: PluginManager
-
-    @State private var selectedType: DiscoverMediaType = .manga
-    @State private var searchQuery = ""
-    @State private var searchResults: [DiscoverMedia] = []
-    @State private var isSearching = false
-    @State private var searchHasNextPage = false
-    @State private var searchPage = 1
-    @State private var searchTask: Task<Void, Never>?
-
     @State private var showFilters = false
-    @State private var activeFilters = DiscoverFilters()
-    @State private var isFilterActive = false
+
+    init(viewModel: DiscoverViewModel) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         NavigationView {
             Group {
-                if !searchQuery.isEmpty || isFilterActive {
-                    searchResultsView
+                if viewModel.isShowingHome {
+                    DiscoverHomeView(viewModel: viewModel)
                 } else {
-                    DiscoverHomeView(manager: manager, selectedType: $selectedType)
+                    searchResultsView
                 }
             }
             .navigationTitle("Discover")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
+                        viewModel.loadFilterOptionsIfNeeded()
                         showFilters = true
                     } label: {
-                        Image(systemName: isFilterActive
+                        Image(systemName: viewModel.isFilterActive
                               ? "line.3.horizontal.decrease.circle.fill"
                               : "line.3.horizontal.decrease.circle")
                     }
-                    .accessibilityLabel(isFilterActive ? "Filters, active" : "Filters")
+                    .accessibilityLabel(viewModel.isFilterActive ? "Filters, active" : "Filters")
                 }
             }
-            .searchable(text: $searchQuery, prompt: "Search \(selectedType == .anime ? "anime" : "manga")...")
-            .onChange(of: searchQuery) { newValue in
-                performSearch(query: newValue)
-            }
+            .searchable(
+                text: $viewModel.searchQuery,
+                prompt: "Search \(viewModel.selectedType == .anime ? "anime" : "manga")..."
+            )
             .sheet(isPresented: $showFilters) {
                 DiscoverFilterView(
-                    mediaType: selectedType,
-                    filters: $activeFilters,
-                    onApply: {
-                        isFilterActive = !activeFilters.isEmpty
-                        if isFilterActive {
-                            performSearch(query: searchQuery)
-                        }
-                    },
-                    onReset: {
-                        activeFilters = DiscoverFilters()
-                        isFilterActive = false
+                    viewModel: viewModel,
+                    mediaType: viewModel.selectedType,
+                    filters: viewModel.activeFilters,
+                    onApply: { filters in
+                        viewModel.applyFilters(filters)
                     }
                 )
             }
@@ -68,54 +56,60 @@ struct DiscoverView: View {
 
     private var searchResultsView: some View {
         Group {
-            if isSearching && searchResults.isEmpty {
+            if viewModel.isLoadingResults && viewModel.searchResults.isEmpty {
                 ProgressView("Searching...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if searchResults.isEmpty && !searchQuery.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 48, weight: .thin))
-                        .foregroundStyle(.secondary)
-                    Text("No results found")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                    Text("Try different search terms or adjust your filters")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if viewModel.searchResults.isEmpty && !viewModel.searchQuery.isEmpty {
+                noSearchResultsView
             } else {
-                List {
-                    if isFilterActive {
-                        activeFilterPills
-                    }
-
-                    ForEach(searchResults) { media in
-                        NavigationLink(
-                            destination: DiscoverDetailView(media: media, pluginManager: pluginManager)
-                        ) {
-                            DiscoverSearchRow(media: media)
-                        }
-                        .onAppear {
-                            if media.id == searchResults.last?.id && searchHasNextPage && !isSearching {
-                                loadNextSearchPage()
-                            }
-                        }
-                    }
-
-                    if isSearching && !searchResults.isEmpty {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                            Spacer()
-                        }
-                        .padding()
-                    }
-                }
-                .listStyle(.plain)
+                searchResultsList
             }
         }
+    }
+
+    private var noSearchResultsView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48, weight: .thin))
+                .foregroundStyle(.secondary)
+            Text("No results found")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text("Try different search terms or adjust your filters")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var searchResultsList: some View {
+        List {
+            if viewModel.isFilterActive {
+                activeFilterPills
+            }
+
+            ForEach(viewModel.searchResults) { media in
+                NavigationLink(
+                    destination: DiscoverDetailView(media: media, pluginManager: pluginManager)
+                ) {
+                    DiscoverSearchRow(media: media)
+                }
+                .onAppear {
+                    viewModel.loadMoreIfNeeded(after: media)
+                }
+            }
+
+            if viewModel.isLoadingResults && !viewModel.searchResults.isEmpty {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                    Spacer()
+                }
+                .padding()
+            }
+        }
+        .listStyle(.plain)
     }
 
     // MARK: - Active Filters
@@ -123,61 +117,45 @@ struct DiscoverView: View {
     private var activeFilterPills: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                // Included genres (accent)
-                ForEach(activeFilters.genres, id: \.self) { genre in
+                ForEach(viewModel.activeFilters.genres, id: \.self) { genre in
                     filterPill(genre, style: .include) {
-                        activeFilters.genres.removeAll { $0 == genre }
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                        viewModel.removeIncludedGenre(genre)
                     }
                 }
-                // Excluded genres (red)
-                ForEach(activeFilters.excludedGenres, id: \.self) { genre in
+                ForEach(viewModel.activeFilters.excludedGenres, id: \.self) { genre in
                     filterPill("− \(genre)", style: .exclude) {
-                        activeFilters.excludedGenres.removeAll { $0 == genre }
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                        viewModel.removeExcludedGenre(genre)
                     }
                 }
-                // Included tags (accent)
-                ForEach(activeFilters.tags, id: \.self) { tag in
+                ForEach(viewModel.activeFilters.tags, id: \.self) { tag in
                     filterPill(tag, style: .include) {
-                        activeFilters.tags.removeAll { $0 == tag }
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                        viewModel.removeIncludedTag(tag)
                     }
                 }
-                // Excluded tags (red)
-                ForEach(activeFilters.excludedTags, id: \.self) { tag in
+                ForEach(viewModel.activeFilters.excludedTags, id: \.self) { tag in
                     filterPill("− \(tag)", style: .exclude) {
-                        activeFilters.excludedTags.removeAll { $0 == tag }
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                        viewModel.removeExcludedTag(tag)
                     }
                 }
-                if let format = activeFilters.format {
+                if let format = viewModel.activeFilters.format {
                     filterPill(format, style: .include) {
-                        activeFilters.format = nil
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                        viewModel.removeFormat()
                     }
                 }
-                if let status = activeFilters.status {
-                    filterPill(status.replacingOccurrences(of: "_", with: " ").capitalized, style: .include) {
-                        activeFilters.status = nil
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                if let status = viewModel.activeFilters.status {
+                    filterPill(
+                        status.replacingOccurrences(of: "_", with: " ").capitalized,
+                        style: .include
+                    ) {
+                        viewModel.removeStatus()
                     }
                 }
-                if let year = activeFilters.year {
-                    let label = activeFilters.season != nil
-                        ? "\(activeFilters.season!.capitalized) \(year)"
+                if let year = viewModel.activeFilters.year {
+                    let label = viewModel.activeFilters.season != nil
+                        ? "\(viewModel.activeFilters.season!.capitalized) \(year)"
                         : "\(year)"
                     filterPill(label, style: .include) {
-                        activeFilters.year = nil
-                        activeFilters.season = nil
-                        isFilterActive = !activeFilters.isEmpty
-                        performSearch(query: searchQuery)
+                        viewModel.removeYearAndSeason()
                     }
                 }
             }
@@ -186,10 +164,15 @@ struct DiscoverView: View {
     }
 
     private enum PillStyle {
-        case include, exclude
+        case include
+        case exclude
     }
 
-    private func filterPill(_ label: String, style: PillStyle, onRemove: @escaping () -> Void) -> some View {
+    private func filterPill(
+        _ label: String,
+        style: PillStyle,
+        onRemove: @escaping () -> Void
+    ) -> some View {
         let tint: Color = style == .exclude ? .red : .accentColor
         return Button(action: onRemove) {
             HStack(spacing: 4) {
@@ -209,65 +192,12 @@ struct DiscoverView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Remove \(label) filter")
     }
-
-    // MARK: - Search Actions
-
-    private func performSearch(query: String) {
-        searchTask?.cancel()
-
-        guard !query.isEmpty || isFilterActive else {
-            searchResults = []
-            return
-        }
-
-        searchTask = Task {
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            guard !Task.isCancelled else { return }
-
-            await MainActor.run { isSearching = true; searchPage = 1 }
-
-            do {
-                let result = try await manager.search(query: query, type: selectedType, filters: activeFilters, page: 1)
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self.searchResults = result.media
-                    self.searchHasNextPage = result.hasNextPage
-                    self.searchPage = 1
-                    self.isSearching = false
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await MainActor.run { self.isSearching = false }
-            }
-        }
-    }
-
-    private func loadNextSearchPage() {
-        guard !isSearching, searchHasNextPage else { return }
-        let nextPage = searchPage + 1
-
-        Task {
-            await MainActor.run { isSearching = true }
-            do {
-                let result = try await manager.search(query: searchQuery, type: selectedType, filters: activeFilters, page: nextPage)
-                await MainActor.run {
-                    self.searchResults.append(contentsOf: result.media)
-                    self.searchHasNextPage = result.hasNextPage
-                    self.searchPage = nextPage
-                    self.isSearching = false
-                }
-            } catch {
-                await MainActor.run { self.isSearching = false }
-            }
-        }
-    }
 }
 
 // MARK: - Discover Home View
 
 private struct DiscoverHomeView: View {
-    @ObservedObject var manager: DiscoverManager
-    @Binding var selectedType: DiscoverMediaType
+    @ObservedObject var viewModel: DiscoverViewModel
     @EnvironmentObject private var pluginManager: PluginManager
 
     var body: some View {
@@ -278,80 +208,82 @@ private struct DiscoverHomeView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 16)
 
-                if manager.isLoadingHome && currentTrending.isEmpty {
+                if isInitialLoading {
                     ProgressView("Loading...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 100)
-                } else if currentTrending.isEmpty && currentPopular.isEmpty && currentTopRated.isEmpty {
+                } else if viewModel.currentHomeContent.primarySectionsAreEmpty {
                     DiscoverErrorView(
-                        errorMessage: manager.errorMessage,
-                        isOutage: manager.isAniListOutage,
-                        onRetry: {
-                            Task {
-                                manager.clearCache(for: selectedType)
-                                await manager.loadHomeSections(for: selectedType)
-                            }
-                        }
+                        errorMessage: homeFailure?.message,
+                        isOutage: homeFailure?.isAniListOutage == true,
+                        onRetry: viewModel.retryHome
                     )
                     .padding(.top, 60)
                 } else {
-                    LazyVStack(spacing: 24) {
-                        if !currentTrending.isEmpty {
-                            discoverSection(title: "Trending Now", items: currentTrending)
-                        }
-                        if selectedType == .anime && !manager.seasonalAnime.isEmpty {
-                            discoverSection(title: "Popular This Season", items: manager.seasonalAnime)
-                        }
-                        if !currentPopular.isEmpty {
-                            discoverSection(title: "All-Time Popular", items: currentPopular)
-                        }
-                        if !currentTopRated.isEmpty {
-                            discoverSection(title: "Top Rated", items: currentTopRated)
-                        }
-                    }
-                    .padding(.bottom, 24)
+                    homeSections
                 }
             }
         }
         .refreshable {
-            manager.clearCache(for: selectedType)
-            await manager.loadHomeSections(for: selectedType)
+            await viewModel.refreshHome()
         }
         .task {
-            if currentTrending.isEmpty {
-                await manager.loadHomeSections(for: selectedType)
-            }
-        }
-        .onChange(of: selectedType) { newType in
-            Task {
-                if selectedType == .anime ? manager.trendingAnime.isEmpty : manager.trendingManga.isEmpty {
-                    await manager.loadHomeSections(for: newType)
-                }
-            }
+            await viewModel.loadInitialHomeIfNeeded()
         }
     }
 
     private var typePicker: some View {
-        Picker("Type", selection: $selectedType) {
+        Picker(
+            "Type",
+            selection: Binding(
+                get: { viewModel.selectedType },
+                set: { mediaType in
+                    viewModel.selectMediaType(mediaType)
+                }
+            )
+        ) {
             Text("Anime").tag(DiscoverMediaType.anime)
             Text("Manga").tag(DiscoverMediaType.manga)
         }
         .pickerStyle(.segmented)
     }
 
-    private var currentTrending: [DiscoverMedia] {
-        selectedType == .anime ? manager.trendingAnime : manager.trendingManga
+    private var isInitialLoading: Bool {
+        guard case .loading = viewModel.state else { return false }
+        return viewModel.currentHomeContent.trending.isEmpty
     }
 
-    private var currentPopular: [DiscoverMedia] {
-        selectedType == .anime ? manager.popularAnime : manager.popularManga
+    private var homeFailure: DiscoverPresentationFailure? {
+        guard case .error(let failure, _) = viewModel.state,
+              failure.context == .home else {
+            return nil
+        }
+        return failure
     }
 
-    private var currentTopRated: [DiscoverMedia] {
-        selectedType == .anime ? manager.topRatedAnime : manager.topRatedManga
+    private var homeSections: some View {
+        LazyVStack(spacing: 24) {
+            let content = viewModel.currentHomeContent
+            if !content.trending.isEmpty {
+                discoverSection(title: "Trending Now", items: content.trending)
+            }
+            if viewModel.selectedType == .anime && !content.seasonal.isEmpty {
+                discoverSection(title: "Popular This Season", items: content.seasonal)
+            }
+            if !content.popular.isEmpty {
+                discoverSection(title: "All-Time Popular", items: content.popular)
+            }
+            if !content.topRated.isEmpty {
+                discoverSection(title: "Top Rated", items: content.topRated)
+            }
+        }
+        .padding(.bottom, 24)
     }
 
-    private func discoverSection(title: String, items: [DiscoverMedia]) -> some View {
+    private func discoverSection(
+        title: String,
+        items: [DiscoverMedia]
+    ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.title2.weight(.bold))
@@ -361,7 +293,10 @@ private struct DiscoverHomeView: View {
                 HStack(spacing: 12) {
                     ForEach(items) { media in
                         NavigationLink(
-                            destination: DiscoverDetailView(media: media, pluginManager: pluginManager)
+                            destination: DiscoverDetailView(
+                                media: media,
+                                pluginManager: pluginManager
+                            )
                         ) {
                             DiscoverCardView(media: media)
                         }
@@ -516,6 +451,6 @@ struct DiscoverSearchRow: View {
 
 struct DiscoverView_Previews: PreviewProvider {
     static var previews: some View {
-        DiscoverView()
+        Text("DiscoverView requires a prepared runtime")
     }
 }
