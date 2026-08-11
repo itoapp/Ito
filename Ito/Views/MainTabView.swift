@@ -32,7 +32,7 @@ private struct MainTabContentView: View {
                     }
                     .tag(AppRootTab.browse)
 
-                DiscoverView()
+                appScope.viewFactory.makeDiscoverView()
                     .tabItem {
                         Label("Discover", systemImage: "sparkles")
                     }

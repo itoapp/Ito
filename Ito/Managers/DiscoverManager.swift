@@ -116,7 +116,13 @@ public class DiscoverManager: ObservableObject {
 
     // MARK: - Search
 
-    public func search(query: String, type: DiscoverMediaType, filters: DiscoverFilters = DiscoverFilters(), page: Int = 1) async throws -> (media: [DiscoverMedia], hasNextPage: Bool) {
+    public func search(
+        query: String,
+        type: DiscoverMediaType,
+        filters: DiscoverFilters = DiscoverFilters(),
+        page: Int = 1,
+        perPage: Int = 20
+    ) async throws -> (media: [DiscoverMedia], hasNextPage: Bool) {
         let sort: DiscoverSort = query.isEmpty ? filters.sort : .searchMatch
         return try await service.queryMediaPaginated(
             type: type, sort: sort,
@@ -129,8 +135,41 @@ public class DiscoverManager: ObservableObject {
             excludedTags: filters.excludedTags.isEmpty ? nil : filters.excludedTags,
             format: filters.format, status: filters.status,
             countryOfOrigin: filters.countryOfOrigin,
-            page: page, perPage: 20
+            page: page, perPage: perPage
         )
+    }
+
+    func loadUncachedHomeSection(
+        _ request: DiscoverHomeSectionRequest
+    ) async throws -> [DiscoverMedia] {
+        switch request.section {
+        case .trending:
+            return try await service.queryMedia(
+                type: request.mediaType,
+                sort: .trending,
+                perPage: request.perPage
+            )
+        case .popular:
+            return try await service.queryMedia(
+                type: request.mediaType,
+                sort: .popularity,
+                perPage: request.perPage
+            )
+        case .topRated:
+            return try await service.queryMedia(
+                type: request.mediaType,
+                sort: .score,
+                perPage: request.perPage
+            )
+        case .seasonal:
+            return try await service.queryMedia(
+                type: request.mediaType,
+                sort: .popularity,
+                season: request.season,
+                seasonYear: request.seasonYear,
+                perPage: request.perPage
+            )
+        }
     }
 
     // MARK: - Genre & Tag Collections
@@ -143,6 +182,14 @@ public class DiscoverManager: ObservableObject {
             self.availableGenres = genres
             self.availableTags = tags.filter { $0.isAdult != true }
         }
+    }
+
+    func loadUncachedGenres() async throws -> [String] {
+        try await service.fetchGenres()
+    }
+
+    func loadUncachedTags() async throws -> [DiscoverTag] {
+        try await service.fetchTags()
     }
 
     private func fetchGenres() async -> [String] {

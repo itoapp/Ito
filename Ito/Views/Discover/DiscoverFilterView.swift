@@ -1,12 +1,11 @@
 import SwiftUI
 
 struct DiscoverFilterView: View {
+    @ObservedObject var viewModel: DiscoverViewModel
     let mediaType: DiscoverMediaType
-    @Binding var filters: DiscoverFilters
-    var onApply: () -> Void
-    var onReset: () -> Void
+    let filters: DiscoverFilters
+    var onApply: (DiscoverFilters) -> Void
 
-    @StateObject private var manager = DiscoverManager.shared
     @Environment(\.dismiss) private var dismiss
 
     @State private var localFilters: DiscoverFilters = DiscoverFilters()
@@ -39,7 +38,7 @@ struct DiscoverFilterView: View {
     ]
 
     private var filteredTags: [DiscoverTag] {
-        let nonAdult = manager.availableTags.filter { $0.isAdult != true }
+        let nonAdult = viewModel.availableTags.filter { $0.isAdult != true }
         if tagSearchText.isEmpty { return nonAdult }
         return nonAdult.filter { $0.name.localizedCaseInsensitiveContains(tagSearchText) }
     }
@@ -47,6 +46,9 @@ struct DiscoverFilterView: View {
     var body: some View {
         NavigationView {
             List {
+                if viewModel.filterLoadState == .failed {
+                    filterLoadFailureSection
+                }
                 sortSection
                 yearSeasonSection
                 genreSection
@@ -65,8 +67,7 @@ struct DiscoverFilterView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Apply") {
-                        filters = localFilters
-                        onApply()
+                        onApply(localFilters)
                         dismiss()
                     }
                     .font(.body.weight(.semibold))
@@ -74,15 +75,27 @@ struct DiscoverFilterView: View {
             }
             .onAppear {
                 localFilters = filters
-                if manager.availableGenres.isEmpty {
-                    Task { await manager.loadGenresAndTags() }
-                }
+                viewModel.loadFilterOptionsIfNeeded()
             }
         }
         .interactiveDismissDisabled(localFilters != filters)
     }
 
     // MARK: - Sort
+
+    private var filterLoadFailureSection: some View {
+        Section {
+            HStack {
+                Text("Some filter options couldn't be loaded.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Retry") {
+                    viewModel.retryFilterOptions()
+                }
+            }
+        }
+    }
 
     private var sortSection: some View {
         Section("Sort By") {
@@ -122,8 +135,7 @@ struct DiscoverFilterView: View {
                     .buttonStyle(.plain)
                 } else {
                     Button("Set") {
-                        let currentYear = Calendar.current.component(.year, from: Date())
-                        localFilters.year = currentYear
+                        localFilters.year = viewModel.currentYear
                     }
                     .foregroundStyle(Color.accentColor)
                 }
@@ -165,15 +177,11 @@ struct DiscoverFilterView: View {
 
     private var genreSection: some View {
         Section {
-            if manager.availableGenres.isEmpty {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
+            if viewModel.availableGenres.isEmpty {
+                filterOptionPlaceholder
             } else {
                 triStateHint
-                WrappingHStack(items: manager.availableGenres) { genre in
+                WrappingHStack(items: viewModel.availableGenres) { genre in
                     triStateChip(
                         label: genre,
                         included: localFilters.genres,
@@ -267,12 +275,8 @@ struct DiscoverFilterView: View {
 
     private var tagSection: some View {
         Section {
-            if manager.availableTags.isEmpty {
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
-                }
+            if viewModel.availableTags.isEmpty {
+                filterOptionPlaceholder
             } else {
                 // Inline search field for tags
                 HStack {
@@ -325,6 +329,26 @@ struct DiscoverFilterView: View {
     }
 
     // MARK: - Tri-State Helpers
+
+    @ViewBuilder
+    private var filterOptionPlaceholder: some View {
+        switch viewModel.filterLoadState {
+        case .idle, .loading:
+            HStack {
+                Spacer()
+                ProgressView()
+                Spacer()
+            }
+        case .failed:
+            Text("Options unavailable")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        case .loaded:
+            Text("No options available")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private var triStateHint: some View {
         HStack(spacing: 12) {
