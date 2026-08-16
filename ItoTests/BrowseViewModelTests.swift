@@ -607,6 +607,7 @@ final class BrowseViewModelTests: XCTestCase {
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(
+                settings: makeTestPreparedSettingsDependencies(),
                 searchExecutor: BrowseSearchExecutor(),
                 recentSearchStore: BrowseRecentSearchStore(),
                 searchDebounceMilliseconds: nil,

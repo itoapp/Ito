@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor
 struct PreparedApplicationDependencies {
+    let settings: PreparedSettingsDependencies
     let searchExecutor: any SearchPluginExecuting
     let recentSearchStore: any RecentSearchPersisting
     let searchDebounceMilliseconds: Int?
@@ -15,6 +16,7 @@ struct PreparedApplicationDependencies {
     let discoverDebounceMilliseconds: Int?
 
     init(
+        settings: PreparedSettingsDependencies,
         searchExecutor: any SearchPluginExecuting,
         recentSearchStore: any RecentSearchPersisting,
         searchDebounceMilliseconds: Int?,
@@ -27,6 +29,7 @@ struct PreparedApplicationDependencies {
         discoverClock: any DiscoverClock = SystemDiscoverClock(),
         discoverDebounceMilliseconds: Int? = DiscoverViewModel.productionDebounceMilliseconds
     ) {
+        self.settings = settings
         self.searchExecutor = searchExecutor
         self.recentSearchStore = recentSearchStore
         self.searchDebounceMilliseconds = searchDebounceMilliseconds
@@ -43,10 +46,23 @@ struct PreparedApplicationDependencies {
     static func production(
         pluginManager: PluginManager,
         repoManager: RepoManager,
+        settingsStore: AppSettingsStore,
+        notificationManager: NotificationManager,
+        storageManager: StorageManager,
+        discordRPCManager: DiscordRPCManager,
         recentSearchDefaults: UserDefaults = .standard,
         browsePluginsDirectory: URL? = nil
     ) -> Self {
         Self(
+            settings: PreparedSettingsDependencies(
+                settingsStore: settingsStore,
+                notificationAuthorization: notificationManager,
+                applicationSettingsOpener: SystemApplicationSettingsOpener(),
+                storageAccess: storageManager,
+                discordRPCManager: discordRPCManager,
+                logReader: SystemDebugLogReader(),
+                clipboardWriter: SystemClipboardWriter()
+            ),
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
             searchDebounceMilliseconds: SearchViewModel.automaticSearchDebounceMilliseconds,
@@ -65,14 +81,25 @@ final class RootModelStore {
     private let makeSearchViewModel: () -> SearchViewModel
     private let makeBrowseViewModel: () -> BrowseViewModel
     private let makeDiscoverViewModel: () -> DiscoverViewModel
+    private let makeAppearanceSettingsViewModel: () -> AppearanceSettingsViewModel
+    private let makeLibrarySettingsViewModel: () -> LibrarySettingsViewModel
+    private let makePrivacySettingsViewModel: () -> PrivacySettingsViewModel
+    private let makeStorageSettingsViewModel: () -> StorageSettingsViewModel
+    private let makeDebugLogViewModel: () -> DebugLogViewModel
     private var storedSearchViewModel: SearchViewModel?
     private var storedBrowseViewModel: BrowseViewModel?
     private var storedDiscoverViewModel: DiscoverViewModel?
+    private var storedAppearanceSettingsViewModel: AppearanceSettingsViewModel?
+    private var storedLibrarySettingsViewModel: LibrarySettingsViewModel?
+    private var storedPrivacySettingsViewModel: PrivacySettingsViewModel?
+    private var storedStorageSettingsViewModel: StorageSettingsViewModel?
+    private var storedDebugLogViewModel: DebugLogViewModel?
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
         repositoryIntentRouter: any BrowseRepositoryIntentRouting,
-        browseMessagePresenter: any BrowseMessagePresenting
+        browseMessagePresenter: any BrowseMessagePresenting,
+        debugLogMessagePresenter: any DebugLogMessagePresenting
     ) {
         makeSearchViewModel = {
             SearchViewModel(
@@ -97,6 +124,37 @@ final class RootModelStore {
                 cache: preparedDependencies.discoverCache,
                 clock: preparedDependencies.discoverClock,
                 debounceMilliseconds: preparedDependencies.discoverDebounceMilliseconds
+            )
+        }
+        makeAppearanceSettingsViewModel = {
+            AppearanceSettingsViewModel(
+                settingsStore: preparedDependencies.settings.settingsStore
+            )
+        }
+        makeLibrarySettingsViewModel = {
+            LibrarySettingsViewModel(
+                settingsStore: preparedDependencies.settings.settingsStore,
+                notificationAuthorization: preparedDependencies.settings.notificationAuthorization,
+                applicationSettingsOpener: preparedDependencies.settings.applicationSettingsOpener
+            )
+        }
+        makePrivacySettingsViewModel = {
+            PrivacySettingsViewModel(
+                settingsStore: preparedDependencies.settings.settingsStore,
+                discordRPCManager: preparedDependencies.settings.discordRPCManager
+            )
+        }
+        makeStorageSettingsViewModel = {
+            StorageSettingsViewModel(
+                settingsStore: preparedDependencies.settings.settingsStore,
+                storageAccess: preparedDependencies.settings.storageAccess
+            )
+        }
+        makeDebugLogViewModel = {
+            DebugLogViewModel(
+                logReader: preparedDependencies.settings.logReader,
+                clipboardWriter: preparedDependencies.settings.clipboardWriter,
+                messagePresenter: debugLogMessagePresenter
             )
         }
     }
@@ -133,6 +191,61 @@ final class RootModelStore {
     var hasLoadedDiscoverViewModel: Bool {
         storedDiscoverViewModel != nil
     }
+
+    var appearanceSettingsViewModel: AppearanceSettingsViewModel {
+        if let storedAppearanceSettingsViewModel { return storedAppearanceSettingsViewModel }
+        let viewModel = makeAppearanceSettingsViewModel()
+        storedAppearanceSettingsViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedAppearanceSettingsViewModel: Bool {
+        storedAppearanceSettingsViewModel != nil
+    }
+
+    var librarySettingsViewModel: LibrarySettingsViewModel {
+        if let storedLibrarySettingsViewModel { return storedLibrarySettingsViewModel }
+        let viewModel = makeLibrarySettingsViewModel()
+        storedLibrarySettingsViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedLibrarySettingsViewModel: Bool {
+        storedLibrarySettingsViewModel != nil
+    }
+
+    var privacySettingsViewModel: PrivacySettingsViewModel {
+        if let storedPrivacySettingsViewModel { return storedPrivacySettingsViewModel }
+        let viewModel = makePrivacySettingsViewModel()
+        storedPrivacySettingsViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedPrivacySettingsViewModel: Bool {
+        storedPrivacySettingsViewModel != nil
+    }
+
+    var storageSettingsViewModel: StorageSettingsViewModel {
+        if let storedStorageSettingsViewModel { return storedStorageSettingsViewModel }
+        let viewModel = makeStorageSettingsViewModel()
+        storedStorageSettingsViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedStorageSettingsViewModel: Bool {
+        storedStorageSettingsViewModel != nil
+    }
+
+    var debugLogViewModel: DebugLogViewModel {
+        if let storedDebugLogViewModel { return storedDebugLogViewModel }
+        let viewModel = makeDebugLogViewModel()
+        storedDebugLogViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedDebugLogViewModel: Bool {
+        storedDebugLogViewModel != nil
+    }
 }
 
 @MainActor
@@ -142,6 +255,7 @@ final class AppScope {
     let viewFactory: AppViewFactory
     let router: AppRouter
     let messageCenter: AppMessageCenter
+    let debugLogMessagePresenter: any DebugLogMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -151,10 +265,15 @@ final class AppScope {
         dependencies = preparedDependencies
         self.router = router
         self.messageCenter = messageCenter
+        let debugLogMessagePresenter = AppMessageDebugLogMessagePresenter(
+            messageCenter: messageCenter
+        )
+        self.debugLogMessagePresenter = debugLogMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
-            browseMessagePresenter: AppMessageBrowseMessagePresenter(messageCenter: messageCenter)
+            browseMessagePresenter: AppMessageBrowseMessagePresenter(messageCenter: messageCenter),
+            debugLogMessagePresenter: debugLogMessagePresenter
         )
         self.rootModels = rootModels
         self.viewFactory = AppViewFactory(rootModels: rootModels)
@@ -163,6 +282,10 @@ final class AppScope {
     static func prepared(
         pluginManager: PluginManager,
         repoManager: RepoManager,
+        settingsStore: AppSettingsStore,
+        notificationManager: NotificationManager,
+        storageManager: StorageManager,
+        discordRPCManager: DiscordRPCManager,
         recentSearchDefaults: UserDefaults = .standard,
         browsePluginsDirectory: URL? = nil
     ) -> AppScope {
@@ -170,6 +293,10 @@ final class AppScope {
             preparedDependencies: .production(
                 pluginManager: pluginManager,
                 repoManager: repoManager,
+                settingsStore: settingsStore,
+                notificationManager: notificationManager,
+                storageManager: storageManager,
+                discordRPCManager: discordRPCManager,
                 recentSearchDefaults: recentSearchDefaults,
                 browsePluginsDirectory: browsePluginsDirectory
             )

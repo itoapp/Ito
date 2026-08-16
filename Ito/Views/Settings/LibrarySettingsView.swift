@@ -1,16 +1,20 @@
 import SwiftUI
 
 struct LibrarySettingsView: View {
-    @EnvironmentObject private var notificationManager: NotificationManager
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-    @State private var showingNotificationAlert = false
+    @StateObject private var viewModel: LibrarySettingsViewModel
+
+    init(viewModel: LibrarySettingsViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         Form {
             Section {
-                Toggle(isOn: binding(
-                    settingsStore.alwaysShowCategoryPicker,
-                    key: AppPreferenceCatalog.alwaysShowCategoryPicker
+                Toggle(isOn: Binding(
+                    get: { viewModel.alwaysShowCategoryPicker },
+                    set: { value in
+                        Task { await viewModel.setAlwaysShowCategoryPicker(value) }
+                    }
                 )) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Prompt Category on Save")
@@ -26,34 +30,26 @@ struct LibrarySettingsView: View {
             }
 
             Section {
-                Toggle("Check for Updates", isOn: binding(
-                    settingsStore.backgroundUpdatesEnabled,
-                    key: AppPreferenceCatalog.backgroundUpdatesEnabled
+                Toggle("Check for Updates", isOn: Binding(
+                    get: { viewModel.backgroundUpdatesEnabled },
+                    set: { value in
+                        Task { await viewModel.setBackgroundUpdatesEnabled(value) }
+                    }
                 ))
 
-                if settingsStore.backgroundUpdatesEnabled {
-                    Toggle("Notify on New Chapters", isOn: binding(
-                        settingsStore.updateNotifications,
-                        key: AppPreferenceCatalog.updateNotifications
-                    ))
-                        .onChange(of: settingsStore.updateNotifications) { newValue in
-                            if newValue {
-                                Task {
-                                    let granted = await notificationManager.requestPermission()
-                                    if !granted {
-                                        showingNotificationAlert = true
-                                        try? await settingsStore.set(
-                                            false,
-                                            for: AppPreferenceCatalog.updateNotifications
-                                        )
-                                    }
-                                }
-                            }
+                if viewModel.showsUpdateOptions {
+                    Toggle("Notify on New Chapters", isOn: Binding(
+                        get: { viewModel.updateNotifications },
+                        set: { value in
+                            Task { await viewModel.setUpdateNotifications(value) }
                         }
+                    ))
 
-                    Picker("Update Frequency", selection: binding(
-                        settingsStore.updateInterval,
-                        key: AppPreferenceCatalog.updateInterval
+                    Picker("Update Frequency", selection: Binding(
+                        get: { viewModel.updateInterval },
+                        set: { value in
+                            Task { await viewModel.setUpdateInterval(value) }
+                        }
                     )) {
                         Text("1 Hour").tag(UpdateIntervalPreference.hourly)
                         Text("2 Hours").tag(UpdateIntervalPreference.twoHours)
@@ -63,9 +59,11 @@ struct LibrarySettingsView: View {
                         Text("24 Hours").tag(UpdateIntervalPreference.daily)
                     }
 
-                    Toggle("Skip Completed Series", isOn: binding(
-                        settingsStore.skipCompleted,
-                        key: AppPreferenceCatalog.skipCompleted
+                    Toggle("Skip Completed Series", isOn: Binding(
+                        get: { viewModel.skipCompleted },
+                        set: { value in
+                            Task { await viewModel.setSkipCompleted(value) }
+                        }
                     ))
                 }
             } header: {
@@ -75,9 +73,11 @@ struct LibrarySettingsView: View {
             }
 
             Section {
-                Toggle("Wi-Fi Only", isOn: binding(
-                    settingsStore.wifiOnlyUpdates,
-                    key: AppPreferenceCatalog.wifiOnlyUpdates
+                Toggle("Wi-Fi Only", isOn: Binding(
+                    get: { viewModel.wifiOnlyUpdates },
+                    set: { value in
+                        Task { await viewModel.setWifiOnlyUpdates(value) }
+                    }
                 ))
             } header: {
                 Text("Restrictions")
@@ -87,35 +87,37 @@ struct LibrarySettingsView: View {
         }
         .navigationTitle("Library")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Notifications Disabled", isPresented: $showingNotificationAlert) {
-            Button("Cancel", role: .cancel) { }
-            Button("Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
+        .alert(item: Binding(
+            get: { viewModel.alert },
+            set: { alert in
+                if alert == nil {
+                    viewModel.dismissAlert()
                 }
             }
-        } message: {
-            Text("Please enable notifications for Ito in your device Settings to receive update alerts.")
+        )) { alert in
+            makeAlert(alert)
         }
     }
 
-    private func binding<Value: Codable & Sendable>(
-        _ value: Value,
-        key: AppPreferenceKey<Value>
-    ) -> Binding<Value> {
-        Binding(
-            get: { value },
-            set: { newValue in
-                Task { try? await settingsStore.set(newValue, for: key) }
+    private func makeAlert(_ alert: SettingsAlert) -> Alert {
+        if alert == .notificationsDisabled {
+            return Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                primaryButton: .cancel(Text("Cancel")) {
+                    viewModel.dismissAlert()
+                },
+                secondaryButton: .default(Text("Settings")) {
+                    Task { await viewModel.openApplicationSettings() }
+                }
+            )
+        }
+        return Alert(
+            title: Text(alert.title),
+            message: Text(alert.message),
+            dismissButton: .default(Text("OK")) {
+                viewModel.dismissAlert()
             }
         )
-    }
-}
-
-struct LibrarySettingsView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            LibrarySettingsView()
-        }
     }
 }

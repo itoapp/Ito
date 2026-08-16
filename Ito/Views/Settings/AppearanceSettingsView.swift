@@ -1,18 +1,22 @@
 import SwiftUI
 
 struct AppearanceSettingsView: View {
-    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel: AppearanceSettingsViewModel
+
+    init(viewModel: AppearanceSettingsViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         Form {
             Section(header: Text("Theme"), footer: Text("Choose your preferred appearance.")) {
                 Picker("Appearance", selection: Binding(
-                    get: { settingsStore.appTheme },
+                    get: { viewModel.currentTheme },
                     set: { value in
-                        Task { try? await settingsStore.set(value, for: AppPreferenceCatalog.appTheme) }
+                        Task { await viewModel.selectTheme(value) }
                     }
                 )) {
-                    ForEach(AppThemePreference.allCases) { theme in
+                    ForEach(viewModel.availableThemes) { theme in
                         Text(theme.rawValue).tag(theme)
                     }
                 }
@@ -21,11 +25,21 @@ struct AppearanceSettingsView: View {
         }
         .navigationTitle("Appearance")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct AppearanceSettingsView_Previews: PreviewProvider {
-    static var previews: some View {
-        AppearanceSettingsView()
+        .alert(item: Binding(
+            get: { viewModel.alert },
+            set: { alert in
+                if alert == nil {
+                    viewModel.dismissAlert()
+                }
+            }
+        )) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK")) {
+                    viewModel.dismissAlert()
+                }
+            )
+        }
     }
 }

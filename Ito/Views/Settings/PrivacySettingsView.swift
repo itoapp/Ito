@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct PrivacySettingsView: View {
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-    @EnvironmentObject private var discordRPC: DiscordRPCManager
+    @StateObject private var viewModel: PrivacySettingsViewModel
+
+    init(viewModel: PrivacySettingsViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         Form {
@@ -11,30 +14,30 @@ struct PrivacySettingsView: View {
                 footer: Text("When Incognito Mode is enabled, items you read or watch will not be saved to your History. Your library and progress trackers will still be updated.")
             ) {
                 Toggle(isOn: Binding(
-                    get: { settingsStore.incognitoMode },
+                    get: { viewModel.incognitoMode },
                     set: { value in
-                        Task { try? await settingsStore.set(value, for: AppPreferenceCatalog.incognitoMode) }
+                        Task { await viewModel.setIncognitoMode(value) }
                     }
                 )) {
                     Label("Incognito Mode", systemImage: "eyes")
                 }
-        }
+            }
 
             Section {
                 Toggle(isOn: Binding(
-                    get: { settingsStore.discordRPCEnabled },
+                    get: { viewModel.discordRPCEnabled },
                     set: { value in
-                        Task { try? await settingsStore.set(value, for: AppPreferenceCatalog.discordRPCEnabled) }
+                        Task { await viewModel.setDiscordRPCEnabled(value) }
                     }
                 )) {
                     Label("Discord Rich Presence", systemImage: "gamecontroller")
                 }
 
-                if discordRPC.isEnabled {
+                if viewModel.showsDiscordDetails {
                     TextField("Server URL (e.g. ws://127.0.0.1:3000)", text: Binding(
-                        get: { settingsStore.discordRPCURL },
+                        get: { viewModel.discordRPCURL },
                         set: { value in
-                            Task { try? await settingsStore.set(value, for: AppPreferenceCatalog.discordRPCURL) }
+                            Task { await viewModel.setDiscordRPCURL(value) }
                         }
                     ))
                     .autocapitalization(.none)
@@ -43,18 +46,7 @@ struct PrivacySettingsView: View {
                     HStack {
                         Text("Status")
                         Spacer()
-                        Group {
-                            switch discordRPC.state {
-                            case .connected:
-                                Text("Connected").foregroundColor(.green)
-                            case .connecting:
-                                Text("Connecting...").foregroundColor(.yellow)
-                            case .disconnected:
-                                Text("Disconnected").foregroundColor(.gray)
-                            case .error(let msg):
-                                Text("Error: \(msg)").foregroundColor(.red).lineLimit(1)
-                            }
-                        }
+                        discordStatus
                     }
                 }
             } header: {
@@ -65,11 +57,35 @@ struct PrivacySettingsView: View {
         }
         .navigationTitle("Privacy")
         .navigationBarTitleDisplayMode(.inline)
+        .alert(item: Binding(
+            get: { viewModel.alert },
+            set: { alert in
+                if alert == nil {
+                    viewModel.dismissAlert()
+                }
+            }
+        )) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK")) {
+                    viewModel.dismissAlert()
+                }
+            )
+        }
     }
-}
 
-struct PrivacySettingsView_Previews: PreviewProvider {
-    static var previews: some View {
-        PrivacySettingsView()
+    @ViewBuilder
+    private var discordStatus: some View {
+        switch viewModel.discordState {
+        case .connected:
+            Text("Connected").foregroundColor(.green)
+        case .connecting:
+            Text("Connecting...").foregroundColor(.yellow)
+        case .disconnected:
+            Text("Disconnected").foregroundColor(.gray)
+        case .error(let message):
+            Text("Error: \(message)").foregroundColor(.red).lineLimit(1)
+        }
     }
 }

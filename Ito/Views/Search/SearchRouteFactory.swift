@@ -28,6 +28,52 @@ struct AppViewFactory {
     func makeDiscoverView() -> DiscoverView {
         DiscoverView(viewModel: rootModels.discoverViewModel)
     }
+
+    func makeSettingsView() -> SettingsView {
+        SettingsView(viewFactory: self)
+    }
+
+    @ViewBuilder
+    func makeSettingsDestination(for destination: SettingsDestination) -> some View {
+        switch destination {
+        case .appearance:
+            makeAppearanceSettingsView()
+        case .library:
+            makeLibrarySettingsView()
+        case .privacy:
+            makePrivacySettingsView()
+        case .readerUnavailable:
+            Text("Reader Settings View")
+        case .storage:
+            makeStorageSettingsView()
+        case .networkUnavailable:
+            Text("Network Settings View")
+        case .extensionsUnavailable:
+            Text("Manage Extensions View")
+        case .debugLogs:
+            makeDebugLogView()
+        }
+    }
+
+    func makeAppearanceSettingsView() -> AppearanceSettingsView {
+        AppearanceSettingsView(viewModel: rootModels.appearanceSettingsViewModel)
+    }
+
+    func makeLibrarySettingsView() -> LibrarySettingsView {
+        LibrarySettingsView(viewModel: rootModels.librarySettingsViewModel)
+    }
+
+    func makePrivacySettingsView() -> PrivacySettingsView {
+        PrivacySettingsView(viewModel: rootModels.privacySettingsViewModel)
+    }
+
+    func makeStorageSettingsView() -> StorageSettingsView {
+        StorageSettingsView(viewModel: rootModels.storageSettingsViewModel)
+    }
+
+    func makeDebugLogView() -> DebugLogView {
+        DebugLogView(viewModel: rootModels.debugLogViewModel)
+    }
 }
 
 struct SearchRouteFactory {

@@ -477,7 +477,7 @@ private func sourceFile(_ relativePath: String) throws -> String { try String(co
 private func repositoryRoot() -> URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent() }
 @MainActor
 private func makeScope(service: DiscoverServiceFake = DiscoverServiceFake(), cache: any DiscoverCaching = InMemoryDiscoverCache(), clock: TestDiscoverClock = TestDiscoverClock()) -> AppScope {
-    AppScope(preparedDependencies: PreparedApplicationDependencies(searchExecutor: DiscoverTestSearchExecutor(), recentSearchStore: DiscoverTestRecentStore(), searchDebounceMilliseconds: nil, presentationLogger: DiscoverTestLogger(), browseRepositoryManager: DiscoverTestRepositoryManager(), browsePluginManager: DiscoverTestPluginManager(), browseFileOperations: DiscoverTestFileOperations(), discoverService: service, discoverCache: cache, discoverClock: clock, discoverDebounceMilliseconds: nil))
+    AppScope(preparedDependencies: PreparedApplicationDependencies(settings: makeTestPreparedSettingsDependencies(), searchExecutor: DiscoverTestSearchExecutor(), recentSearchStore: DiscoverTestRecentStore(), searchDebounceMilliseconds: nil, presentationLogger: DiscoverTestLogger(), browseRepositoryManager: DiscoverTestRepositoryManager(), browsePluginManager: DiscoverTestPluginManager(), browseFileOperations: DiscoverTestFileOperations(), discoverService: service, discoverCache: cache, discoverClock: clock, discoverDebounceMilliseconds: nil))
 }
 
 @MainActor private final class DiscoverTestSearchExecutor: SearchPluginExecuting { var plugins: [SearchPluginDescriptor] = []; func search(plugin: SearchPluginDescriptor, query: String, limit: Int) async throws -> [PluginSearchResult] { [] }; func evictRunner(for pluginID: String) {} }

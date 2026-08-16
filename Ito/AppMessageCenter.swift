@@ -9,6 +9,7 @@ enum AppMessageKind: Equatable {
     case browsePluginDirectoryUnavailable
     case browseImportFailed(BrowseImportSource)
     case repositoryAddFailed
+    case debugLogsCopied
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -67,6 +68,12 @@ extension AppMessageKind {
                 style: .error,
                 title: "Error",
                 detail: "Failed to add repository. Please try again."
+            )
+        case .debugLogsCopied:
+            return .init(
+                style: .success,
+                title: "Copied to clipboard",
+                detail: nil
             )
         }
     }

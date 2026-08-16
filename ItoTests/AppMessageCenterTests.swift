@@ -149,6 +149,7 @@ final class AppMessageCenterTests: XCTestCase {
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(
+                settings: makeTestPreparedSettingsDependencies(),
                 searchExecutor: MessageSearchExecutor(),
                 recentSearchStore: MessageRecentStore(),
                 searchDebounceMilliseconds: nil,

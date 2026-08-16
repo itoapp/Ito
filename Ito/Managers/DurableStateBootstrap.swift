@@ -445,6 +445,10 @@ public final class DurableStateBootstrap: ObservableObject {
         appScope = AppScope.prepared(
             pluginManager: runtime.pluginManager,
             repoManager: runtime.repoManager,
+            settingsStore: runtime.settingsStore,
+            notificationManager: runtime.notificationManager,
+            storageManager: runtime.storageManager,
+            discordRPCManager: runtime.discordRPCManager,
             recentSearchDefaults: runtime.recentSearchDefaults,
             browsePluginsDirectory: installedPluginsDirectory
         )

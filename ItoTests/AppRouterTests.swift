@@ -173,6 +173,7 @@ final class AppRouterTests: XCTestCase {
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(
+                settings: makeTestPreparedSettingsDependencies(),
                 searchExecutor: RouterSearchExecutor(),
                 recentSearchStore: RouterRecentStore(),
                 searchDebounceMilliseconds: nil,

@@ -1,29 +1,42 @@
 import SwiftUI
 
+enum SettingsDestination: CaseIterable {
+    case appearance
+    case library
+    case privacy
+    case readerUnavailable
+    case storage
+    case networkUnavailable
+    case extensionsUnavailable
+    case debugLogs
+}
+
 struct SettingsView: View {
+    let viewFactory: AppViewFactory
+
     var body: some View {
         NavigationView {
             List {
                 Section(header: Text("General")) {
-                    NavigationLink(destination: AppearanceSettingsView()) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .appearance)) {
                         Label("Appearance", systemImage: "paintpalette")
                     }
-                    NavigationLink(destination: LibrarySettingsView()) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .library)) {
                         Label("Library", systemImage: "books.vertical")
                     }
-                    NavigationLink(destination: PrivacySettingsView()) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .privacy)) {
                         Label("Privacy", systemImage: "hand.raised")
                     }
-                    NavigationLink(destination: Text("Reader Settings View")) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .readerUnavailable)) {
                         Label("Reader", systemImage: "book")
                     }
                 }
 
                 Section(header: Text("Data")) {
-                    NavigationLink(destination: StorageSettingsView()) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .storage)) {
                         Label("Storage", systemImage: "internaldrive")
                     }
-                    NavigationLink(destination: Text("Network Settings View")) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .networkUnavailable)) {
                         Label("Network", systemImage: "wifi")
                     }
                     NavigationLink(destination: TrackerSettingsView()) {
@@ -35,13 +48,13 @@ struct SettingsView: View {
                 }
 
                 Section(header: Text("Extensions")) {
-                    NavigationLink(destination: Text("Manage Extensions View")) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .extensionsUnavailable)) {
                         Label("Browse Installers", systemImage: "puzzlepiece.extension")
                     }
                 }
 
                 Section(header: Text("Developer")) {
-                    NavigationLink(destination: DebugLogView()) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .debugLogs)) {
                         Label("Debug Logs", systemImage: "ladybug")
                     }
                 }
@@ -58,11 +71,5 @@ struct SettingsView: View {
             .navigationTitle("Settings")
         }
         .navigationViewStyle(.stack)
-    }
-}
-
-struct SettingsView_Previews: PreviewProvider {
-    static var previews: some View {
-        SettingsView()
     }
 }
