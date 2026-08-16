@@ -56,6 +56,7 @@ final class AppScopeIdentityTests: XCTestCase {
         let executor = AppScopeSearchExecutor()
         let store = AppScopeRecentStore()
         let dependencies = PreparedApplicationDependencies(
+            settings: makeTestPreparedSettingsDependencies(),
             searchExecutor: executor,
             recentSearchStore: store,
             searchDebounceMilliseconds: nil,
@@ -88,6 +89,7 @@ final class AppScopeIdentityTests: XCTestCase {
         let cache = InMemoryDiscoverCache()
         let clock = AppScopeDiscoverClock()
         let dependencies = PreparedApplicationDependencies(
+            settings: makeTestPreparedSettingsDependencies(),
             searchExecutor: AppScopeSearchExecutor(),
             recentSearchStore: AppScopeRecentStore(),
             searchDebounceMilliseconds: nil,
@@ -118,6 +120,24 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertFalse(scope.rootModels.hasLoadedDiscoverViewModel)
         _ = scope.viewFactory.makeDiscoverView()
         XCTAssertTrue(scope.rootModels.hasLoadedDiscoverViewModel)
+    }
+
+    func testSettingsRootFactoryDoesNotEagerlyLoadAnySettingsViewModel() {
+        let scope = makeScope()
+
+        XCTAssertFalse(scope.rootModels.hasLoadedAppearanceSettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedLibrarySettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedPrivacySettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedStorageSettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedDebugLogViewModel)
+
+        _ = scope.viewFactory.makeSettingsView()
+
+        XCTAssertFalse(scope.rootModels.hasLoadedAppearanceSettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedLibrarySettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedPrivacySettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedStorageSettingsViewModel)
+        XCTAssertFalse(scope.rootModels.hasLoadedDebugLogViewModel)
     }
 
     func testAppScopeIsUnavailableBeforeRuntimePreparation() async throws {
@@ -168,7 +188,7 @@ final class AppScopeIdentityTests: XCTestCase {
         }
         for unmigratedTab in [
             "LibraryView()",
-            "SettingsView()"
+            "appScope.viewFactory.makeSettingsView()"
         ] {
             XCTAssertTrue(tabSource.contains(unmigratedTab))
         }
@@ -244,13 +264,27 @@ final class AppScopeIdentityTests: XCTestCase {
             dbPool: database.dbPool,
             pluginManager: pluginManager
         )
+        let settingsStore = AppSettingsStore(dbPool: database.dbPool)
+        let notificationManager = NotificationManager()
+        let storageManager = StorageManager(pluginManager: pluginManager)
+        let discordRPCManager = DiscordRPCManager(
+            libraryManager: LibraryManager(dbPool: database.dbPool)
+        )
         let dependencies = PreparedApplicationDependencies.production(
             pluginManager: pluginManager,
             repoManager: repoManager,
+            settingsStore: settingsStore,
+            notificationManager: notificationManager,
+            storageManager: storageManager,
+            discordRPCManager: discordRPCManager,
             recentSearchDefaults: fixtureDefaults,
             browsePluginsDirectory: pluginsDirectory
         )
 
+        XCTAssertTrue(dependencies.settings.settingsStore === settingsStore)
+        XCTAssertTrue(dependencies.settings.notificationAuthorization === notificationManager)
+        XCTAssertTrue(dependencies.settings.storageAccess === storageManager)
+        XCTAssertTrue(dependencies.settings.discordRPCManager === discordRPCManager)
         XCTAssertEqual(dependencies.recentSearchStore.load(), [recentSearchSentinel])
         let fileOperations = try XCTUnwrap(
             dependencies.browseFileOperations as? LocalBrowsePluginFileOperations
@@ -277,6 +311,7 @@ final class AppScopeIdentityTests: XCTestCase {
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(
+                settings: makeTestPreparedSettingsDependencies(),
                 searchExecutor: AppScopeSearchExecutor(),
                 recentSearchStore: AppScopeRecentStore(),
                 searchDebounceMilliseconds: nil,

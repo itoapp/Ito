@@ -1,0 +1,269 @@
+import XCTest
+@testable import Ito
+
+@MainActor
+extension SettingsViewModelTests {
+    func testMigratedSettingsSourcesUseNoGlobalsEnvironmentOrConfigure() throws {
+        let migratedPaths = [
+            "Ito/AppScope.swift",
+            "Ito/Views/MainTabView.swift",
+            "Ito/Views/Settings/SettingsView.swift",
+            "Ito/ViewModels/Settings/AppearanceSettingsViewModel.swift",
+            "Ito/ViewModels/Settings/LibrarySettingsViewModel.swift",
+            "Ito/ViewModels/Settings/PrivacySettingsViewModel.swift",
+            "Ito/ViewModels/Settings/StorageSettingsViewModel.swift",
+            "Ito/ViewModels/Settings/DebugLogViewModel.swift",
+            "Ito/Views/Settings/AppearanceSettingsView.swift",
+            "Ito/Views/Settings/LibrarySettingsView.swift",
+            "Ito/Views/Settings/PrivacySettingsView.swift",
+            "Ito/Views/Settings/StorageSettingsView.swift",
+            "Ito/Views/Settings/DebugLogView.swift"
+        ]
+        var migratedSources = try migratedPaths.map { try source(at: $0) }
+        let routeFactorySource = try source(
+            at: "Ito/Views/Search/SearchRouteFactory.swift"
+        )
+        migratedSources.append(try XCTUnwrap(
+            routeFactorySource.components(separatedBy: "struct SearchRouteFactory").first
+        ))
+
+        for forbidden in [
+            "UserDefaults.standard",
+            "UIApplication.shared",
+            "UNUserNotificationCenter.current()",
+            "FileManager.default",
+            "SnackBarManager.shared",
+            "AppLogger",
+            "URLSession.shared",
+            "UIPasteboard.general",
+            "@EnvironmentObject",
+            "configure("
+        ] {
+            for (path, source) in zip(migratedPaths + ["AppViewFactory"], migratedSources) {
+                XCTAssertFalse(source.contains(forbidden), "Forbidden \(forbidden) in \(path)")
+            }
+        }
+
+        let settingsAdapter = try source(
+            at: "Ito/Services/Settings/SettingsDependencies.swift"
+        )
+        XCTAssertTrue(settingsAdapter.contains("UIApplication.shared"))
+        XCTAssertTrue(settingsAdapter.contains("UIPasteboard.general"))
+        XCTAssertTrue(settingsAdapter.contains(
+            "extension NotificationManager: NotificationAuthorizationRequesting {}"
+        ))
+    }
+
+    func testAppearanceAndSettingsRootPresentationContracts() throws {
+        let appearanceSource = try source(at: "Ito/Views/Settings/AppearanceSettingsView.swift")
+        let settingsSource = try source(at: "Ito/Views/Settings/SettingsView.swift")
+
+        XCTAssertTrue(appearanceSource.contains(
+            "Section(header: Text(\"Theme\"), footer: Text(\"Choose your preferred appearance.\"))"
+        ))
+        XCTAssertTrue(appearanceSource.contains("Picker(\"Appearance\", selection:"))
+        XCTAssertTrue(appearanceSource.contains(".pickerStyle(SegmentedPickerStyle())"))
+        XCTAssertTrue(appearanceSource.contains(".navigationTitle(\"Appearance\")"))
+        XCTAssertTrue(settingsSource.contains(
+            "Text(\"Version\")\n                        Spacer()\n                        Text(\"1.0.0\")"
+        ))
+    }
+
+    func testLibraryConditionalPresentationAndAlertActionsRemainWired() throws {
+        let source = try source(at: "Ito/Views/Settings/LibrarySettingsView.swift")
+        let conditionalStart = try XCTUnwrap(source.range(
+            of: "if viewModel.showsUpdateOptions {"
+        ))
+        let conditionalEnd = try XCTUnwrap(source.range(
+            of: "            } header: {\n                Text(\"Updates\")",
+            range: conditionalStart.upperBound..<source.endIndex
+        ))
+        let conditionalBlock = String(source[conditionalStart.lowerBound..<conditionalEnd.lowerBound])
+
+        XCTAssertTrue(conditionalBlock.contains("Toggle(\"Notify on New Chapters\""))
+        XCTAssertTrue(conditionalBlock.contains("Picker(\"Update Frequency\""))
+        XCTAssertTrue(conditionalBlock.contains("Toggle(\"Skip Completed Series\""))
+        XCTAssertFalse(conditionalBlock.contains("Toggle(\"Wi-Fi Only\""))
+        XCTAssertTrue(source.contains(
+            "Text(\"Restrictions\")\n            } footer: {\n                Text(\"Only check for updates when connected to Wi-Fi.\")"
+        ))
+        XCTAssertTrue(source.contains(
+            "primaryButton: .cancel(Text(\"Cancel\")) {\n                    viewModel.dismissAlert()"
+        ))
+        XCTAssertTrue(source.contains(
+            "secondaryButton: .default(Text(\"Settings\")) {\n                    Task { await viewModel.openApplicationSettings() }"
+        ))
+    }
+
+    func testPrivacyAndStoragePresentationContractsRemainExact() throws {
+        let privacySource = try source(at: "Ito/Views/Settings/PrivacySettingsView.swift")
+        let storageSource = try source(at: "Ito/Views/Settings/StorageSettingsView.swift")
+
+        for status in [
+            "Text(\"Connected\").foregroundColor(.green)",
+            "Text(\"Connecting...\").foregroundColor(.yellow)",
+            "Text(\"Disconnected\").foregroundColor(.gray)",
+            "Text(\"Error: \\(message)\").foregroundColor(.red).lineLimit(1)"
+        ] {
+            XCTAssertTrue(privacySource.contains(status), "Missing Privacy status: \(status)")
+        }
+        XCTAssertTrue(privacySource.contains("if viewModel.showsDiscordDetails {"))
+        XCTAssertTrue(privacySource.contains(
+            "TextField(\"Server URL (e.g. ws://127.0.0.1:3000)\", text: Binding("
+        ))
+        XCTAssertTrue(privacySource.contains(
+            ".autocapitalization(.none)\n                    .disableAutocorrection(true)"
+        ))
+
+        XCTAssertTrue(storageSource.contains(
+            "Button(action: viewModel.clearCache) {\n                    Text(\"Clear Cache\")"
+        ))
+        XCTAssertTrue(storageSource.contains(
+            ".onAppear(perform: viewModel.refreshCacheUsage)"
+        ))
+        XCTAssertFalse(storageSource.contains("confirmationDialog"))
+        XCTAssertFalse(storageSource.contains("Clear Cache?"))
+        XCTAssertFalse(storageSource.contains("cleared successfully"))
+        XCTAssertFalse(storageSource.contains("AppMessageCenter"))
+    }
+
+    func testBootstrapReusesRuntimeSettingsDependencyIdentities() throws {
+        let source = try source(at: "Ito/Managers/DurableStateBootstrap.swift")
+        let installStart = try XCTUnwrap(source.range(of: "private func install(_ runtime: Runtime)"))
+        let installEnd = try XCTUnwrap(source.range(
+            of: "    private func clearRuntime()",
+            range: installStart.upperBound..<source.endIndex
+        ))
+        let install = String(source[installStart.lowerBound..<installEnd.lowerBound])
+
+        for argument in [
+            "settingsStore: runtime.settingsStore",
+            "notificationManager: runtime.notificationManager",
+            "storageManager: runtime.storageManager",
+            "discordRPCManager: runtime.discordRPCManager"
+        ] {
+            XCTAssertTrue(install.contains(argument), "Missing runtime identity: \(argument)")
+        }
+        XCTAssertTrue(install.contains("appScope = AppScope.prepared("))
+        XCTAssertFalse(install.contains("AppSettingsStore("))
+        XCTAssertFalse(install.contains("NotificationManager("))
+        XCTAssertFalse(install.contains("StorageManager("))
+        XCTAssertFalse(install.contains("DiscordRPCManager("))
+    }
+
+    func testSystemDebugLogAdapterPreservesScopeFilterAndDomainConversion() throws {
+        let source = try source(at: "Ito/Services/Settings/DebugLogDependencies.swift")
+
+        XCTAssertTrue(source.contains("OSLogStore(scope: .currentProcessIdentifier)"))
+        XCTAssertTrue(source.contains("allowedSubsystems.contains(log.subsystem)"))
+        XCTAssertTrue(source.contains("return DebugLogEntry("))
+        XCTAssertTrue(source.contains("subsystem: log.subsystem"))
+        XCTAssertTrue(source.contains("category: log.category"))
+        XCTAssertTrue(source.contains("message: log.composedMessage"))
+        for mapping in [
+            "case .fault:\n            return .fault",
+            "case .error:\n            return .error",
+            "case .info:\n            return .info",
+            "case .notice:\n            return .notice",
+            "case .debug:\n            return .debug",
+            "default:\n            return .other"
+        ] {
+            XCTAssertTrue(source.contains(mapping), "Missing log conversion: \(mapping)")
+        }
+    }
+
+    func testSettingsDestinationContractHasExactCasesAndMappings() throws {
+        XCTAssertEqual(
+            SettingsDestination.allCases.map(String.init(describing:)),
+            [
+                "appearance",
+                "library",
+                "privacy",
+                "readerUnavailable",
+                "storage",
+                "networkUnavailable",
+                "extensionsUnavailable",
+                "debugLogs"
+            ]
+        )
+
+        let settingsSource = try source(at: "Ito/Views/Settings/SettingsView.swift")
+        let routeFactorySource = try source(
+            at: "Ito/Views/Search/SearchRouteFactory.swift"
+        )
+        let appFactorySource = try XCTUnwrap(
+            routeFactorySource.components(separatedBy: "struct SearchRouteFactory").first
+        )
+
+        for destination in SettingsDestination.allCases {
+            XCTAssertTrue(
+                settingsSource.contains("makeSettingsDestination(for: .\(destination))")
+            )
+        }
+        for mapping in [
+            "case .appearance:\n            makeAppearanceSettingsView()",
+            "case .library:\n            makeLibrarySettingsView()",
+            "case .privacy:\n            makePrivacySettingsView()",
+            "case .storage:\n            makeStorageSettingsView()",
+            "case .debugLogs:\n            makeDebugLogView()"
+        ] {
+            XCTAssertTrue(appFactorySource.contains(mapping), "Missing mapping: \(mapping)")
+        }
+        for placeholder in [
+            "Text(\"Reader Settings View\")",
+            "Text(\"Network Settings View\")",
+            "Text(\"Manage Extensions View\")"
+        ] {
+            XCTAssertTrue(appFactorySource.contains(placeholder))
+            XCTAssertFalse(settingsSource.contains(placeholder))
+        }
+    }
+
+    func testSettingsRouteContractPreservesLegacyAndExcludedBoundaries() throws {
+        let settingsSource = try source(at: "Ito/Views/Settings/SettingsView.swift")
+        let routeFactorySource = try source(
+            at: "Ito/Views/Search/SearchRouteFactory.swift"
+        )
+        let appFactorySource = try XCTUnwrap(
+            routeFactorySource.components(separatedBy: "struct SearchRouteFactory").first
+        )
+        let enumSource = try XCTUnwrap(
+            settingsSource.components(separatedBy: "struct SettingsView").first
+        )
+
+        XCTAssertTrue(settingsSource.contains("destination: TrackerSettingsView()"))
+        XCTAssertTrue(settingsSource.contains("destination: BackupSettingsView()"))
+        XCTAssertTrue(settingsSource.contains("NavigationView"))
+        XCTAssertTrue(settingsSource.contains("NavigationLink"))
+        XCTAssertFalse(settingsSource.contains("NavigationStack"))
+        XCTAssertFalse(appFactorySource.contains("AnyView"))
+        XCTAssertFalse(appFactorySource.contains("ReaderSettingsView("))
+        XCTAssertFalse(appFactorySource.contains("NetworkSettingsView("))
+        XCTAssertFalse(appFactorySource.contains("ManageExtensionsView("))
+
+        for excludedCase in [
+            "tracker",
+            "backup",
+            "repository",
+            "source",
+            "plugin",
+            "listing",
+            "migrationReport",
+            "discoverDetail",
+            "mediaDetail",
+            "libraryRoot",
+            "libraryCategory",
+            "libraryHistory"
+        ] {
+            XCTAssertFalse(enumSource.localizedCaseInsensitiveContains("case \(excludedCase)"))
+        }
+    }
+
+    private func source(at path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+    }
+}

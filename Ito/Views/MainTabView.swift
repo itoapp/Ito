@@ -44,7 +44,7 @@ private struct MainTabContentView: View {
                     }
                     .tag(AppRootTab.search)
 
-                SettingsView()
+                appScope.viewFactory.makeSettingsView()
                     .tabItem {
                         Label("Settings", systemImage: "gearshape")
                     }

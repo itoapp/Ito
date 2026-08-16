@@ -1,8 +1,11 @@
 import SwiftUI
 
 struct StorageSettingsView: View {
-    @EnvironmentObject private var storageManager: StorageManager
-    @EnvironmentObject private var settingsStore: AppSettingsStore
+    @StateObject private var viewModel: StorageSettingsViewModel
+
+    init(viewModel: StorageSettingsViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         Form {
@@ -11,12 +14,12 @@ struct StorageSettingsView: View {
                 footer: Text("Set the maximum amount of disk space Ito is allowed to use for caching images and network responses.")
             ) {
                 Picker("Cache Limit", selection: Binding(
-                    get: { settingsStore.diskCacheLimitGB },
+                    get: { viewModel.diskCacheLimitGB },
                     set: { value in
-                        Task { try? await settingsStore.set(value, for: AppPreferenceCatalog.diskCacheLimitGB) }
+                        Task { await viewModel.setDiskCacheLimitGB(value) }
                     }
                 )) {
-                    ForEach(Array(stride(from: 1.0, through: 50.0, by: 1.0)), id: \.self) { value in
+                    ForEach(viewModel.cacheLimitChoices, id: \.self) { value in
                         Text("\(Int(value)) GB").tag(value)
                     }
                 }
@@ -25,13 +28,11 @@ struct StorageSettingsView: View {
                 HStack {
                     Text("Current Usage")
                     Spacer()
-                    Text(storageManager.formatBytes(storageManager.currentCacheSizeBytes))
+                    Text(viewModel.formattedCurrentUsage)
                         .foregroundColor(.secondary)
                 }
 
-                Button(action: {
-                    storageManager.clearCache()
-                }) {
+                Button(action: viewModel.clearCache) {
                     Text("Clear Cache")
                         .foregroundColor(.red)
                 }
@@ -39,14 +40,22 @@ struct StorageSettingsView: View {
         }
         .navigationTitle("Storage")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            storageManager.refreshCacheSize()
+        .onAppear(perform: viewModel.refreshCacheUsage)
+        .alert(item: Binding(
+            get: { viewModel.alert },
+            set: { alert in
+                if alert == nil {
+                    viewModel.dismissAlert()
+                }
+            }
+        )) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK")) {
+                    viewModel.dismissAlert()
+                }
+            )
         }
-    }
-}
-
-struct StorageSettingsView_Previews: PreviewProvider {
-    static var previews: some View {
-        StorageSettingsView()
     }
 }
