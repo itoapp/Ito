@@ -62,6 +62,7 @@ final class AppScopeIdentityTests: XCTestCase {
             searchDebounceMilliseconds: nil,
             presentationLogger: PresentationEventCaptureSpy(),
             browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+            repositoryManagement: makeTestRepositoryManagementDependencies(),
             browsePluginManager: AppScopeBrowsePluginManager(),
             browseFileOperations: AppScopeBrowseFileOperations()
         )
@@ -95,6 +96,7 @@ final class AppScopeIdentityTests: XCTestCase {
             searchDebounceMilliseconds: nil,
             presentationLogger: PresentationEventCaptureSpy(),
             browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+            repositoryManagement: makeTestRepositoryManagementDependencies(),
             browsePluginManager: AppScopeBrowsePluginManager(),
             browseFileOperations: AppScopeBrowseFileOperations(),
             discoverService: service,
@@ -285,6 +287,8 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(dependencies.settings.notificationAuthorization === notificationManager)
         XCTAssertTrue(dependencies.settings.storageAccess === storageManager)
         XCTAssertTrue(dependencies.settings.discordRPCManager === discordRPCManager)
+        XCTAssertTrue(dependencies.repositoryManagement.repositoryListManager === repoManager)
+        XCTAssertTrue(dependencies.repositoryManagement.repositoryDetailManager === repoManager)
         XCTAssertEqual(dependencies.recentSearchStore.load(), [recentSearchSentinel])
         let fileOperations = try XCTUnwrap(
             dependencies.browseFileOperations as? LocalBrowsePluginFileOperations
@@ -317,6 +321,7 @@ final class AppScopeIdentityTests: XCTestCase {
                 searchDebounceMilliseconds: nil,
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+                repositoryManagement: makeTestRepositoryManagementDependencies(),
                 browsePluginManager: AppScopeBrowsePluginManager(),
                 browseFileOperations: AppScopeBrowseFileOperations()
             )

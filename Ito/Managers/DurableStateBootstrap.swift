@@ -305,7 +305,11 @@ public final class DurableStateBootstrap: ObservableObject {
             legacyTokenStore: legacyTokenStore,
             usernameDefaults: usernameDefaults
         )
-        let repositories = RepoManager(dbPool: dbPool, pluginManager: plugins)
+        let repositories = RepoManager(
+            dbPool: dbPool,
+            pluginManager: plugins,
+            pluginsDirectory: installedPluginsDirectory
+        )
         let resolver = PluginResolver(
             dbPool: dbPool,
             repoManager: repositories,

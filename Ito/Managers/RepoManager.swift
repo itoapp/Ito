@@ -58,23 +58,118 @@ public enum RepositoryAdditionResult: Equatable {
     case alreadyPresent
 }
 
+public struct RepositoryRefreshFailure: LocalizedError, Equatable, Sendable {
+    public struct Item: Equatable, Sendable {
+        public let repositoryURL: String
+        public let reason: String
+    }
+
+    public let items: [Item]
+
+    public var errorDescription: String? {
+        guard !items.isEmpty else { return nil }
+        if items.count == 1 {
+            return "Failed to refresh \(items[0].repositoryURL): \(items[0].reason)"
+        }
+        return "Failed to refresh \(items.count) repositories."
+    }
+}
+
+public enum RepositoryPackageInstallationError: LocalizedError {
+    case invalidPackageIdentifier
+    case rollbackFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidPackageIdentifier:
+            return "The repository package identifier is invalid."
+        case .rollbackFailed:
+            return "The package installation failed and the previous plugin could not be restored."
+        }
+    }
+}
+
+private actor RepositoryMutationGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        guard isLocked else {
+            isLocked = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+        waiters.removeFirst().resume()
+    }
+}
+
+private struct PackageInstallationRequest: Equatable {
+    let repositoryURL: String
+    let version: String
+    let downloadURL: String
+    let sha256: String
+}
+
 @MainActor
 public class RepoManager: ObservableObject {
     @Published public private(set) var repositories: [Repository] = []
     private let dbPool: DatabasePool
-    private let pluginManager: PluginManager?
+    private let pluginStatePublisher: (any RepositoryPluginStatePublishing)?
     private let indexFetcher: @Sendable (URL) async throws -> Data
+    private let packageFetcher: @Sendable (URLRequest) async throws -> Data
+    private let configuredPluginsDirectory: URL?
+    private let repositoryMutationGate = RepositoryMutationGate()
+    private var activeRefresh: (id: UUID, task: Task<Void, Error>)?
+    private var activePackageInstallations: [
+        String: (id: UUID, request: PackageInstallationRequest, task: Task<Void, Error>)
+    ] = [:]
 
     // The current app version for compatibility checks
     public let currentAppVersion = "1.0.0"
 
-    public init(
+    public convenience init(
         dbPool: DatabasePool,
         pluginManager: PluginManager? = nil,
         indexFetcher: (@Sendable (URL) async throws -> Data)? = nil
     ) {
+        self.init(
+            dbPool: dbPool,
+            pluginManager: pluginManager,
+            pluginsDirectory: pluginManager?.configuredInstalledPluginsDirectory,
+            packageFetcher: nil,
+            indexFetcher: indexFetcher
+        )
+    }
+
+    public init(
+        dbPool: DatabasePool,
+        pluginManager: PluginManager? = nil,
+        pluginsDirectory: URL?,
+        packageFetcher: (@Sendable (URLRequest) async throws -> Data)? = nil,
+        indexFetcher: (@Sendable (URL) async throws -> Data)? = nil
+    ) {
         self.dbPool = dbPool
-        self.pluginManager = pluginManager
+        self.pluginStatePublisher = pluginManager
+        self.configuredPluginsDirectory = pluginsDirectory ?? pluginManager?.configuredInstalledPluginsDirectory
+        if let packageFetcher {
+            self.packageFetcher = packageFetcher
+        } else {
+            self.packageFetcher = { request in
+                let (data, response) = try await URLSession.shared.data(for: request)
+                if let response = response as? HTTPURLResponse,
+                   !(200...299).contains(response.statusCode) {
+                    throw URLError(.fileDoesNotExist)
+                }
+                return data
+            }
+        }
         if let indexFetcher {
             self.indexFetcher = indexFetcher
         } else {
@@ -98,13 +193,15 @@ public class RepoManager: ObservableObject {
     }
 
     public func reload() async throws {
-        repositories = try await dbPool.read { db in
-            try RepositoryRecord.order(Column("url")).fetchAll(db).map { record in
-                Repository(
-                    url: record.url,
-                    lastFetched: record.lastFetched,
-                    index: try record.indexPayload.map { try JSONDecoder().decode(RepoIndex.self, from: $0) }
-                )
+        try await withRepositoryMutation {
+            repositories = try await dbPool.read { db in
+                try RepositoryRecord.order(Column("url")).fetchAll(db).map { record in
+                    Repository(
+                        url: record.url,
+                        lastFetched: record.lastFetched,
+                        index: try record.indexPayload.map { try JSONDecoder().decode(RepoIndex.self, from: $0) }
+                    )
+                }
             }
         }
     }
@@ -130,46 +227,83 @@ public class RepoManager: ObservableObject {
         let normalizedUrl = try normalizedURL(url)
         AppLogger.database.debug("🌍 [DEBUG-REPO] Attempting to add repository: \(normalizedUrl)")
 
-        // Prevent duplicates
-        guard !repositories.contains(where: { $0.url == normalizedUrl }) else {
-            AppLogger.database.debug("🌍 [DEBUG-REPO] Repository already exists: \(normalizedUrl)")
-            return .alreadyPresent
-        }
+        return try await withRepositoryMutation {
+            guard !repositories.contains(where: { $0.url == normalizedUrl }) else {
+                AppLogger.database.debug("🌍 [DEBUG-REPO] Repository already exists: \(normalizedUrl)")
+                return .alreadyPresent
+            }
 
-        var repo = Repository(url: normalizedUrl)
-        do {
-            let fetchedIndex = try await fetchIndex(for: normalizedUrl)
-            repo.index = fetchedIndex
-            repo.lastFetched = Date()
+            var repo = Repository(url: normalizedUrl)
+            do {
+                let fetchedIndex = try await fetchIndex(for: normalizedUrl)
+                try Task.checkCancellation()
+                repo.index = fetchedIndex
+                repo.lastFetched = Date()
 
-            let record = RepositoryRecord(
-                url: repo.url,
-                lastFetched: repo.lastFetched,
-                indexPayload: try JSONEncoder().encode(fetchedIndex)
-            )
-            try await dbPool.write { db in try record.insert(db) }
-            repositories.append(repo)
-            repositories.sort { $0.url < $1.url }
-            AppLogger.database.debug("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
-            return .added
-        } catch {
-            AppLogger.database.error("🌍 [DEBUG-REPO] Failed to add repository: \(error)")
-            throw error
+                let record = RepositoryRecord(
+                    url: repo.url,
+                    lastFetched: repo.lastFetched,
+                    indexPayload: try JSONEncoder().encode(fetchedIndex)
+                )
+                try await dbPool.write { db in try record.insert(db) }
+                repositories.append(repo)
+                repositories.sort { $0.url < $1.url }
+                AppLogger.database.debug("🌍 [DEBUG-REPO] Successfully added repository: \(fetchedIndex.repoName)")
+                return .added
+            } catch {
+                AppLogger.database.error("🌍 [DEBUG-REPO] Failed to add repository: \(error)")
+                throw error
+            }
         }
     }
 
     public func removeRepository(url: String) async throws {
         let normalized = try normalizedURL(url)
         AppLogger.database.debug("🌍 [DEBUG-REPO] Removing repository: \(normalized)")
-        _ = try await dbPool.write { db in
-            try RepositoryRecord.deleteOne(db, key: normalized)
+        try await withRepositoryMutation {
+            _ = try await dbPool.write { db in
+                try RepositoryRecord.deleteOne(db, key: normalized)
+            }
+            repositories.removeAll { $0.url == normalized }
         }
-        repositories.removeAll { $0.url == normalized }
     }
 
     public func refreshAll() async {
+        try? await refreshAllReportingFailures()
+    }
+
+    public func refreshAllReportingFailures() async throws {
+        if let activeRefresh {
+            try await activeRefresh.task.value
+            return
+        }
+
+        let operationID = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try await self.performRefreshAll()
+        }
+        activeRefresh = (operationID, task)
+        defer {
+            if activeRefresh?.id == operationID {
+                activeRefresh = nil
+            }
+        }
+        try await task.value
+    }
+
+    private func performRefreshAll() async throws {
+        try await withRepositoryMutation {
+            try await performLockedRefreshAll()
+        }
+    }
+
+    private func performLockedRefreshAll() async throws {
         AppLogger.database.debug("🌍 [DEBUG-REPO] Refreshing all repositories...")
-        for repo in repositories {
+        let repositoriesToRefresh = repositories
+        var failures: [RepositoryRefreshFailure.Item] = []
+
+        for repo in repositoriesToRefresh {
             do {
                 let newIndex = try await fetchIndex(for: repo.url)
                 let fetchedAt = Date()
@@ -186,7 +320,17 @@ public class RepoManager: ObservableObject {
                 AppLogger.database.debug("🌍 [DEBUG-REPO] Refreshed: \(newIndex.repoName)")
             } catch {
                 AppLogger.database.error("\("🌍 [DEBUG-REPO] Failed to refresh \(repo.url)"): \(error)")
+                failures.append(
+                    RepositoryRefreshFailure.Item(
+                        repositoryURL: repo.url,
+                        reason: error.localizedDescription
+                    )
+                )
             }
+        }
+
+        if !failures.isEmpty {
+            throw RepositoryRefreshFailure(items: failures)
         }
     }
 
@@ -252,6 +396,45 @@ public class RepoManager: ObservableObject {
     }
 
     public func installPackage(_ pkg: RepoPackage, repositoryUrl: String) async throws {
+        let request = PackageInstallationRequest(
+            repositoryURL: repositoryUrl,
+            version: pkg.version,
+            downloadURL: pkg.downloadUrl,
+            sha256: pkg.sha256
+        )
+        if let activeInstallation = activePackageInstallations[pkg.id] {
+            if activeInstallation.request == request {
+                try await activeInstallation.task.value
+                return
+            }
+            _ = try? await activeInstallation.task.value
+            if activePackageInstallations[pkg.id]?.id == activeInstallation.id {
+                activePackageInstallations[pkg.id] = nil
+            }
+            try await installPackage(pkg, repositoryUrl: repositoryUrl)
+            return
+        }
+
+        let operationID = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try await self.performInstallPackage(pkg, repositoryUrl: repositoryUrl)
+        }
+        activePackageInstallations[pkg.id] = (operationID, request, task)
+        defer {
+            if activePackageInstallations[pkg.id]?.id == operationID {
+                activePackageInstallations[pkg.id] = nil
+            }
+        }
+        try await task.value
+    }
+
+    private func performInstallPackage(_ pkg: RepoPackage, repositoryUrl: String) async throws {
+        let pluginsDirectory = try resolvedPluginsDirectory()
+        let destUrl = try packageDestinationURL(
+            packageID: pkg.id,
+            pluginsDirectory: pluginsDirectory
+        )
         guard let url = URL(string: "\(repositoryUrl)/\(pkg.downloadUrl)") else {
             throw URLError(.badURL)
         }
@@ -259,12 +442,7 @@ public class RepoManager: ObservableObject {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            AppLogger.database.debug("\("Server returned \(httpResponse.statusCode)") for \(url)")
-            throw URLError(.fileDoesNotExist)
-        }
+        let data = try await packageFetcher(request)
 
         // Verify Hash
         let digest = SHA256.hash(data: data)
@@ -277,21 +455,83 @@ public class RepoManager: ObservableObject {
 
         // Save to Application Support/Plugins
         let fileManager = FileManager.default
-        guard let appSupportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            throw URLError(.cannotCreateFile)
-        }
-        let pluginsDir = appSupportDir.appendingPathComponent("Plugins")
 
-        if !fileManager.fileExists(atPath: pluginsDir.path) {
-            try fileManager.createDirectory(at: pluginsDir, withIntermediateDirectories: true)
+        if !fileManager.fileExists(atPath: pluginsDirectory.path) {
+            try fileManager.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
         }
 
-        let destUrl = pluginsDir.appendingPathComponent("\(pkg.id).ito")
-        try data.write(to: destUrl)
+        let previousData: Data?
+        if fileManager.fileExists(atPath: destUrl.path) {
+            previousData = try Data(contentsOf: destUrl)
+        } else {
+            previousData = nil
+        }
+        try data.write(to: destUrl, options: .atomic)
 
         AppLogger.database.debug("Successfully installed \(pkg.name)")
 
-        // Tell the cache to reload
-        await pluginManager?.reloadInstalledPlugins()
+        do {
+            try await pluginStatePublisher?.publishInstalledPluginState()
+        } catch {
+            do {
+                if let previousData {
+                    try previousData.write(to: destUrl, options: .atomic)
+                } else if fileManager.fileExists(atPath: destUrl.path) {
+                    try fileManager.removeItem(at: destUrl)
+                }
+            } catch {
+                throw RepositoryPackageInstallationError.rollbackFailed
+            }
+            throw error
+        }
+    }
+
+    private func resolvedPluginsDirectory() throws -> URL {
+        if let configuredPluginsDirectory {
+            return configuredPluginsDirectory.standardizedFileURL
+        }
+        guard let appSupportDir = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            throw URLError(.cannotCreateFile)
+        }
+        return appSupportDir.appendingPathComponent("Plugins", isDirectory: true).standardizedFileURL
+    }
+
+    private func packageDestinationURL(packageID: String, pluginsDirectory: URL) throws -> URL {
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        guard let firstCharacter = packageID.unicodeScalars.first,
+              CharacterSet.alphanumerics.contains(firstCharacter),
+              packageID.unicodeScalars.allSatisfy(allowedCharacters.contains) else {
+            throw RepositoryPackageInstallationError.invalidPackageIdentifier
+        }
+
+        let standardizedDirectory = pluginsDirectory.standardizedFileURL
+        let destination = standardizedDirectory
+            .appendingPathComponent("\(packageID).ito", isDirectory: false)
+            .standardizedFileURL
+        guard destination.deletingLastPathComponent().standardizedFileURL.path == standardizedDirectory.path else {
+            throw RepositoryPackageInstallationError.invalidPackageIdentifier
+        }
+        return destination
+    }
+
+    private func withRepositoryMutation<Value>(
+        _ operation: () async throws -> Value
+    ) async throws -> Value {
+        await repositoryMutationGate.acquire()
+        if Task.isCancelled {
+            await repositoryMutationGate.release()
+            throw CancellationError()
+        }
+        do {
+            let value = try await operation()
+            await repositoryMutationGate.release()
+            return value
+        } catch {
+            await repositoryMutationGate.release()
+            throw error
+        }
     }
 }

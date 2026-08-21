@@ -15,10 +15,14 @@ extension UTType {
 // model while the child content view observes it, preserving NavigationView identity.
 struct BrowseView: View {
     let viewModel: BrowseViewModel
+    let makeRepositoriesView: () -> RepositoriesView
 
     var body: some View {
         NavigationView {
-            BrowseContentView(viewModel: viewModel)
+            BrowseContentView(
+                viewModel: viewModel,
+                makeRepositoriesView: makeRepositoriesView
+            )
         }
         .navigationViewStyle(.stack)
     }
@@ -28,11 +32,12 @@ struct BrowseView: View {
 
 private struct BrowseContentView: View {
     @ObservedObject var viewModel: BrowseViewModel
+    let makeRepositoriesView: () -> RepositoriesView
 
     var body: some View {
         ZStack {
             NavigationLink(
-                destination: RepositoriesView(),
+                destination: makeRepositoriesView(),
                 isActive: $viewModel.showRepositories
             ) {
                 EmptyView()

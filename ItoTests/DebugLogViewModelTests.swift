@@ -382,6 +382,7 @@ final class DebugLogViewModelTests: XCTestCase {
                 searchDebounceMilliseconds: nil,
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: DebugLogRepositoryManager(),
+                repositoryManagement: makeTestRepositoryManagementDependencies(),
                 browsePluginManager: DebugLogPluginManager(),
                 browseFileOperations: DebugLogFileOperations()
             )

@@ -22,6 +22,10 @@ public class PluginManager: ObservableObject {
     private let pluginsDirectory: URL?
     public let pluginSettingsStore: PluginSettingsStore
 
+    var configuredInstalledPluginsDirectory: URL? {
+        pluginsDirectory
+    }
+
     public init(pluginSettingsStore: PluginSettingsStore, pluginsDirectory: URL? = nil) {
         self.pluginSettingsStore = pluginSettingsStore
         self.pluginsDirectory = pluginsDirectory

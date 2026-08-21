@@ -613,6 +613,7 @@ final class BrowseViewModelTests: XCTestCase {
                 searchDebounceMilliseconds: nil,
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: BrowseRepositoryManagerSpy(),
+                repositoryManagement: makeTestRepositoryManagementDependencies(),
                 browsePluginManager: BrowsePluginManagerSpy(),
                 browseFileOperations: BrowsePluginFileOperationsSpy()
             )

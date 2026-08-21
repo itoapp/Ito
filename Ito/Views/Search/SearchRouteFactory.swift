@@ -5,12 +5,21 @@ import ito_runner
 struct AppViewFactory {
     let rootModels: RootModelStore
     let searchRouteFactory: SearchRouteFactory
+    private let repositoryManagement: PreparedRepositoryManagementDependencies
+    private let pluginManager: any BrowsePluginManaging
+    private let repositoryMessagePresenter: any RepositoryManagementMessagePresenting
 
     init(
         rootModels: RootModelStore,
+        repositoryManagement: PreparedRepositoryManagementDependencies,
+        pluginManager: any BrowsePluginManaging,
+        repositoryMessagePresenter: any RepositoryManagementMessagePresenting,
         searchRouteFactory: SearchRouteFactory = SearchRouteFactory()
     ) {
         self.rootModels = rootModels
+        self.repositoryManagement = repositoryManagement
+        self.pluginManager = pluginManager
+        self.repositoryMessagePresenter = repositoryMessagePresenter
         self.searchRouteFactory = searchRouteFactory
     }
 
@@ -22,7 +31,29 @@ struct AppViewFactory {
     }
 
     func makeBrowseView() -> BrowseView {
-        BrowseView(viewModel: rootModels.browseViewModel)
+        BrowseView(
+            viewModel: rootModels.browseViewModel,
+            makeRepositoriesView: makeRepositoriesView
+        )
+    }
+
+    func makeRepositoriesView() -> RepositoriesView {
+        RepositoriesView(
+            viewModel: RepositoriesViewModel(
+                repositoryManager: repositoryManagement.repositoryListManager,
+                messagePresenter: repositoryMessagePresenter
+            ),
+            makeRepoDetailViewModel: makeRepoDetailViewModel
+        )
+    }
+
+    func makeRepoDetailViewModel(repositoryURL: String) -> RepoDetailViewModel {
+        RepoDetailViewModel(
+            repositoryURL: repositoryURL,
+            repositoryManager: repositoryManagement.repositoryDetailManager,
+            pluginManager: pluginManager,
+            messagePresenter: repositoryMessagePresenter
+        )
     }
 
     func makeDiscoverView() -> DiscoverView {
