@@ -3,19 +3,88 @@ import Foundation
 import WebKit
 import ito_runner
 
+enum AppNetRetryEvent: Equatable, Sendable {
+    case challengeDetected
+    case retryStarted
+    case retryCompleted(status: Int32)
+}
+
+enum AppNetRetryDiagnostic {
+    nonisolated static func format(_ event: AppNetRetryEvent) -> String {
+        switch event {
+        case .challengeDetected:
+            return "[AppNetModule] Cloudflare challenge detected."
+        case .retryStarted:
+            return "[AppNetModule] Cloudflare retry started."
+        case .retryCompleted(let status):
+            return "[AppNetModule] Cloudflare retry completed with status code: \(status)"
+        }
+    }
+}
+
+protocol AppNetRetryLogging: Sendable {
+    nonisolated func log(_ event: AppNetRetryEvent)
+}
+
+struct OSLogAppNetRetryLogger: AppNetRetryLogging {
+    nonisolated func log(_ event: AppNetRetryEvent) {
+        AppLogger.network.debug("\(AppNetRetryDiagnostic.format(event))")
+    }
+}
+
+struct AppNetCloudflareResolution: @unchecked Sendable {
+    let userAgent: String
+    let cookies: [HTTPCookie]
+}
+
+protocol AppNetCloudflareHandling: Sendable {
+    nonisolated func cachedUserAgent(for host: String) async -> String
+    nonisolated func resolveChallenge(for url: URL) async throws -> AppNetCloudflareResolution
+}
+
+struct LiveAppNetCloudflareHandler: AppNetCloudflareHandling {
+    nonisolated func cachedUserAgent(for host: String) async -> String {
+        await MainActor.run {
+            CloudflareManager.shared.getCachedUserAgent(for: host)
+        }
+    }
+
+    nonisolated func resolveChallenge(for url: URL) async throws -> AppNetCloudflareResolution {
+        let result = try await CloudflareManager.shared.resolveChallenge(for: url)
+        return AppNetCloudflareResolution(
+            userAgent: result.userAgent,
+            cookies: result.cookies
+        )
+    }
+}
+
 actor AppNetModule: NetModule {
     private let urlSession: URLSession
+    private let cloudflare: any AppNetCloudflareHandling
+    private let retryLogger: any AppNetRetryLogging
 
     init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         self.urlSession = URLSession(configuration: config)
+        self.cloudflare = LiveAppNetCloudflareHandler()
+        self.retryLogger = OSLogAppNetRetryLogger()
     }
+
+    init(
+        urlSession: URLSession,
+        cloudflare: any AppNetCloudflareHandling,
+        retryLogger: any AppNetRetryLogging
+    ) {
+        self.urlSession = urlSession
+        self.cloudflare = cloudflare
+        self.retryLogger = retryLogger
+    }
+
     deinit {
         urlSession.invalidateAndCancel()
     }
-
 
     func fetch(request: NetRequest) async throws -> NetResponse {
         return try await fetchInternal(request: request, isRetry: false)
@@ -34,9 +103,7 @@ actor AppNetModule: NetModule {
 
         // Always apply the cached User-Agent for this host if we have one
         if let host = url.host {
-            let cachedUA = await MainActor.run {
-                CloudflareManager.shared.getCachedUserAgent(for: host)
-            }
+            let cachedUA = await cloudflare.cachedUserAgent(for: host)
             if !cachedUA.isEmpty {
                 // If Cloudflare manager has a specific UA for this host, we must use it
                 updatedHeaders["User-Agent"] = cachedUA
@@ -75,14 +142,6 @@ actor AppNetModule: NetModule {
 
         let session = self.urlSession
 
-        if isRetry {
-            AppLogger.network.debug("[AppNetModule] --- RETRY REQUEST INFO ---")
-            AppLogger.network.debug("[AppNetModule] URL: \(urlRequest.url?.absoluteString ?? "")")
-            AppLogger.network.debug("[AppNetModule] Method: \(urlRequest.httpMethod ?? "")")
-            AppLogger.network.debug("[AppNetModule] Headers: \(urlRequest.allHTTPHeaderFields ?? [:])")
-            AppLogger.network.debug("[AppNetModule] -------------------------")
-        }
-
         let (data, response) = try await session.data(for: urlRequest)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -99,10 +158,10 @@ actor AppNetModule: NetModule {
             }
 
             if isCloudflare {
-                AppLogger.network.debug("[AppNetModule] Detected Cloudflare challenge for \(url.host ?? ""). Attempting bypass...")
+                retryLogger.log(.challengeDetected)
 
-                // Route to CloudflareManager (which relies on MainActor)
-                let bypassResult = try await CloudflareManager.shared.resolveChallenge(for: url)
+                // The live handler routes through CloudflareManager on MainActor.
+                let bypassResult = try await cloudflare.resolveChallenge(for: url)
 
                 var retriedRequest = request
                 var retriedHeaders = request.headers
@@ -122,9 +181,9 @@ actor AppNetModule: NetModule {
 
                 retriedRequest.headers = retriedHeaders
 
-                AppLogger.network.debug("[AppNetModule] Replaying request with Cloudflare clearance.")
+                retryLogger.log(.retryStarted)
                 let retriedResponse = try await fetchInternal(request: retriedRequest, isRetry: true)
-                AppLogger.network.debug("[AppNetModule] Retry completed with status code: \(retriedResponse.status)")
+                retryLogger.log(.retryCompleted(status: retriedResponse.status))
                 return retriedResponse
             }
         }
