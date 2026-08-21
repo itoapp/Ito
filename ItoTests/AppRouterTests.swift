@@ -179,6 +179,7 @@ final class AppRouterTests: XCTestCase {
                 searchDebounceMilliseconds: nil,
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: RouterRepositoryManager(),
+                repositoryManagement: makeTestRepositoryManagementDependencies(),
                 browsePluginManager: RouterPluginManager(),
                 browseFileOperations: RouterFileOperations()
             )

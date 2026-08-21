@@ -477,12 +477,26 @@ private func sourceFile(_ relativePath: String) throws -> String { try String(co
 private func repositoryRoot() -> URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent() }
 @MainActor
 private func makeScope(service: DiscoverServiceFake = DiscoverServiceFake(), cache: any DiscoverCaching = InMemoryDiscoverCache(), clock: TestDiscoverClock = TestDiscoverClock()) -> AppScope {
-    AppScope(preparedDependencies: PreparedApplicationDependencies(settings: makeTestPreparedSettingsDependencies(), searchExecutor: DiscoverTestSearchExecutor(), recentSearchStore: DiscoverTestRecentStore(), searchDebounceMilliseconds: nil, presentationLogger: DiscoverTestLogger(), browseRepositoryManager: DiscoverTestRepositoryManager(), browsePluginManager: DiscoverTestPluginManager(), browseFileOperations: DiscoverTestFileOperations(), discoverService: service, discoverCache: cache, discoverClock: clock, discoverDebounceMilliseconds: nil))
+    AppScope(preparedDependencies: PreparedApplicationDependencies(settings: makeTestPreparedSettingsDependencies(), searchExecutor: DiscoverTestSearchExecutor(), recentSearchStore: DiscoverTestRecentStore(), searchDebounceMilliseconds: nil, presentationLogger: DiscoverTestLogger(), browseRepositoryManager: DiscoverTestRepositoryManager(), repositoryManagement: makeTestRepositoryManagementDependencies(), browsePluginManager: DiscoverTestPluginManager(), browseFileOperations: DiscoverTestFileOperations(), discoverService: service, discoverCache: cache, discoverClock: clock, discoverDebounceMilliseconds: nil))
 }
 
 @MainActor private final class DiscoverTestSearchExecutor: SearchPluginExecuting { var plugins: [SearchPluginDescriptor] = []; func search(plugin: SearchPluginDescriptor, query: String, limit: Int) async throws -> [PluginSearchResult] { [] }; func evictRunner(for pluginID: String) {} }
 @MainActor private struct DiscoverTestRecentStore: RecentSearchPersisting { func load() -> [String] { [] }; func save(_ searches: [String]) {}; func clear() {} }
 private final class DiscoverTestLogger: PresentationEventLogging { func log(_ event: PresentationLogEvent) {} }
 @MainActor private final class DiscoverTestPluginManager: BrowsePluginManaging { var installedPlugins: [String: InstalledPlugin] = [:]; var installedPluginsPublisher: AnyPublisher<[String: InstalledPlugin], Never> { Just([:]).eraseToAnyPublisher() }; func reloadInstalledPlugins() async {} }
-@MainActor private final class DiscoverTestRepositoryManager: BrowseRepositoryManaging { var repositories: [Repository] = []; var repositoriesPublisher: AnyPublisher<[Repository], Never> { Just([]).eraseToAnyPublisher() }; func addRepository(url: String) async throws -> RepositoryAdditionResult { .alreadyPresent }; func installPackage(_ package: RepoPackage, repositoryURL: String) async throws {}; func refreshAll() async {} }
+@MainActor private final class DiscoverTestRepositoryManager: BrowseRepositoryManaging {
+    var repositories: [Repository] = []
+    var repositoriesPublisher: AnyPublisher<[Repository], Never> {
+        Just([]).eraseToAnyPublisher()
+    }
+    func addRepository(url: String) async throws -> RepositoryAdditionResult {
+        _ = url
+        return .alreadyPresent
+    }
+    func installPackage(_ package: RepoPackage, repositoryURL: String) async throws {
+        _ = package
+        _ = repositoryURL
+    }
+    func refreshAll() async {}
+}
 @MainActor private final class DiscoverTestFileOperations: BrowsePluginFileOperating { func supportsPluginFile(at url: URL) -> Bool { false }; func installPluginFile(from url: URL) throws {}; func deletePluginFile(at url: URL) throws {} }

@@ -9,6 +9,9 @@ enum AppMessageKind: Equatable {
     case browsePluginDirectoryUnavailable
     case browseImportFailed(BrowseImportSource)
     case repositoryAddFailed
+    case repositoryRemoveFailed
+    case repositoryRefreshFailed
+    case repositoryInstallFailed
     case debugLogsCopied
 }
 
@@ -68,6 +71,24 @@ extension AppMessageKind {
                 style: .error,
                 title: "Error",
                 detail: "Failed to add repository. Please try again."
+            )
+        case .repositoryRemoveFailed:
+            return .init(
+                style: .error,
+                title: "Error",
+                detail: "Failed to remove repository. Please try again."
+            )
+        case .repositoryRefreshFailed:
+            return .init(
+                style: .error,
+                title: "Error",
+                detail: "Some repositories could not be refreshed. Please try again."
+            )
+        case .repositoryInstallFailed:
+            return .init(
+                style: .error,
+                title: "Error",
+                detail: "Failed to install package. Please try again."
             )
         case .debugLogsCopied:
             return .init(

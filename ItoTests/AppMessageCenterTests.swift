@@ -146,6 +146,33 @@ final class AppMessageCenterTests: XCTestCase {
         }
     }
 
+    func testRepositoryManagementPresenterUsesTypedSanitizedMessages() throws {
+        let center = AppMessageCenter()
+        let presenter = AppMessageRepositoryManagementPresenter(messageCenter: center)
+        let sensitiveReason = "https://user:password@private.example/index.json?token=secret"
+
+        presenter.present(.installFailed(packageName: "Private Package", reason: sensitiveReason))
+
+        var message = try XCTUnwrap(center.currentMessage)
+        XCTAssertEqual(message.kind, .repositoryInstallFailed)
+        XCTAssertEqual(
+            message.kind.presentation.detail,
+            "Failed to install package. Please try again."
+        )
+        XCTAssertFalse(String(describing: message).contains(sensitiveReason))
+        center.dismiss(messageID: message.id)
+
+        presenter.present(.removeFailed(reason: sensitiveReason))
+        message = try XCTUnwrap(center.currentMessage)
+        XCTAssertEqual(message.kind, .repositoryRemoveFailed)
+        center.dismiss(messageID: message.id)
+
+        presenter.present(.refreshFailed(reason: sensitiveReason))
+        message = try XCTUnwrap(center.currentMessage)
+        XCTAssertEqual(message.kind, .repositoryRefreshFailed)
+        XCTAssertFalse(String(describing: message).contains(sensitiveReason))
+    }
+
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(
@@ -155,6 +182,7 @@ final class AppMessageCenterTests: XCTestCase {
                 searchDebounceMilliseconds: nil,
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: MessageRepositoryManager(),
+                repositoryManagement: makeTestRepositoryManagementDependencies(),
                 browsePluginManager: MessagePluginManager(),
                 browseFileOperations: MessageFileOperations()
             )

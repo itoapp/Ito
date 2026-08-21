@@ -1,62 +1,56 @@
-import SwiftUI
-import CryptoKit
 import NukeUI
-import ito_runner
+import SwiftUI
 
 // MARK: - RepositoriesView
 
 struct RepositoriesView: View {
-    @EnvironmentObject private var repoManager: RepoManager
-    @State private var showingAddRepo = false
-    @State private var newRepoUrl = ""
-    @State private var isAddingRepo = false
-    @State private var addRepoError: String?
-    @State private var showDeleteConfirmation = false
-    @State private var pendingDeleteOffsets: IndexSet?
-    @State private var selectedRepoUrl: String?
+    @StateObject private var viewModel: RepositoriesViewModel
+    @State private var selectedRepositoryURL: String?
+
+    private let makeRepoDetailViewModel: (String) -> RepoDetailViewModel
+
+    init(
+        viewModel: RepositoriesViewModel,
+        makeRepoDetailViewModel: @escaping (String) -> RepoDetailViewModel
+    ) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+        self.makeRepoDetailViewModel = makeRepoDetailViewModel
+    }
 
     var body: some View {
         Group {
-            if repoManager.repositories.isEmpty {
+            if viewModel.isEmpty {
                 emptyStateView
             } else {
-                repoListView
+                repositoryListView
             }
         }
         .navigationTitle("Repositories")
         .navigationBarItems(
-            trailing: Button {
-                showingAddRepo = true
-            } label: {
+            trailing: Button(action: viewModel.presentAddRepository) {
                 Image(systemName: "plus")
             }
             .accessibilityLabel("Add Repository")
         )
-        .sheet(isPresented: $showingAddRepo) {
-            addRepoSheet
+        .sheet(isPresented: $viewModel.showingAddRepository) {
+            addRepositorySheet
         }
         .confirmationDialog(
             "Remove Repository",
-            isPresented: $showDeleteConfirmation,
+            isPresented: deleteConfirmationBinding,
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
-                if let offsets = pendingDeleteOffsets {
-                    performDelete(at: offsets)
-                }
+                viewModel.confirmDelete()
             }
-            Button("Cancel", role: .cancel) {
-                pendingDeleteOffsets = nil
-            }
+            Button("Cancel", role: .cancel, action: viewModel.cancelDelete)
         } message: {
             Text("This repository and all its associated data will be removed.")
         }
         .refreshable {
-            await repoManager.refreshAll()
+            await viewModel.refreshRepositories()
         }
     }
-
-    // MARK: - Subviews
 
     private var emptyStateView: some View {
         VStack(spacing: 16) {
@@ -75,9 +69,7 @@ struct RepositoriesView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
 
-            Button {
-                showingAddRepo = true
-            } label: {
+            Button(action: viewModel.presentAddRepository) {
                 Label("Add Repository", systemImage: "plus")
                     .font(.subheadline.weight(.medium))
                     .padding(.horizontal, 20)
@@ -91,22 +83,24 @@ struct RepositoriesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var repoListView: some View {
+    private var repositoryListView: some View {
         List {
-            ForEach(repoManager.repositories) { repo in
+            ForEach(viewModel.repositories) { repository in
                 NavigationLink(
-                    destination: RepoDetailView(repository: repo),
-                    tag: repo.url,
-                    selection: $selectedRepoUrl
+                    destination: RepoDetailView(
+                        viewModel: makeRepoDetailViewModel(repository.url)
+                    ),
+                    tag: repository.url,
+                    selection: $selectedRepositoryURL
                 ) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(repo.index?.repoName ?? "Unknown Repository")
+                        Text(repository.index?.repoName ?? "Unknown Repository")
                             .font(.headline)
-                        Text(repo.url)
+                        Text(repository.url)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        if let count = repo.index?.packages.count {
+                        if let count = repository.index?.packages.count {
                             Text("\(count) package\(count == 1 ? "" : "s")")
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
@@ -116,34 +110,35 @@ struct RepositoriesView: View {
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) {
-                        if let index = repoManager.repositories.firstIndex(where: { $0.id == repo.id }) {
-                            pendingDeleteOffsets = IndexSet(integer: index)
-                            showDeleteConfirmation = true
-                        }
+                        viewModel.requestDelete(repositoryURL: repository.url)
                     } label: {
                         Label("Remove", systemImage: "trash")
                     }
+                    .disabled(viewModel.deletingRepositoryURLs.contains(repository.url))
                 }
             }
         }
     }
 
-    private var addRepoSheet: some View {
+    private var addRepositorySheet: some View {
         NavigationView {
             Form {
                 Section {
-                    TextField("https://example.com/repo", text: $newRepoUrl)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                        .disabled(isAddingRepo)
+                    TextField(
+                        "https://example.com/repo",
+                        text: $viewModel.repositoryURLInput
+                    )
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .disabled(viewModel.isAddingRepository)
                 } header: {
                     Text("Repository URL")
                 } footer: {
                     Text("Enter the full URL to the repository. The app will fetch index.json from this address.")
                 }
 
-                if let error = addRepoError {
+                if let error = viewModel.addFailureMessage {
                     Section {
                         Label(error, systemImage: "exclamationmark.circle")
                             .foregroundStyle(.red)
@@ -154,93 +149,60 @@ struct RepositoriesView: View {
             .navigationTitle("Add Repository")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(
-                leading: Button("Cancel") {
-                    showingAddRepo = false
-                    newRepoUrl = ""
-                    addRepoError = nil
-                }
-                .disabled(isAddingRepo),
+                leading: Button("Cancel", action: viewModel.cancelAddRepository)
+                    .disabled(viewModel.isAddingRepository),
                 trailing: Group {
-                    if isAddingRepo {
+                    if viewModel.isAddingRepository {
                         ProgressView()
                             .progressViewStyle(.circular)
                     } else {
                         Button {
-                            Task { await addRepo() }
+                            Task { await viewModel.addRepository() }
                         } label: {
                             Text("Add")
                                 .font(.body.weight(.semibold))
                         }
-                        .disabled(newRepoUrl.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(!viewModel.canSubmitRepository)
                     }
                 }
             )
         }
+        .interactiveDismissDisabled(viewModel.isAddingRepository)
     }
 
-    // MARK: - Actions
-
-    private func performDelete(at offsets: IndexSet) {
-        offsets.forEach { index in
-            let url = repoManager.repositories[index].url
-            Task { try await repoManager.removeRepository(url: url) }
-        }
-    }
-
-    private func addRepo() async {
-        let trimmed = newRepoUrl.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-
-        isAddingRepo = true
-        addRepoError = nil
-
-        do {
-            try await repoManager.addRepository(url: trimmed)
-            newRepoUrl = ""
-            showingAddRepo = false
-        } catch {
-            addRepoError = error.localizedDescription
-        }
-
-        isAddingRepo = false
+    private var deleteConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.showDeleteConfirmation },
+            set: { isPresented in
+                if !isPresented {
+                    viewModel.cancelDelete()
+                }
+            }
+        )
     }
 }
 
 // MARK: - RepoDetailView
 
 struct RepoDetailView: View {
-    let repository: Repository
-    @EnvironmentObject private var repoManager: RepoManager
-    @EnvironmentObject private var pluginManager: PluginManager
+    @StateObject private var viewModel: RepoDetailViewModel
 
-    @State private var searchQuery = ""
-    @State private var installingPackageId: String?
-        var filteredPackages: [RepoPackage] {
-        guard let index = repository.index else { return [] }
-        guard !searchQuery.isEmpty else { return index.packages }
-        return index.packages.filter { pkg in
-            pkg.name.localizedCaseInsensitiveContains(searchQuery) ||
-            pkg.pluginType.localizedCaseInsensitiveContains(searchQuery)
-        }
+    init(viewModel: RepoDetailViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Group {
-                if repository.index == nil {
-                    missingIndexView
-                } else {
-                    packageListView
-                }
+        Group {
+            if viewModel.repository?.index == nil {
+                missingIndexView
+            } else {
+                packageListView
             }
-
-                    }
-        .searchable(text: $searchQuery, prompt: "Search packages")
-        .navigationTitle(repository.index?.repoName ?? "Repository")
+        }
+        .searchable(text: $viewModel.searchQuery, prompt: "Search packages")
+        .navigationTitle(viewModel.repository?.index?.repoName ?? "Repository")
         .navigationBarTitleDisplayMode(.large)
     }
-
-    // MARK: - Subviews
 
     private var missingIndexView: some View {
         VStack(spacing: 16) {
@@ -263,7 +225,8 @@ struct RepoDetailView: View {
 
     private var packageListView: some View {
         List {
-            if let description = repository.index?.description, !description.isEmpty {
+            if let description = viewModel.repository?.index?.description,
+               !description.isEmpty {
                 Section {
                     Text(description)
                         .font(.subheadline)
@@ -272,19 +235,19 @@ struct RepoDetailView: View {
             }
 
             Section {
-                if filteredPackages.isEmpty {
+                if viewModel.filteredPackages.isEmpty {
                     Text("No packages match your search.")
                         .foregroundStyle(.secondary)
                         .font(.subheadline)
                 } else {
-                    ForEach(filteredPackages, id: \.id) { pkg in
+                    ForEach(viewModel.filteredPackages, id: \.id) { package in
                         PackageRowView(
-                            pkg: pkg,
-                            repositoryUrl: repository.url,
-                            installState: installState(for: pkg),
-                            isInstalling: installingPackageId == pkg.id
+                            pkg: package,
+                            repositoryUrl: viewModel.repositoryURL,
+                            installState: viewModel.installState(for: package),
+                            isInstalling: viewModel.isInstalling(packageID: package.id)
                         ) {
-                            Task { await installPackage(pkg) }
+                            Task { await viewModel.installPackage(package) }
                         }
                     }
                 }
@@ -292,7 +255,7 @@ struct RepoDetailView: View {
                 HStack {
                     Text("Packages")
                     Spacer()
-                    if let total = repository.index?.packages.count {
+                    if let total = viewModel.repository?.index?.packages.count {
                         Text("\(total)")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -301,42 +264,6 @@ struct RepoDetailView: View {
             }
         }
     }
-
-    // MARK: - Helpers
-
-    enum InstallState {
-        case incompatible(minVersion: String)
-        case updateAvailable
-        case installed
-        case notInstalled
-    }
-
-    private func installState(for pkg: RepoPackage) -> InstallState {
-        guard repoManager.isCompatible(minAppVersion: pkg.minAppVersion) else {
-            return .incompatible(minVersion: pkg.minAppVersion)
-        }
-        guard let installed = pluginManager.installedPlugins[pkg.id] else {
-            return .notInstalled
-        }
-        if installed.info.version.compare(pkg.version, options: .numeric) == .orderedAscending {
-            return .updateAvailable
-        }
-        return .installed
-    }
-
-    // MARK: - Actions
-
-    private func installPackage(_ pkg: RepoPackage) async {
-        installingPackageId = pkg.id
-        do {
-            try await repoManager.installPackage(pkg, repositoryUrl: repository.url)
-        } catch {
-            await MainActor.run {
-                SnackBarManager.shared.showError("Failed to install \(pkg.name): \(error.localizedDescription)")
-            }
-        }
-        installingPackageId = nil
-    }
 }
 
 // MARK: - PackageRowView
@@ -344,7 +271,7 @@ struct RepoDetailView: View {
 struct PackageRowView: View {
     let pkg: RepoPackage
     let repositoryUrl: String
-    let installState: RepoDetailView.InstallState
+    let installState: RepoDetailViewModel.InstallState
     let isInstalling: Bool
     let onAction: () -> Void
 
@@ -434,8 +361,6 @@ struct PackageRowView: View {
 
 struct RepositoriesView_Previews: PreviewProvider {
     static var previews: some View {
-        NavigationView {
-            RepositoriesView()
-        }
+        Text("RepositoriesView requires a prepared runtime")
     }
 }

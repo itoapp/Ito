@@ -1042,6 +1042,7 @@ final class SettingsViewModelTests: XCTestCase {
                 searchDebounceMilliseconds: nil,
                 presentationLogger: PresentationEventCaptureSpy(),
                 browseRepositoryManager: SettingsTestRepositoryManager(),
+                repositoryManagement: makeTestRepositoryManagementDependencies(),
                 browsePluginManager: SettingsTestPluginManager(),
                 browseFileOperations: SettingsTestFileOperations()
             ),
