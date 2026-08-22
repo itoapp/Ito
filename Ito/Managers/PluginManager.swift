@@ -93,9 +93,24 @@ public class PluginManager: ObservableObject {
     public func discoverAndPrepareInstalledPlugins(
         failOnInvalidPlugin: Bool
     ) async throws {
+        let installedPlugins = try prepareInstalledPluginsPublication(
+            failOnInvalidPlugin: failOnInvalidPlugin
+        )
+        publishPreparedInstalledPlugins(installedPlugins)
+    }
+
+    @MainActor
+    func prepareInstalledPluginsPublication(
+        failOnInvalidPlugin: Bool = true
+    ) throws -> [String: InstalledPlugin] {
         let scan = try scanInstalledPlugins(failOnInvalidPlugin: failOnInvalidPlugin)
         try pluginSettingsStore.prepareForDurableSnapshot(scan.discoveries)
-        publishInstalledPlugins(scan.plugins)
+        return scan.plugins
+    }
+
+    @MainActor
+    func publishPreparedInstalledPlugins(_ installedPlugins: [String: InstalledPlugin]) {
+        publishInstalledPlugins(installedPlugins)
     }
 
     /// Restore-only scan. This reads bundle metadata and republishes the in-memory

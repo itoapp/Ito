@@ -12,49 +12,81 @@ extension Setting: @retroactive Identifiable {
 }
 
 struct PluginSettingsView: View {
-    let plugin: InstalledPlugin
-    let schema: SettingsSchema
-
+    @StateObject private var viewModel: PluginSettingsViewModel
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var pluginManager: PluginManager
-    @State private var isPrepared = false
-    @State private var preparationError: String?
+
+    init(viewModel: PluginSettingsViewModel) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         NavigationView {
             Form {
-                if isPrepared {
-                    ForEach(schema.settings, id: \.id) { setting in
-                        SettingRowView(
-                            setting: setting,
-                            pluginId: plugin.info.id,
-                            store: pluginManager.pluginSettingsStore
-                        )
-                    }
-                } else if preparationError != nil {
-                    Section {
-                        Label(
-                            "Plugin settings could not be loaded. No changes were applied.",
-                            systemImage: "exclamationmark.triangle.fill"
-                        )
-                        .foregroundColor(.red)
-                    }
-                } else {
-                    ProgressView("Preparing plugin settings…")
-                }
+                settingsContent
             }
-            .navigationTitle("\(plugin.info.name) Settings")
+            .navigationTitle("\(viewModel.plugin.info.name) Settings")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(trailing: Button("Done") {
                 dismiss()
             })
             .task {
-                do {
-                    try pluginManager.pluginSettingsStore.prepare(pluginId: plugin.info.id)
-                    isPrepared = true
-                } catch {
-                    preparationError = String(describing: error)
+                await viewModel.loadIfNeeded()
+            }
+            .onDisappear {
+                viewModel.cancel()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        if viewModel.isPrepared {
+            ForEach(viewModel.schema.settings, id: \.id) { setting in
+                SettingRowView(setting: setting, viewModel: viewModel)
+            }
+            statusSections
+        } else if let error = viewModel.loadError {
+            Section {
+                Label(
+                    "Plugin settings could not be loaded. No changes were applied.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .foregroundColor(.red)
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Retry") {
+                    Task { await viewModel.load() }
                 }
+            }
+        } else {
+            ProgressView("Preparing plugin settings…")
+        }
+    }
+
+    @ViewBuilder
+    private var statusSections: some View {
+        if viewModel.isReloading {
+            Section {
+                ProgressView("Reloading plugin settings…")
+            }
+        }
+        if let error = viewModel.reloadError {
+            Section {
+                Label("Plugin settings could not be reloaded.", systemImage: "arrow.clockwise.circle")
+                    .foregroundColor(.red)
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Retry Reload") {
+                    Task { await viewModel.reload() }
+                }
+            }
+        }
+        if let error = viewModel.persistenceError {
+            Section {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
             }
         }
     }
@@ -62,17 +94,35 @@ struct PluginSettingsView: View {
 
 private struct SettingRowView: View {
     let setting: Setting
-    let pluginId: String
-    @ObservedObject var store: PluginSettingsStore
+    @ObservedObject var viewModel: PluginSettingsViewModel
 
     var body: some View {
         switch setting {
         case .toggle(let id, let name, let summary, let defaultValue):
-            ToggleSettingRow(id: id, name: name, summary: summary, defaultValue: defaultValue, pluginId: pluginId, store: store)
+            ToggleSettingRow(
+                id: id,
+                name: name,
+                summary: summary,
+                defaultValue: defaultValue,
+                viewModel: viewModel
+            )
         case .text(let id, let name, let summary, let defaultValue):
-            TextSettingRow(id: id, name: name, summary: summary, defaultValue: defaultValue, pluginId: pluginId, store: store)
+            TextSettingRow(
+                id: id,
+                name: name,
+                summary: summary,
+                defaultValue: defaultValue,
+                viewModel: viewModel
+            )
         case .picker(let id, let name, let summary, let options, let defaultValue):
-            PickerSettingRow(id: id, name: name, summary: summary, options: options, defaultValue: defaultValue, pluginId: pluginId, store: store)
+            PickerSettingRow(
+                id: id,
+                name: name,
+                summary: summary,
+                options: options,
+                defaultValue: defaultValue,
+                viewModel: viewModel
+            )
         }
     }
 }
@@ -82,18 +132,15 @@ private struct ToggleSettingRow: View {
     let name: String
     let summary: String?
     let defaultValue: Bool
-    let pluginId: String
-    @ObservedObject var store: PluginSettingsStore
+    @ObservedObject var viewModel: PluginSettingsViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Toggle(name, isOn: Binding(
-                get: { store.get(pluginId: pluginId, key: id).map { $0 == "true" } ?? defaultValue },
-                set: {
-                    store.set(pluginId: pluginId, key: id, value: $0 ? "true" : "false")
-                }
+                get: { viewModel.storedValue(key: id).map { $0 == "true" } ?? defaultValue },
+                set: { viewModel.persistValue(key: id, value: $0 ? "true" : "false") }
             ))
-            if let summary = summary, !summary.isEmpty {
+            if let summary, !summary.isEmpty {
                 Text(summary)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -101,13 +148,7 @@ private struct ToggleSettingRow: View {
         }
         .padding(.vertical, 2)
         .onAppear {
-            if store.get(pluginId: pluginId, key: id) == nil {
-                store.set(
-                    pluginId: pluginId,
-                    key: id,
-                    value: defaultValue ? "true" : "false"
-                )
-            }
+            viewModel.ensureDefault(key: id, value: defaultValue ? "true" : "false")
         }
     }
 }
@@ -117,21 +158,18 @@ private struct TextSettingRow: View {
     let name: String
     let summary: String?
     let defaultValue: String
-    let pluginId: String
-    @ObservedObject var store: PluginSettingsStore
+    @ObservedObject var viewModel: PluginSettingsViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(name)
             TextField(name, text: Binding(
-                get: { store.get(pluginId: pluginId, key: id) ?? defaultValue },
-                set: { newValue in
-                    store.set(pluginId: pluginId, key: id, value: newValue)
-                }
+                get: { viewModel.storedValue(key: id) ?? defaultValue },
+                set: { viewModel.persistValue(key: id, value: $0) }
             ))
             .textFieldStyle(RoundedBorderTextFieldStyle())
 
-            if let summary = summary, !summary.isEmpty {
+            if let summary, !summary.isEmpty {
                 Text(summary)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -139,9 +177,7 @@ private struct TextSettingRow: View {
         }
         .padding(.vertical, 2)
         .onAppear {
-            if store.get(pluginId: pluginId, key: id) == nil {
-                store.set(pluginId: pluginId, key: id, value: defaultValue)
-            }
+            viewModel.ensureDefault(key: id, value: defaultValue)
         }
     }
 }
@@ -152,22 +188,19 @@ private struct PickerSettingRow: View {
     let summary: String?
     let options: [String]
     let defaultValue: String
-    let pluginId: String
-    @ObservedObject var store: PluginSettingsStore
+    @ObservedObject var viewModel: PluginSettingsViewModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Picker(name, selection: Binding(
-                get: { store.get(pluginId: pluginId, key: id) ?? defaultValue },
-                set: { newValue in
-                    store.set(pluginId: pluginId, key: id, value: newValue)
-                }
+                get: { viewModel.storedValue(key: id) ?? defaultValue },
+                set: { viewModel.persistValue(key: id, value: $0) }
             )) {
                 ForEach(options, id: \.self) { option in
                     Text(option).tag(option)
                 }
             }
-            if let summary = summary, !summary.isEmpty {
+            if let summary, !summary.isEmpty {
                 Text(summary)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -175,9 +208,7 @@ private struct PickerSettingRow: View {
         }
         .padding(.vertical, 2)
         .onAppear {
-            if store.get(pluginId: pluginId, key: id) == nil {
-                store.set(pluginId: pluginId, key: id, value: defaultValue)
-            }
+            viewModel.ensureDefault(key: id, value: defaultValue)
         }
     }
 }

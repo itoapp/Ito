@@ -173,6 +173,27 @@ final class AppMessageCenterTests: XCTestCase {
         XCTAssertFalse(String(describing: message).contains(sensitiveReason))
     }
 
+    func testSourcePresenterUsesTypedSanitizedMessages() throws {
+        let center = AppMessageCenter()
+        let presenter = AppMessageSourcePresenter(messageCenter: center)
+        let sensitiveReason = "https://user:password@private.example?token=secret"
+
+        presenter.present(.archivedPluginDeleteFailed(
+            pluginName: "Private Plugin",
+            reason: sensitiveReason
+        ))
+
+        let message = try XCTUnwrap(center.currentMessage)
+        XCTAssertEqual(message.kind, .sourceArchivedPluginDeleteFailed)
+        XCTAssertEqual(
+            message.kind.presentation.detail,
+            "Plugin removal encountered an error. Refresh plugin state before retrying."
+        )
+        let rendered = String(describing: message) + (message.kind.presentation.detail ?? "")
+        XCTAssertFalse(rendered.contains(sensitiveReason))
+        XCTAssertFalse(rendered.contains("Private Plugin"))
+    }
+
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(

@@ -2,125 +2,131 @@ import SwiftUI
 import ito_runner
 
 struct ListingView: View {
-    let plugin: InstalledPlugin
-    let runner: ItoRunner
-    let listing: Listing
-    let title: String
+    @StateObject private var viewModel: ListingViewModel
+    private let routeFactory: SearchRouteFactory
 
-    @State private var page: Int32 = 1
-    @State private var hasNextPage: Bool = true
-    @State private var isLoading: Bool = false
-    @State private var errorMessage: String?
-
-    // State for respective models
-    @State private var mangas: [Manga] = []
-    @State private var animes: [Anime] = []
-    @State private var novels: [Novel] = []
+    init(viewModel: ListingViewModel, routeFactory: SearchRouteFactory) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+        self.routeFactory = routeFactory
+    }
 
     var body: some View {
-        Group {
-            if mangas.isEmpty && animes.isEmpty && novels.isEmpty && isLoading && errorMessage == nil {
-                ProgressView("Loading \(title)...")
-            } else if let error = errorMessage, mangas.isEmpty && animes.isEmpty && novels.isEmpty {
-                Text(error).foregroundColor(.red)
-            } else {
-                List {
-                    switch plugin.info.type {
-                    case .anime:
-                        ForEach(animes, id: \.key) { anime in
-                            MediaRowView(media: anime) {
-                                MediaDetailView(runner: runner, media: anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await runner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) }
-                            }
-                                .onAppear {
-                                    if anime.key == animes.last?.key && hasNextPage && !isLoading {
-                                        loadData()
-                                    }
-                                }
-                        }
-                    case .manga:
-                        ForEach(mangas, id: \.key) { manga in
-                            MediaRowView(media: manga) {
-                                MediaDetailView(runner: runner, media: manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await runner.getMangaUpdate(manga: $0) }
-                            }
-                                .onAppear {
-                                    if manga.key == mangas.last?.key && hasNextPage && !isLoading {
-                                        loadData()
-                                    }
-                                }
-                        }
-                    case .novel:
-                        ForEach(novels, id: \.key) { novel in
-                            MediaRowView(media: novel) {
-                                MediaDetailView(runner: runner, media: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await runner.getNovelUpdate(novel: $0) }
-                            }
-                                .onAppear {
-                                    if novel.key == novels.last?.key && hasNextPage && !isLoading {
-                                        loadData()
-                                    }
-                                }
-                        }
-                    }
+        listingContent
+            .navigationTitle(viewModel.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .task {
+                await viewModel.loadInitialIfNeeded()
+            }
+            .onDisappear {
+                viewModel.cancel()
+            }
+    }
 
-                    if isLoading && (!mangas.isEmpty || !animes.isEmpty || !novels.isEmpty) {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                            Spacer()
-                        }
-                        .padding()
+    @ViewBuilder
+    private var listingContent: some View {
+        switch viewModel.phase {
+        case .idle, .loading:
+            ProgressView("Loading \(viewModel.title)...")
+        case .failure(let error):
+            failureView(message: error)
+        case .cancelled:
+            failureView(message: "Loading was cancelled.")
+        case .empty:
+            VStack(spacing: 12) {
+                Text("No results found.")
+                    .foregroundStyle(.secondary)
+                if viewModel.hasNextPage, viewModel.paginationState == .idle {
+                    Button("Load Next Page") {
+                        Task { await viewModel.loadMore() }
                     }
+                    .buttonStyle(.bordered)
                 }
-                .listStyle(.plain)
+                paginationFooter
             }
-        }
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            if mangas.isEmpty && animes.isEmpty && novels.isEmpty {
-                loadData()
-            }
+        case .content:
+            resultsList
         }
     }
 
-    private func loadData() {
-        guard !isLoading, hasNextPage else { return }
-        isLoading = true
-        errorMessage = nil
-
-        Task {
-            do {
-                switch plugin.info.type {
-                case .manga:
-                    let result = try await runner.getMangaList(listing: listing, page: page)
-                    await MainActor.run {
-                        self.mangas.append(contentsOf: result.entries)
-                        self.hasNextPage = result.hasNextPage
-                        self.page += 1
-                        self.isLoading = false
+    private var resultsList: some View {
+        List {
+            switch viewModel.pluginType {
+            case .anime:
+                ForEach(viewModel.animes, id: \.key) { anime in
+                    MediaRowView(media: anime) {
+                        routeFactory.destination(for: viewModel.destination(for: anime))
                     }
-                case .anime:
-                    let result = try await runner.getAnimeList(listing: listing, page: page)
-                    await MainActor.run {
-                        self.animes.append(contentsOf: result.entries)
-                        self.hasNextPage = result.hasNextPage
-                        self.page += 1
-                        self.isLoading = false
-                    }
-                case .novel:
-                    let result = try await runner.getNovelList(listing: listing, page: page)
-                    await MainActor.run {
-                        self.novels.append(contentsOf: result.entries)
-                        self.hasNextPage = result.hasNextPage
-                        self.page += 1
-                        self.isLoading = false
-                    }
+                    .onAppear { loadMoreIfNeeded(lastKey: viewModel.animes.last?.key, key: anime.key) }
                 }
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
+            case .manga:
+                ForEach(viewModel.mangas, id: \.key) { manga in
+                    MediaRowView(media: manga) {
+                        routeFactory.destination(for: viewModel.destination(for: manga))
+                    }
+                    .onAppear { loadMoreIfNeeded(lastKey: viewModel.mangas.last?.key, key: manga.key) }
                 }
+            case .novel:
+                ForEach(viewModel.novels, id: \.key) { novel in
+                    MediaRowView(media: novel) {
+                        routeFactory.destination(for: viewModel.destination(for: novel))
+                    }
+                    .onAppear { loadMoreIfNeeded(lastKey: viewModel.novels.last?.key, key: novel.key) }
+                }
+            @unknown default:
+                EmptyView()
             }
+
+            paginationFooter
         }
+        .listStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var paginationFooter: some View {
+        switch viewModel.paginationState {
+        case .loading:
+            HStack {
+                Spacer()
+                ProgressView()
+                Spacer()
+            }
+            .padding()
+        case .failure(_, let reason):
+            VStack(spacing: 8) {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                Button("Retry") {
+                    Task { await viewModel.retry() }
+                }
+                .buttonStyle(.bordered)
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+        case .continuationRequired:
+            Button("Load Next Page") {
+                Task { await viewModel.loadMore() }
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            .padding()
+        case .idle, .exhausted:
+            EmptyView()
+        }
+    }
+
+    private func failureView(message: String) -> some View {
+        VStack(spacing: 12) {
+            Text(message).foregroundColor(.red)
+            Button("Retry") {
+                Task { await viewModel.retry() }
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private func loadMoreIfNeeded(lastKey: String?, key: String) {
+        guard key == lastKey else { return }
+        Task { await viewModel.loadMore() }
     }
 }

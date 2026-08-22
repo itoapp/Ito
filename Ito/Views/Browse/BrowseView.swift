@@ -16,12 +16,14 @@ extension UTType {
 struct BrowseView: View {
     let viewModel: BrowseViewModel
     let makeRepositoriesView: () -> RepositoriesView
+    let makeSourceView: (InstalledPlugin) -> SourceView
 
     var body: some View {
         NavigationView {
             BrowseContentView(
                 viewModel: viewModel,
-                makeRepositoriesView: makeRepositoriesView
+                makeRepositoriesView: makeRepositoriesView,
+                makeSourceView: makeSourceView
             )
         }
         .navigationViewStyle(.stack)
@@ -33,6 +35,7 @@ struct BrowseView: View {
 private struct BrowseContentView: View {
     @ObservedObject var viewModel: BrowseViewModel
     let makeRepositoriesView: () -> RepositoriesView
+    let makeSourceView: (InstalledPlugin) -> SourceView
 
     var body: some View {
         ZStack {
@@ -135,7 +138,7 @@ private struct BrowseContentView: View {
 
             Section {
                 ForEach(viewModel.sortedPlugins, id: \.id) { plugin in
-                    NavigationLink(destination: SourceView(plugin: plugin)) {
+                    NavigationLink(destination: makeSourceView(plugin)) {
                         PluginRowView(plugin: plugin)
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {

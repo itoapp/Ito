@@ -11,6 +11,7 @@ struct PreparedApplicationDependencies {
     let repositoryManagement: PreparedRepositoryManagementDependencies
     let browsePluginManager: any BrowsePluginManaging
     let browseFileOperations: any BrowsePluginFileOperating
+    let source: PreparedSourceDependencies
     let discoverService: any DiscoverHomeFilterServing
     let discoverCache: any DiscoverCaching
     let discoverClock: any DiscoverClock
@@ -26,6 +27,7 @@ struct PreparedApplicationDependencies {
         repositoryManagement: PreparedRepositoryManagementDependencies,
         browsePluginManager: any BrowsePluginManaging,
         browseFileOperations: any BrowsePluginFileOperating,
+        source: PreparedSourceDependencies? = nil,
         discoverService: any DiscoverHomeFilterServing = DiscoverManager.shared,
         discoverCache: any DiscoverCaching = InMemoryDiscoverCache(),
         discoverClock: any DiscoverClock = SystemDiscoverClock(),
@@ -40,6 +42,7 @@ struct PreparedApplicationDependencies {
         self.repositoryManagement = repositoryManagement
         self.browsePluginManager = browsePluginManager
         self.browseFileOperations = browseFileOperations
+        self.source = source ?? .unavailable()
         self.discoverService = discoverService
         self.discoverCache = discoverCache
         self.discoverClock = discoverClock
@@ -56,7 +59,10 @@ struct PreparedApplicationDependencies {
         recentSearchDefaults: UserDefaults = .standard,
         browsePluginsDirectory: URL? = nil
     ) -> Self {
-        Self(
+        let fileOperations = LocalBrowsePluginFileOperations(
+            pluginsDirectory: browsePluginsDirectory
+        )
+        return Self(
             settings: PreparedSettingsDependencies(
                 settingsStore: settingsStore,
                 notificationAuthorization: notificationManager,
@@ -76,8 +82,12 @@ struct PreparedApplicationDependencies {
                 repositoryDetailManager: repoManager
             ),
             browsePluginManager: pluginManager,
-            browseFileOperations: LocalBrowsePluginFileOperations(
-                pluginsDirectory: browsePluginsDirectory
+            browseFileOperations: fileOperations,
+            source: PreparedSourceDependencies(
+                runnerProvider: pluginManager,
+                settingsStore: pluginManager.pluginSettingsStore,
+                pluginStatePublisher: pluginManager,
+                fileDeletion: fileOperations
             )
         )
     }
@@ -264,6 +274,7 @@ final class AppScope {
     let messageCenter: AppMessageCenter
     let debugLogMessagePresenter: any DebugLogMessagePresenting
     let repositoryManagementMessagePresenter: any RepositoryManagementMessagePresenting
+    let sourceMessagePresenter: any SourceMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -281,6 +292,8 @@ final class AppScope {
             messageCenter: messageCenter
         )
         self.repositoryManagementMessagePresenter = repositoryManagementMessagePresenter
+        let sourceMessagePresenter = AppMessageSourcePresenter(messageCenter: messageCenter)
+        self.sourceMessagePresenter = sourceMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
@@ -292,7 +305,9 @@ final class AppScope {
             rootModels: rootModels,
             repositoryManagement: preparedDependencies.repositoryManagement,
             pluginManager: preparedDependencies.browsePluginManager,
-            repositoryMessagePresenter: repositoryManagementMessagePresenter
+            repositoryMessagePresenter: repositoryManagementMessagePresenter,
+            sourceDependencies: preparedDependencies.source,
+            sourceMessagePresenter: sourceMessagePresenter
         )
     }
 

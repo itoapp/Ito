@@ -289,10 +289,14 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(dependencies.settings.discordRPCManager === discordRPCManager)
         XCTAssertTrue(dependencies.repositoryManagement.repositoryListManager === repoManager)
         XCTAssertTrue(dependencies.repositoryManagement.repositoryDetailManager === repoManager)
+        XCTAssertTrue(dependencies.source.runnerProvider === pluginManager)
+        XCTAssertTrue(dependencies.source.settingsStore === pluginSettings)
+        XCTAssertTrue(dependencies.source.pluginStatePublisher === pluginManager)
         XCTAssertEqual(dependencies.recentSearchStore.load(), [recentSearchSentinel])
         let fileOperations = try XCTUnwrap(
             dependencies.browseFileOperations as? LocalBrowsePluginFileOperations
         )
+        XCTAssertTrue(dependencies.source.fileDeletion === fileOperations)
         XCTAssertEqual(
             fileOperations.configuredPluginsDirectory?.standardizedFileURL,
             pluginsDirectory.standardizedFileURL
