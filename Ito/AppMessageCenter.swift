@@ -19,6 +19,7 @@ enum AppMessageKind: Equatable {
     case pluginSettingsPersistenceFailed
     case pluginSettingsReloadFailed
     case sourceArchivedPluginDeleteFailed
+    case discoverDetailRefreshFailed
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -137,6 +138,12 @@ extension AppMessageKind {
                 style: .error,
                 title: "Failed to remove plugin",
                 detail: "Plugin removal encountered an error. Refresh plugin state before retrying."
+            )
+        case .discoverDetailRefreshFailed:
+            return .init(
+                style: .error,
+                title: "Details unavailable",
+                detail: "Full media details could not be refreshed. The available summary is still shown."
             )
         }
     }

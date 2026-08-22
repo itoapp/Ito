@@ -361,16 +361,27 @@ final class DiscoverViewModelTests: XCTestCase {
         }
     }
 
-    func test43DetailAndSourceResolverRemainOutsideMigration() throws {
+    func test43DetailAndSourceResolverUseInjectedScreenBoundary() throws {
         let detail = try sourceFile("Ito/Views/Discover/DiscoverDetailView.swift")
         let resolver = try sourceFile("Ito/ViewModels/Discover/SourceResolverViewModel.swift")
-        XCTAssertTrue(detail.contains("DiscoverManager.shared.fetchMediaDetails"))
-        XCTAssertFalse(resolver.contains("DiscoverViewModel"))
+        let detailViewModel = try sourceFile(
+            "Ito/ViewModels/Discover/DiscoverDetailViewModel.swift"
+        )
+        for source in [detail, resolver, detailViewModel] {
+            XCTAssertFalse(source.contains("DiscoverManager.shared"))
+            XCTAssertFalse(source.contains("ThemeManager.shared"))
+            XCTAssertFalse(source.contains("AppDatabase.shared"))
+            XCTAssertFalse(source.contains("PluginManager.shared"))
+            XCTAssertFalse(source.contains("SnackBarManager.shared"))
+        }
+        XCTAssertTrue(detail.contains("@StateObject private var viewModel"))
+        XCTAssertTrue(detailViewModel.contains("let sourceResolver: SourceResolverViewModel"))
     }
 
-    func test44ExistingDiscoverNavigationStillTargetsDiscoverDetailView() throws {
+    func test44DiscoverNavigationUsesAppViewFactory() throws {
         let source = try sourceFile("Ito/Views/Discover/DiscoverView.swift")
-        XCTAssertTrue(source.contains("destination: DiscoverDetailView(media: media, pluginManager: pluginManager)"))
+        XCTAssertTrue(source.contains("viewFactory.makeDiscoverDetailView(media: media)"))
+        XCTAssertFalse(source.contains("@EnvironmentObject private var pluginManager"))
         XCTAssertFalse(source.contains("AppRouter"))
     }
 

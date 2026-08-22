@@ -98,6 +98,43 @@ final class SearchRouteFactoryTests: XCTestCase {
         XCTAssertFalse(source.contains("installedPlugins"))
     }
 
+    func testSourceRouteFactoryPreservesTypedPayloadRunnerAndCanonicalID() {
+        let runner = ItoRunner()
+        let context = ItoRunnerSourceContext(runner: runner)
+        let media = ResolvedPluginMedia.manga(
+            Manga(key: "source-key", title: "Source")
+        )
+
+        let route = SourceRouteFactory().route(
+            media: media,
+            pluginID: "plugin.source",
+            context: context,
+            anilistID: 123
+        )
+
+        XCTAssertEqual(route.pluginID, "plugin.source")
+        XCTAssertEqual(route.media.key(), "source-key")
+        XCTAssertTrue(route.runner === runner)
+        XCTAssertEqual(route.anilistID, 123)
+    }
+
+    func testSourceRouteConstructionContainsNoTypeErasureOrManagerLookup() throws {
+        let source = try sourceFile(
+            "Ito/ViewModels/Discover/SourceResolverViewModel.swift"
+        )
+
+        XCTAssertFalse(source.contains("AnyView"))
+        XCTAssertFalse(source.contains("PluginManager"))
+        XCTAssertFalse(source.contains("getRunner"))
+    }
+
+    func testRecommendationNavigationUsesTheDiscoverDetailFactory() throws {
+        let source = try sourceFile("Ito/Views/Discover/DiscoverDetailView.swift")
+
+        XCTAssertTrue(source.contains("viewFactory.makeDiscoverDetailView(media: recMedia)"))
+        XCTAssertFalse(source.contains("destination: DiscoverDetailView("))
+    }
+
     func testSearchModelsAndViewModelContainNoSwiftUIDestinationValues() throws {
         let modelSource = try sourceFile("Ito/Models/SearchModels.swift")
         let viewModelSource = try sourceFile("Ito/ViewModels/SearchViewModel.swift")

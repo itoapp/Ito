@@ -1,6 +1,7 @@
 import Combine
 import XCTest
 @testable import Ito
+import ito_runner
 
 @MainActor
 final class AppScopeIdentityTests: XCTestCase {
@@ -122,6 +123,43 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertFalse(scope.rootModels.hasLoadedDiscoverViewModel)
         _ = scope.viewFactory.makeDiscoverView()
         XCTAssertTrue(scope.rootModels.hasLoadedDiscoverViewModel)
+    }
+
+    func testDiscoverDetailIsScreenOwnedAndNotStoredInRootModelStore() throws {
+        let scope = makeScope()
+        let media = DiscoverMedia(
+            id: 12,
+            title: "Detail",
+            titleEnglish: nil,
+            titleRomaji: nil,
+            titleNative: nil,
+            synonyms: [],
+            coverImage: nil,
+            bannerImage: nil,
+            format: nil,
+            status: nil,
+            description: nil,
+            cleanDescription: nil,
+            genres: nil,
+            averageScore: nil,
+            episodes: nil,
+            chapters: nil,
+            season: nil,
+            seasonYear: nil,
+            type: "MANGA",
+            recommendations: nil
+        )
+
+        let first = scope.viewFactory.makeDiscoverDetailViewModel(media: media)
+        let second = scope.viewFactory.makeDiscoverDetailViewModel(media: media)
+        let source = try sourceFile("Ito/AppScope.swift")
+
+        XCTAssertEqual(first.media.id, media.id)
+        XCTAssertEqual(first.media.title, media.title)
+        XCTAssertFalse(first === second)
+        XCTAssertFalse(first.sourceResolver === second.sourceResolver)
+        XCTAssertFalse(source.contains("storedDiscoverDetailViewModel"))
+        XCTAssertFalse(source.contains("hasLoadedDiscoverDetailViewModel"))
     }
 
     func testSettingsRootFactoryDoesNotEagerlyLoadAnySettingsViewModel() {
@@ -272,6 +310,9 @@ final class AppScopeIdentityTests: XCTestCase {
         let discordRPCManager = DiscordRPCManager(
             libraryManager: LibraryManager(dbPool: database.dbPool)
         )
+        let sourceMappingRepository = GRDBSourceMappingRepository(
+            dbWriter: database.dbPool
+        )
         let dependencies = PreparedApplicationDependencies.production(
             pluginManager: pluginManager,
             repoManager: repoManager,
@@ -279,6 +320,9 @@ final class AppScopeIdentityTests: XCTestCase {
             notificationManager: notificationManager,
             storageManager: storageManager,
             discordRPCManager: discordRPCManager,
+            sourceMappingRepository: sourceMappingRepository,
+            discoverDetailService: DiscoverManager.shared,
+            discoverDetailThemeService: ThemeManager.shared,
             recentSearchDefaults: fixtureDefaults,
             browsePluginsDirectory: pluginsDirectory
         )
@@ -292,6 +336,13 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(dependencies.source.runnerProvider === pluginManager)
         XCTAssertTrue(dependencies.source.settingsStore === pluginSettings)
         XCTAssertTrue(dependencies.source.pluginStatePublisher === pluginManager)
+        XCTAssertTrue(dependencies.discoverDetail.pluginProvider === pluginManager)
+        XCTAssertTrue(dependencies.discoverDetail.detailService === DiscoverManager.shared)
+        XCTAssertTrue(dependencies.discoverDetail.themeService === ThemeManager.shared)
+        XCTAssertTrue(
+            dependencies.discoverDetail.sourceMappingRepository
+                as? GRDBSourceMappingRepository === sourceMappingRepository
+        )
         XCTAssertEqual(dependencies.recentSearchStore.load(), [recentSearchSentinel])
         let fileOperations = try XCTUnwrap(
             dependencies.browseFileOperations as? LocalBrowsePluginFileOperations
@@ -313,6 +364,97 @@ final class AppScopeIdentityTests: XCTestCase {
             FileManager.default.fileExists(
                 atPath: pluginsDirectory.appendingPathComponent("fixture.ito").path
             )
+        )
+    }
+
+    func testDiscoverDetailFactoryUsesCanonicalPreparedGRDBRepository() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let pluginManager = PluginManager(
+            pluginSettingsStore: PluginSettingsStore(dbPool: database.dbPool)
+        )
+        let repository = GRDBSourceMappingRepository(dbWriter: database.dbPool)
+        let dependencies = PreparedApplicationDependencies(
+            settings: makeTestPreparedSettingsDependencies(),
+            searchExecutor: AppScopeSearchExecutor(),
+            recentSearchStore: AppScopeRecentStore(),
+            searchDebounceMilliseconds: nil,
+            presentationLogger: PresentationEventCaptureSpy(),
+            browseRepositoryManager: AppScopeBrowseRepositoryManager(),
+            repositoryManagement: makeTestRepositoryManagementDependencies(),
+            browsePluginManager: pluginManager,
+            browseFileOperations: AppScopeBrowseFileOperations(),
+            discoverDetail: PreparedDiscoverDetailDependencies(
+                sourceMappingRepository: repository,
+                pluginProvider: pluginManager,
+                detailService: DiscoverManager.shared,
+                themeService: ThemeManager.shared,
+                sourceRouteFactory: SourceRouteFactory()
+            )
+        )
+        let scope = AppScope(preparedDependencies: dependencies)
+        let media = DiscoverMedia(
+            id: 88,
+            title: "Boundary",
+            titleEnglish: nil,
+            titleRomaji: nil,
+            titleNative: nil,
+            synonyms: [],
+            coverImage: nil,
+            bannerImage: nil,
+            format: nil,
+            status: nil,
+            description: nil,
+            cleanDescription: nil,
+            genres: nil,
+            averageScore: nil,
+            episodes: nil,
+            chapters: nil,
+            season: nil,
+            seasonYear: nil,
+            type: "MANGA",
+            recommendations: nil
+        )
+        let resolver = scope.viewFactory.makeDiscoverDetailViewModel(
+            media: media
+        ).sourceResolver
+        let confirmed = MatchedSource(
+            pluginID: "plugin.confirmed",
+            pluginVersion: "1.0",
+            media: .manga(Manga(key: "confirmed", title: "Confirmed")),
+            matchMethod: .exactPreferred,
+            score: 1,
+            decision: .autoConfirm
+        )
+        let rejected = MatchedSource(
+            pluginID: "plugin.rejected",
+            pluginVersion: "1.0",
+            media: .manga(Manga(key: "rejected", title: "Rejected")),
+            matchMethod: .fuzzy,
+            score: 0.7,
+            decision: .requiresConfirmation
+        )
+
+        try await resolver.confirmMatch(confirmed)
+        try await resolver.rejectMatch(rejected)
+
+        let records = try await repository.fetchAll(
+            canonicalProvider: "anilist",
+            canonicalMediaId: "88",
+            mediaType: .manga
+        )
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(
+            records.first(where: { $0.pluginMediaKey == "confirmed" })?.decision,
+            .autoConfirm
+        )
+        XCTAssertEqual(
+            records.first(where: { $0.pluginMediaKey == "rejected" })?.decision,
+            .discard
+        )
+        XCTAssertTrue(
+            scope.dependencies.discoverDetail.sourceMappingRepository
+                as? GRDBSourceMappingRepository === repository
         )
     }
 

@@ -194,6 +194,21 @@ final class AppMessageCenterTests: XCTestCase {
         XCTAssertFalse(rendered.contains("Private Plugin"))
     }
 
+    func testDiscoverDetailPresenterUsesTypedSanitizedMessage() throws {
+        let center = AppMessageCenter()
+        let presenter = AppMessageDiscoverDetailPresenter(messageCenter: center)
+
+        presenter.present(.refreshFailed)
+
+        let message = try XCTUnwrap(center.currentMessage)
+        XCTAssertEqual(message.kind, .discoverDetailRefreshFailed)
+        XCTAssertEqual(message.kind.presentation.title, "Details unavailable")
+        XCTAssertEqual(
+            message.kind.presentation.detail,
+            "Full media details could not be refreshed. The available summary is still shown."
+        )
+    }
+
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(

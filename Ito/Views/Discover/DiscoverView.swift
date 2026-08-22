@@ -4,18 +4,19 @@ import Nuke
 
 struct DiscoverView: View {
     @StateObject private var viewModel: DiscoverViewModel
-    @EnvironmentObject private var pluginManager: PluginManager
+    private let viewFactory: AppViewFactory
     @State private var showFilters = false
 
-    init(viewModel: DiscoverViewModel) {
+    init(viewModel: DiscoverViewModel, viewFactory: AppViewFactory) {
         self._viewModel = StateObject(wrappedValue: viewModel)
+        self.viewFactory = viewFactory
     }
 
     var body: some View {
         NavigationView {
             Group {
                 if viewModel.isShowingHome {
-                    DiscoverHomeView(viewModel: viewModel)
+                    DiscoverHomeView(viewModel: viewModel, viewFactory: viewFactory)
                 } else {
                     searchResultsView
                 }
@@ -91,7 +92,7 @@ struct DiscoverView: View {
 
             ForEach(viewModel.searchResults) { media in
                 NavigationLink(
-                    destination: DiscoverDetailView(media: media, pluginManager: pluginManager)
+                    destination: viewFactory.makeDiscoverDetailView(media: media)
                 ) {
                     DiscoverSearchRow(media: media)
                 }
@@ -198,7 +199,7 @@ struct DiscoverView: View {
 
 private struct DiscoverHomeView: View {
     @ObservedObject var viewModel: DiscoverViewModel
-    @EnvironmentObject private var pluginManager: PluginManager
+    let viewFactory: AppViewFactory
 
     var body: some View {
         ScrollView {
@@ -293,10 +294,7 @@ private struct DiscoverHomeView: View {
                 HStack(spacing: 12) {
                     ForEach(items) { media in
                         NavigationLink(
-                            destination: DiscoverDetailView(
-                                media: media,
-                                pluginManager: pluginManager
-                            )
+                            destination: viewFactory.makeDiscoverDetailView(media: media)
                         ) {
                             DiscoverCardView(media: media)
                         }

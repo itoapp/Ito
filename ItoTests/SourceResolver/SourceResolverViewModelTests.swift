@@ -4,30 +4,73 @@ import GRDB
 @testable import Ito
 import ito_runner
 
-private final class FakePluginProvider: @unchecked Sendable, PluginProviding {
-    var installedPlugins: [String: InstalledPlugin] = [:]
+@MainActor
+final class FakePluginProvider: SourceResolverPluginProviding {
+    var installedPlugins: [String: InstalledPlugin] = [:] {
+        didSet { installedPluginsSubject.send(installedPlugins) }
+    }
     var configuredAdapters: [String: any PluginSearching] = [:]
     private var runners: [String: ItoRunner] = [:]
     private(set) var runnerRequestCount = 0
+    var runnerError: Error?
+    var suspendedRunnerPluginIDs = Set<String>()
+    private var runnerContinuations: [
+        String: CheckedContinuation<any SourceRunnerContext, Error>
+    ] = [:]
+    private let installedPluginsSubject = CurrentValueSubject<
+        [String: InstalledPlugin],
+        Never
+    >([:])
 
-    @MainActor
-    func getRunner(for pluginId: String) async throws -> ItoRunner {
-        runnerRequestCount += 1
-        guard installedPlugins[pluginId] != nil else { throw URLError(.badURL) }
-        if let runner = runners[pluginId] { return runner }
-        let runner = ItoRunner()
-        runners[pluginId] = runner
-        return runner
+    var installedPluginsPublisher: AnyPublisher<[String: InstalledPlugin], Never> {
+        installedPluginsSubject.eraseToAnyPublisher()
     }
 
-    func getSearchAdapter(for pluginId: String, mediaType: PluginMediaType) async throws -> any PluginSearching {
-        guard let plugin = installedPlugins[pluginId] else { throw URLError(.badURL) }
-        if let adapter = configuredAdapters[pluginId] { return adapter }
-        return FakePluginSearchAdapter(pluginID: pluginId, pluginVersion: plugin.info.version, mediaType: mediaType)
+    func sourceRunnerContext(for pluginID: String) async throws -> any SourceRunnerContext {
+        runnerRequestCount += 1
+        if suspendedRunnerPluginIDs.contains(pluginID) {
+            return try await withCheckedThrowingContinuation { continuation in
+                runnerContinuations[pluginID] = continuation
+            }
+        }
+        if let runnerError { throw runnerError }
+        guard installedPlugins[pluginID] != nil else { throw URLError(.badURL) }
+        if let runner = runners[pluginID] {
+            return ItoRunnerSourceContext(runner: runner)
+        }
+        let runner = ItoRunner()
+        runners[pluginID] = runner
+        return ItoRunnerSourceContext(runner: runner)
+    }
+
+    func evictSourceRunner(for pluginID: String) {
+        runners[pluginID] = nil
+    }
+
+    func resumeRunnerRequest(for pluginID: String) {
+        guard let continuation = runnerContinuations.removeValue(forKey: pluginID) else {
+            return
+        }
+        let runner = runners[pluginID] ?? ItoRunner()
+        runners[pluginID] = runner
+        continuation.resume(returning: ItoRunnerSourceContext(runner: runner))
+    }
+
+    func sourceSearchAdapter(
+        for pluginID: String,
+        mediaType: PluginMediaType
+    ) async throws -> any PluginSearching {
+        guard let plugin = installedPlugins[pluginID] else { throw URLError(.badURL) }
+        if let adapter = configuredAdapters[pluginID] { return adapter }
+        return FakePluginSearchAdapter(
+            pluginID: pluginID,
+            pluginVersion: plugin.info.version,
+            mediaType: mediaType
+        )
     }
 }
 
-private actor FakePluginSearchAdapter: PluginSearching {
+actor FakePluginSearchAdapter: PluginSearching {
     let pluginID: String
     let pluginVersion: String?
     let mediaType: PluginMediaType
@@ -57,11 +100,11 @@ private actor FakePluginSearchAdapter: PluginSearching {
 
 @MainActor
 final class SourceResolverViewModelTests: XCTestCase {
-    private var dbQueue: DatabaseQueue!
-    private var repository: GRDBSourceMappingRepository!
-    private var pluginProvider: FakePluginProvider!
+    var dbQueue: DatabaseQueue!
+    var repository: GRDBSourceMappingRepository!
+    var pluginProvider: FakePluginProvider!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         dbQueue = try DatabaseQueue()
         try AppDatabase.makeMigrator().migrate(dbQueue)
         repository = GRDBSourceMappingRepository(dbWriter: dbQueue)
@@ -76,7 +119,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         await vm.checkAndResolve()
@@ -94,7 +138,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         await vm.checkAndResolve()
@@ -110,7 +155,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         await vm.checkAndResolve()
@@ -125,7 +171,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         let savedSourcePublished = expectation(description: "Saved source published")
         var didFulfill = false
@@ -151,7 +198,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await vm.checkAndResolve()
 
@@ -170,7 +218,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await vm.checkAndResolve()
         let routePresented = expectation(description: "Route presented")
@@ -197,7 +246,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         await vm.checkAndResolve()
@@ -221,7 +271,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(type: "ANIME"),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         await vm.checkAndResolve()
@@ -241,7 +292,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await vm.checkAndResolve()
 
@@ -263,7 +315,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await vm.checkAndResolve()
 
@@ -279,7 +332,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         let match = makeMangaMatch()
 
@@ -302,7 +356,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         let match = makeMangaMatch()
         try await vm.confirmAndPrepareRoute(match)
@@ -328,7 +383,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await vm.checkAndResolve()
         await openSavedSourceAndWait(vm, mapping: mapping, payload: payload)
@@ -343,20 +399,51 @@ final class SourceResolverViewModelTests: XCTestCase {
         XCTAssertEqual(vm.routePresentation.presentationCount, 1)
     }
 
+    func testSavedSourceCanBeOpenedAgainAfterExplicitReturn() async throws {
+        let payload = ResolvedPluginMedia.manga(makeCompleteManga())
+        let mapping = makeMappingRecord(payload: payload)
+        pluginProvider.installedPlugins["p1"] = makePlugin()
+        let vm = SourceResolverViewModel(
+            media: makeDiscoverMedia(),
+            repository: repository,
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
+        )
+        vm.setSavedSourceState(mapping: mapping, payload: payload)
+        await openSavedSourceAndWait(vm, mapping: mapping, payload: payload)
+        vm.destinationDidAppear()
+        vm.manualDestinationPopRequested()
+        vm.destinationDidDisappear()
+
+        let reopened = expectation(description: "Source route reopened")
+        let subscription = vm.$routePresentation.sink { presentation in
+            if presentation.presentationCount == 2 { reopened.fulfill() }
+        }
+        vm.openSavedSource(mapping: mapping, payload: payload)
+        await fulfillment(of: [reopened], timeout: 2)
+
+        XCTAssertEqual(vm.routePresentation.presentationCount, 2)
+        XCTAssertTrue(vm.isSourceDestinationPresented)
+        XCTAssertEqual(vm.sourceRoute?.media.key(), payload.key())
+        subscription.cancel()
+    }
+
     func testReopeningSavedDetailDoesNotAutomaticallyOpen() async throws {
         pluginProvider.installedPlugins["p1"] = makePlugin()
         try await repository.upsert(makeMappingRecord())
         let first = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await first.checkAndResolve()
 
         let reopened = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await reopened.checkAndResolve()
 
@@ -376,7 +463,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         await vm.checkAndResolve()
@@ -394,7 +482,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
         await vm.checkAndResolve()
 
@@ -410,7 +499,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let vm = SourceResolverViewModel(
             media: makeDiscoverMedia(),
             repository: repository,
-            pluginManager: pluginProvider
+            pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory()
         )
 
         try await vm.confirmAndPrepareRoute(makeMangaMatch())
@@ -466,7 +556,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         pluginProvider.installedPlugins["p1"] = makePlugin()
         try await repository.upsert(makeMappingRecord(version: 1))
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let result = await vm.checkExistingMapping()
         XCTAssertNotNil(result)
     }
@@ -478,7 +569,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let record = makeMappingRecord(version: 1, payloadVersionOverride: 2)
         try await repository.upsert(record)
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let res = await vm.checkExistingMapping()
         XCTAssertNil(res)
     }
@@ -491,7 +583,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let record = makeMappingRecord(version: 1, payloadOverride: try JSONEncoder().encode(snapshot))
         try await repository.upsert(record)
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let res = await vm.checkExistingMapping()
         XCTAssertNil(res)
     }
@@ -503,7 +596,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let record = makeMappingRecord(version: 1, payloadOverride: Data("invalid".utf8))
         try await repository.upsert(record)
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let res = await vm.checkExistingMapping()
         XCTAssertNil(res)
     }
@@ -513,7 +607,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let media = makeDiscoverMedia()
         try await repository.upsert(makeMappingRecord(version: 1))
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let res = await vm.checkExistingMapping()
         XCTAssertNil(res)
     }
@@ -526,7 +621,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let record = makeMappingRecord(version: 1, pluginVersionOverride: "1.0")
         try await repository.upsert(record)
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let res = await vm.checkExistingMapping()
         XCTAssertNil(res)
     }
@@ -539,7 +635,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let record = makeMappingRecord(mediaType: .manga, payload: .manga(Manga(key: "m1", title: "M")))
         try await repository.upsert(record)
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let res = await vm.checkExistingMapping()
         XCTAssertNil(res)
     }
@@ -551,7 +648,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let record = makeMappingRecord(version: 1)
         try await repository.upsert(record)
 
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         _ = await vm.checkExistingMapping() // Should return nil
 
         let all = try await repository.fetchAll(canonicalProvider: "anilist", canonicalMediaId: "1", mediaType: .manga)
@@ -562,7 +660,8 @@ final class SourceResolverViewModelTests: XCTestCase {
     func testValidStoredRouteUpdatesVerificationTimestamp() async throws {
         let record = makeMappingRecord(version: 1)
         try await repository.upsert(record)
-        let vm = SourceResolverViewModel(media: makeDiscoverMedia(), repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: makeDiscoverMedia(), repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
 
         await vm.markMappingUsed(record)
         for _ in 0..<100 {
@@ -579,7 +678,8 @@ final class SourceResolverViewModelTests: XCTestCase {
     func testResolutionStateTransitions() async throws {
         let media = makeDiscoverMedia()
         pluginProvider.installedPlugins["p1"] = makePlugin()
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let adapter = FakePluginSearchAdapter(pluginID: "p1", pluginVersion: "1.0", mediaType: .manga)
         await adapter.setResults([.manga(Manga(key: "m1", title: "Test"))])
         pluginProvider.configuredAdapters["p1"] = adapter
@@ -595,6 +695,10 @@ final class SourceResolverViewModelTests: XCTestCase {
         await fulfillment(of: [exp], timeout: 2.0)
 
         XCTAssertTrue(states.contains(where: { if case .loading = $0 { return true }; return false }))
+        XCTAssertTrue(states.contains(where: {
+            if case .loading(let matches) = $0 { return !matches.isEmpty }
+            return false
+        }))
         XCTAssertTrue(states.contains(where: { if case .completed = $0 { return true }; return false }))
         XCTAssertFalse(vm.isSearching) // 12
         sub.cancel()
@@ -605,7 +709,8 @@ final class SourceResolverViewModelTests: XCTestCase {
         let media = makeDiscoverMedia()
         pluginProvider.installedPlugins["p1"] = makePlugin(id: "p1")
         pluginProvider.installedPlugins["p2"] = makePlugin(id: "p2")
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
 
         let adapter1 = FakePluginSearchAdapter(pluginID: "p1", pluginVersion: "1.0", mediaType: .manga)
         await adapter1.setResults([.manga(Manga(key: "m1", title: "Test"))])
@@ -633,7 +738,8 @@ final class SourceResolverViewModelTests: XCTestCase {
     // 14. no compatible plugins has its own empty state
     func testNoCompatiblePlugins() async throws {
         let media = makeDiscoverMedia()
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
 
         let exp = expectation(description: "Empty")
         let sub = vm.$state.sink { state in
@@ -648,7 +754,8 @@ final class SourceResolverViewModelTests: XCTestCase {
     func testCompatiblePluginsWithNoCandidates() async throws {
         let media = makeDiscoverMedia()
         pluginProvider.installedPlugins["p1"] = makePlugin()
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let adapter = FakePluginSearchAdapter(pluginID: "p1", pluginVersion: "1.0", mediaType: .manga)
         pluginProvider.configuredAdapters["p1"] = adapter
 
@@ -665,7 +772,8 @@ final class SourceResolverViewModelTests: XCTestCase {
     // 16, 17, 18, 19, 20, 21. confirmation, rejection
     func testConfirmationAndRejection() async throws {
         let media = makeDiscoverMedia()
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let match = MatchedSource(pluginID: "p1", pluginVersion: "1.0", media: .manga(Manga(key: "m1", title: "Test")), matchMethod: .exactPreferred, score: 1.0, decision: .autoConfirm)
 
         try await vm.rejectMatch(match)
@@ -707,7 +815,8 @@ final class SourceResolverViewModelTests: XCTestCase {
     func testCancellation() async throws {
         let media = makeDiscoverMedia()
         pluginProvider.installedPlugins["p1"] = makePlugin()
-        let vm = SourceResolverViewModel(media: media, repository: repository, pluginManager: pluginProvider)
+        let vm = SourceResolverViewModel(media: media, repository: repository, pluginProvider: pluginProvider,
+            routeFactory: SourceRouteFactory())
         let adapter = FakePluginSearchAdapter(pluginID: "p1", pluginVersion: "1.0", mediaType: .manga)
         pluginProvider.configuredAdapters["p1"] = adapter
 
@@ -739,15 +848,15 @@ final class SourceResolverViewModelTests: XCTestCase {
         sub3.cancel()
     }
     // Helpers
-    private func makeDiscoverMedia(type: String = "MANGA") -> DiscoverMedia {
+    func makeDiscoverMedia(type: String = "MANGA") -> DiscoverMedia {
         DiscoverMedia(id: 1, title: "Test", titleEnglish: nil, titleRomaji: nil, titleNative: nil, synonyms: [], coverImage: nil, bannerImage: nil, format: nil, status: nil, description: nil, cleanDescription: nil, genres: nil, averageScore: nil, episodes: nil, chapters: nil, season: nil, seasonYear: nil, type: type, recommendations: nil)
     }
 
-    private func makePlugin(id: String = "p1", version: String = "1.0", type: PluginType = .manga) -> InstalledPlugin {
+    func makePlugin(id: String = "p1", version: String = "1.0", type: PluginType = .manga) -> InstalledPlugin {
         InstalledPlugin(url: URL(fileURLWithPath: "/"), info: PluginInfo(id: id, name: id, version: version, minAppVersion: "1.0", type: type), iconData: nil)
     }
 
-    private func openSavedSourceAndWait(
+    func openSavedSourceAndWait(
         _ viewModel: SourceResolverViewModel,
         mapping: SourceMappingRecord,
         payload: ResolvedPluginMedia
@@ -765,7 +874,7 @@ final class SourceResolverViewModelTests: XCTestCase {
         subscription.cancel()
     }
 
-    private func resolveAndWait(_ viewModel: SourceResolverViewModel) async {
+    func resolveAndWait(_ viewModel: SourceResolverViewModel) async {
         let resolutionCompleted = expectation(description: "Resolution completed")
         var didFulfill = false
         let subscription = viewModel.$state.sink { state in
@@ -784,17 +893,41 @@ final class SourceResolverViewModelTests: XCTestCase {
         subscription.cancel()
     }
 
-    private func makeMappingRecord(mediaType: PluginMediaType = .manga, version: Int = 1, payload: ResolvedPluginMedia = .manga(Manga(key: "m1", title: "Test")), payloadVersionOverride: Int? = nil, payloadOverride: Data? = nil, pluginVersionOverride: String? = nil) -> SourceMappingRecord {
+    func makeMappingRecord(mediaType: PluginMediaType = .manga, version: Int = 1, payload: ResolvedPluginMedia = .manga(Manga(key: "m1", title: "Test")), payloadVersionOverride: Int? = nil, payloadOverride: Data? = nil, pluginVersionOverride: String? = nil) -> SourceMappingRecord {
         let snapshot = SourceMediaSnapshot(version: version, payload: payload)
-        let data = try! JSONEncoder().encode(snapshot)
+        let data = (try? JSONEncoder().encode(snapshot)) ?? Data()
         return SourceMappingRecord(canonicalProvider: "anilist", canonicalMediaId: "1", mediaType: mediaType, pluginId: "p1", pluginMediaKey: "m1", decision: .autoConfirm, matchMethod: .exactPreferred, confidence: 1.0, titleSnapshot: "Test", createdAt: Date(), updatedAt: Date(), coverURLSnapshot: nil, encodedPayload: payloadOverride ?? data, payloadVersion: payloadVersionOverride ?? 1, pluginVersion: pluginVersionOverride ?? "1.0", lastVerifiedAt: Date())
     }
 
-    private func makeRoute(media: ResolvedPluginMedia) -> SourceRoute {
+    func makeMappingRecordForPlugin(
+        pluginID: String,
+        mediaKey: String,
+        payload: ResolvedPluginMedia
+    ) -> SourceMappingRecord {
+        let snapshot = SourceMediaSnapshot(version: 1, payload: payload)
+        return SourceMappingRecord(
+            canonicalProvider: "anilist",
+            canonicalMediaId: "1",
+            mediaType: .manga,
+            pluginId: pluginID,
+            pluginMediaKey: mediaKey,
+            decision: .autoConfirm,
+            matchMethod: .exactPreferred,
+            confidence: 1,
+            titleSnapshot: mediaKey,
+            createdAt: Date(),
+            updatedAt: Date(),
+            encodedPayload: try? JSONEncoder().encode(snapshot),
+            payloadVersion: 1,
+            pluginVersion: "1.0"
+        )
+    }
+
+    func makeRoute(media: ResolvedPluginMedia) -> SourceRoute {
         SourceRoute(media: media, pluginID: "p1", runner: ItoRunner(), anilistID: 1)
     }
 
-    private func makeMangaMatch() -> MatchedSource {
+    func makeMangaMatch() -> MatchedSource {
         MatchedSource(
             pluginID: "p1",
             pluginVersion: "1.0",
@@ -805,7 +938,7 @@ final class SourceResolverViewModelTests: XCTestCase {
         )
     }
 
-    private func makeCompleteManga() -> Manga {
+    func makeCompleteManga() -> Manga {
         Manga(
             key: "m1",
             title: "Complete Manga",
@@ -829,7 +962,7 @@ final class SourceResolverViewModelTests: XCTestCase {
         )
     }
 
-    private func makeCompleteAnime() -> Anime {
+    func makeCompleteAnime() -> Anime {
         Anime(
             key: "a1",
             title: "Complete Anime",
@@ -853,9 +986,33 @@ final class SourceResolverViewModelTests: XCTestCase {
         )
     }
 
-    private func libraryItemCount() throws -> Int {
+    func libraryItemCount() throws -> Int {
         try dbQueue.read { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM libraryItem") ?? 0
         }
+    }
+
+    func sourceFile(_ path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+
+    func waitUntil(
+        timeout: TimeInterval = 2,
+        _ condition: @escaping @MainActor () async -> Bool
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !(await condition()), Date() < deadline {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let didSatisfyCondition = await condition()
+        XCTAssertTrue(didSatisfyCondition)
     }
 }

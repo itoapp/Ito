@@ -453,6 +453,9 @@ public final class DurableStateBootstrap: ObservableObject {
             notificationManager: runtime.notificationManager,
             storageManager: runtime.storageManager,
             discordRPCManager: runtime.discordRPCManager,
+            sourceMappingRepository: GRDBSourceMappingRepository(dbWriter: dbPool),
+            discoverDetailService: DiscoverManager.shared,
+            discoverDetailThemeService: ThemeManager.shared,
             recentSearchDefaults: runtime.recentSearchDefaults,
             browsePluginsDirectory: installedPluginsDirectory
         )
