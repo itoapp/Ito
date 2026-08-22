@@ -452,18 +452,21 @@ final class RepositoriesViewModelTests: XCTestCase {
         XCTAssertFalse(scopeSource.contains("storedRepoDetailViewModel"))
     }
 
-    func testPR7BScreensRemainOutsideRepositoryManagementMigration() throws {
+    func testPR7BScreensRemainIsolatedFromRepositoryManagementMigration() throws {
         for path in [
             "Ito/Views/Browse/SourceView.swift",
             "Ito/Views/Browse/ListingView.swift",
-            "Ito/Views/Browse/PluginSettingsView.swift"
+            "Ito/Views/Browse/PluginSettingsView.swift",
+            "Ito/ViewModels/SourceViewModel.swift",
+            "Ito/ViewModels/ListingViewModel.swift",
+            "Ito/ViewModels/PluginSettingsViewModel.swift"
         ] {
             let source = try sourceFile(path)
             XCTAssertFalse(source.contains("RepositoriesViewModel"))
             XCTAssertFalse(source.contains("RepoDetailViewModel"))
         }
-        for forbiddenType in ["SourceViewModel", "ListingViewModel", "PluginSettingsViewModel"] {
-            XCTAssertFalse(try allProductionSwiftSource().contains("final class \(forbiddenType)"))
+        for migratedType in ["SourceViewModel", "ListingViewModel", "PluginSettingsViewModel"] {
+            XCTAssertTrue(try allProductionSwiftSource().contains("final class \(migratedType)"))
         }
     }
 

@@ -8,18 +8,24 @@ struct AppViewFactory {
     private let repositoryManagement: PreparedRepositoryManagementDependencies
     private let pluginManager: any BrowsePluginManaging
     private let repositoryMessagePresenter: any RepositoryManagementMessagePresenting
+    private let sourceDependencies: PreparedSourceDependencies
+    private let sourceMessagePresenter: any SourceMessagePresenting
 
     init(
         rootModels: RootModelStore,
         repositoryManagement: PreparedRepositoryManagementDependencies,
         pluginManager: any BrowsePluginManaging,
         repositoryMessagePresenter: any RepositoryManagementMessagePresenting,
+        sourceDependencies: PreparedSourceDependencies,
+        sourceMessagePresenter: any SourceMessagePresenting,
         searchRouteFactory: SearchRouteFactory = SearchRouteFactory()
     ) {
         self.rootModels = rootModels
         self.repositoryManagement = repositoryManagement
         self.pluginManager = pluginManager
         self.repositoryMessagePresenter = repositoryMessagePresenter
+        self.sourceDependencies = sourceDependencies
+        self.sourceMessagePresenter = sourceMessagePresenter
         self.searchRouteFactory = searchRouteFactory
     }
 
@@ -33,7 +39,53 @@ struct AppViewFactory {
     func makeBrowseView() -> BrowseView {
         BrowseView(
             viewModel: rootModels.browseViewModel,
-            makeRepositoriesView: makeRepositoriesView
+            makeRepositoriesView: makeRepositoriesView,
+            makeSourceView: makeSourceView
+        )
+    }
+
+    func makeSourceView(plugin: InstalledPlugin) -> SourceView {
+        SourceView(
+            viewModel: makeSourceViewModel(plugin: plugin),
+            viewFactory: self
+        )
+    }
+
+    func makeSourceViewModel(plugin: InstalledPlugin) -> SourceViewModel {
+        SourceViewModel(
+            plugin: plugin,
+            runnerProvider: sourceDependencies.runnerProvider,
+            pluginStatePublisher: sourceDependencies.pluginStatePublisher,
+            fileDeletion: sourceDependencies.fileDeletion,
+            messagePresenter: sourceMessagePresenter
+        )
+    }
+
+    func makeListingView(destination: SourceListingDestination) -> ListingView {
+        ListingView(
+            viewModel: makeListingViewModel(destination: destination),
+            routeFactory: searchRouteFactory
+        )
+    }
+
+    func makeListingViewModel(destination: SourceListingDestination) -> ListingViewModel {
+        ListingViewModel(destination: destination)
+    }
+
+    func makePluginSettingsView(destination: SourceSettingsDestination) -> PluginSettingsView {
+        PluginSettingsView(
+            viewModel: makePluginSettingsViewModel(destination: destination)
+        )
+    }
+
+    func makePluginSettingsViewModel(
+        destination: SourceSettingsDestination
+    ) -> PluginSettingsViewModel {
+        PluginSettingsViewModel(
+            plugin: destination.plugin,
+            schema: destination.schema,
+            settingsStore: sourceDependencies.settingsStore,
+            messagePresenter: sourceMessagePresenter
         )
     }
 

@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import ito_runner
 
 @MainActor
 protocol BrowsePluginManaging: AnyObject {
@@ -77,7 +78,7 @@ enum BrowsePluginFileError: LocalizedError {
 }
 
 @MainActor
-final class LocalBrowsePluginFileOperations: BrowsePluginFileOperating {
+final class LocalBrowsePluginFileOperations: BrowsePluginFileOperating, SourcePluginFileDeleting {
     private let fileManager: FileManager
     private let applicationSupportDirectory: URL?
     let configuredPluginsDirectory: URL?
@@ -122,6 +123,72 @@ final class LocalBrowsePluginFileOperations: BrowsePluginFileOperating {
 
     func deletePluginFile(at url: URL) throws {
         try fileManager.removeItem(at: url)
+    }
+
+    func snapshotPluginFile(for plugin: InstalledPlugin) throws -> SourcePluginFileSnapshot {
+        let pluginURL = try validatedPluginURL(plugin.url)
+        let fileData = try Data(contentsOf: pluginURL, options: .mappedIfSafe)
+        let extracted = try ItoRunner.extractPluginInfo(from: pluginURL)
+        let identity = SourcePluginDeletionIdentity(
+            fileURL: pluginURL,
+            info: extracted.manifest.info,
+            iconData: extracted.icon
+        )
+        guard identity == SourcePluginDeletionIdentity(plugin: plugin) else {
+            throw SourcePluginFileError.stalePluginIdentity
+        }
+        return SourcePluginFileSnapshot(identity: identity, fileData: fileData)
+    }
+
+    func stagePluginFileDeletion(
+        from snapshot: SourcePluginFileSnapshot
+    ) throws -> any PluginFileDeletionTransaction {
+        let pluginURL = try validatedPluginURL(snapshot.identity.fileURL)
+        let pluginsDirectory = try pluginsDirectory().standardizedFileURL
+        let stagedURL = pluginsDirectory.appendingPathComponent(
+            ".source-delete-\(UUID().uuidString).pending",
+            isDirectory: false
+        )
+        try fileManager.moveItem(at: pluginURL, to: stagedURL)
+        let transaction = LocalPluginFileDeletionTransaction(
+            fileManager: fileManager,
+            originalURL: pluginURL,
+            stagedURL: stagedURL
+        )
+
+        do {
+            let stagedData = try Data(contentsOf: stagedURL, options: .mappedIfSafe)
+            let extracted = try ItoRunner.extractPluginInfo(from: stagedURL)
+            let stagedIdentity = SourcePluginDeletionIdentity(
+                fileURL: pluginURL,
+                info: extracted.manifest.info,
+                iconData: extracted.icon
+            )
+            guard snapshot.matches(fileData: stagedData), stagedIdentity == snapshot.identity else {
+                throw SourcePluginFileError.stalePluginIdentity
+            }
+            return transaction
+        } catch {
+            do {
+                try transaction.rollback()
+            } catch {
+                throw SourcePluginFileError.rollbackFailed
+            }
+            throw error
+        }
+    }
+
+    private func validatedPluginURL(_ url: URL) throws -> URL {
+        let pluginsDirectory = try pluginsDirectory().standardizedFileURL
+        let pluginURL = url.standardizedFileURL
+        guard pluginURL.pathExtension.lowercased() == "ito",
+              pluginURL.deletingLastPathComponent().path == pluginsDirectory.path else {
+            throw SourcePluginFileError.invalidPluginLocation
+        }
+        guard fileManager.fileExists(atPath: pluginURL.path) else {
+            throw SourcePluginFileError.missingPluginFile
+        }
+        return pluginURL
     }
 
     private func pluginsDirectory() throws -> URL {

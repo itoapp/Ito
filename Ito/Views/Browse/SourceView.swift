@@ -1,4 +1,3 @@
-import OSLog
 import SwiftUI
 import Nuke
 import NukeUI
@@ -16,169 +15,189 @@ extension PluginInfo {
 }
 
 struct SourceView: View {
-    @EnvironmentObject private var pluginManager: PluginManager
-    let plugin: InstalledPlugin
-
-    @State private var runner: ItoRunner?
-    @State private var homeLayout: HomeLayout?
-
-    // Fallback states for search
-    @State private var searchMangas: [Manga] = []
-    @State private var searchAnimes: [Anime] = []
-    @State private var searchNovels: [Novel] = []
-
-    @State private var settingsSchema: SettingsSchema?
-    @State private var showSettings = false
-
-    @State private var isLoaded = false
-    @State private var errorMessage: String?
-
-    @State private var searchQuery: String = ""
-    @State private var searchTask: Task<Void, Never>?
+    @StateObject private var viewModel: SourceViewModel
+    private let viewFactory: AppViewFactory
     @Environment(\.dismiss) private var dismiss
 
+    init(viewModel: SourceViewModel, viewFactory: AppViewFactory) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+        self.viewFactory = viewFactory
+    }
+
     var body: some View {
-        Group {
-            if !isLoaded && errorMessage == nil {
-                ProgressView("Loading Source...")
-            } else if let error = errorMessage {
-                Text("Error: \(error)").foregroundColor(.red)
-            } else {
-                if let layout = homeLayout, searchQuery.isEmpty {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            if plugin.info.isArchived {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    HStack {
-                                        Label {
-                                            Text("Archived Plugin")
-                                                .font(.headline)
-                                                .foregroundColor(.primary)
-                                        } icon: {
-                                            Image(systemName: "archivebox.fill")
-                                                .foregroundStyle(.orange)
-                                        }
-                                        Spacer()
-                                        if let dateStr = plugin.info.archivedDate {
-                                            Text(dateStr)
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-
-                                    Text(.init(plugin.info.archiveNotice))
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                        .tint(.accentColor)
-                                        .fixedSize(horizontal: false, vertical: true)
-
-                                    Button(role: .destructive) {
-                                        Task {
-                                            do {
-                                                try FileManager.default.removeItem(at: plugin.url)
-                                            } catch {
-                                                await MainActor.run {
-                                                    withAnimation {
-                                                        SnackBarManager.shared.showError("Failed to remove \(plugin.info.name): \(error.localizedDescription)")
-                                                    }
-                                                }
-                                            }
-                                            await pluginManager.reloadInstalledPlugins()
-                                            await MainActor.run {
-                                                dismiss()
-                                            }
-                                        }
-                                    } label: {
-                                        Label("Remove Plugin", systemImage: "trash")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.large)
-                                }
-                                .padding()
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .padding(.horizontal)
-                            }
-
-                            ForEach(layout.components.indices, id: \.self) { index in
-                                let component = layout.components[index]
-                                Section(header:
-                                    HStack {
-                                        if let listing = component.value.listing, let runner = runner {
-                                            NavigationLink(destination: ListingView(plugin: plugin, runner: runner, listing: listing, title: component.title ?? listing.name)) {
-                                                HStack {
-                                                    Text(component.title ?? "")
-                                                        .font(.title2)
-                                                        .fontWeight(.bold)
-                                                        .foregroundColor(.primary)
-                                                    Image(systemName: "chevron.right")
-                                                        .foregroundColor(.secondary)
-                                                }
-                                            }
-                                        } else {
-                                            Text(component.title ?? "")
-                                                .font(.title2)
-                                                .fontWeight(.bold)
-                                        }
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal)
-                                ) {
-                                    renderComponent(component.value)
-                                }
-                            }
+        sourceContent
+            .navigationTitle(viewModel.plugin.info.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if viewModel.settingsDestination != nil {
+                        Button(action: { viewModel.showSettings = true }) {
+                            Image(systemName: "gear")
                         }
-                        .padding(.vertical)
                     }
+                }
+            }
+            .sheet(isPresented: $viewModel.showSettings, onDismiss: {
+                Task { await viewModel.reloadAfterSettingsChange() }
+            }) {
+                if let destination = viewModel.settingsDestination {
+                    viewFactory.makePluginSettingsView(destination: destination)
+                }
+            }
+            .searchable(text: $viewModel.searchQuery, prompt: "Search source...")
+            .onChange(of: viewModel.searchQuery) { query in
+                viewModel.performSearch(query: query)
+            }
+            .onChange(of: viewModel.shouldDismiss) { shouldDismiss in
+                if shouldDismiss { dismiss() }
+            }
+            .alert("Remove \(viewModel.plugin.info.name)?", isPresented: $viewModel.showArchivedPluginDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    viewModel.cancelArchivedPluginDeletion()
+                }
+                Button("Remove", role: .destructive) {
+                    Task { await viewModel.confirmArchivedPluginDeletion() }
+                }
+            } message: {
+                Text("This permanently removes the archived plugin from this device.")
+            }
+            .task {
+                await viewModel.loadIfNeeded()
+            }
+            .onDisappear {
+                viewModel.cancelActiveOperations()
+            }
+    }
+
+    @ViewBuilder
+    private var sourceContent: some View {
+        switch viewModel.phase {
+        case .idle, .loading:
+            ProgressView("Loading Source...")
+        case .failure(let error):
+            failureView(message: "Error: \(error)") {
+                Task { await viewModel.retry() }
+            }
+        case .cancelled:
+            failureView(message: "Source loading was cancelled.") {
+                Task { await viewModel.retry() }
+            }
+        case .content, .empty:
+            if !viewModel.hasActiveSearchQuery {
+                homeContent
+            } else {
+                searchContent
+            }
+        }
+    }
+
+    private var homeContent: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                if viewModel.plugin.info.isArchived {
+                    archivedPluginBanner
+                }
+
+                if let layout = viewModel.homeLayout {
+                    ForEach(layout.components.indices, id: \.self) { index in
+                        let component = layout.components[index]
+                        Section(header: sectionHeader(component)) {
+                            renderComponent(component.value)
+                        }
+                    }
+                }
+            }
+            .padding(.vertical)
+        }
+    }
+
+    private var archivedPluginBanner: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label {
+                    Text("Archived Plugin")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                } icon: {
+                    Image(systemName: "archivebox.fill")
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
+                if let date = viewModel.plugin.info.archivedDate {
+                    Text(date)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text(.init(viewModel.plugin.info.archiveNotice))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .tint(.accentColor)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(role: .destructive) {
+                viewModel.requestArchivedPluginDeletion()
+            } label: {
+                if viewModel.isDeletingArchivedPlugin {
+                    ProgressView().frame(maxWidth: .infinity)
                 } else {
-                    renderSearchList()
+                    Label("Remove Plugin", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
                 }
             }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .disabled(viewModel.isDeletingArchivedPlugin)
+
+            if let error = viewModel.archivedPluginDeleteError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
         }
-        .navigationTitle(plugin.info.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if settingsSchema != nil {
-                    Button(action: { showSettings = true }) {
-                        Image(systemName: "gear")
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func sectionHeader(_ component: HomeComponent) -> some View {
+        HStack {
+            if let listing = component.value.listing,
+               let destination = viewModel.listingDestination(
+                listing: listing,
+                title: component.title ?? listing.name
+               ) {
+                NavigationLink(destination: viewFactory.makeListingView(destination: destination)) {
+                    HStack {
+                        Text(component.title ?? "")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
                     }
                 }
+            } else {
+                Text(component.title ?? "")
+                    .font(.title2)
+                    .fontWeight(.bold)
             }
+            Spacer()
         }
-        .sheet(isPresented: $showSettings, onDismiss: {
-            Task {
-                // Evict the cached runner so settings changes take effect on reload
-                pluginManager.evictRunner(for: plugin.id)
-                isLoaded = false
-                homeLayout = nil
-                runner = nil
-                await loadPlugin()
-            }
-        }) {
-            if let schema = settingsSchema {
-                PluginSettingsView(plugin: plugin, schema: schema)
-            }
-        }
-        .searchable(text: $searchQuery, prompt: "Search source...")
-        .onChange(of: searchQuery) { newValue in
-            performSearch(query: newValue)
-        }
-        .task {
-            await loadPlugin()
-        }
+        .padding(.horizontal)
     }
 
     @ViewBuilder
     private func renderComponent(_ value: HomeComponentValue) -> some View {
-        if let pluginRunner = runner {
-            switch value {
+        switch value {
             case .scroller(let mangas, _):
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         ForEach(mangas, id: \.key) { manga in
-                            MediaCardView(media: manga) { MediaDetailView(runner: pluginRunner, media: manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getMangaUpdate(manga: $0) } }
+                            MediaCardView(media: manga) { mediaDestination(manga) }
                         }
                     }
                     .padding(.horizontal)
@@ -186,7 +205,7 @@ struct SourceView: View {
             case .mangaList(_, _, let mangas, _):
                 VStack {
                     ForEach(mangas, id: \.key) { manga in
-                        MediaRowView(media: manga) { MediaDetailView(runner: pluginRunner, media: manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getMangaUpdate(manga: $0) } }
+                        MediaRowView(media: manga) { mediaDestination(manga) }
                         Divider().padding(.leading, 72)
                     }
                 }
@@ -195,7 +214,9 @@ struct SourceView: View {
                     ForEach(entries.indices, id: \.self) { idx in
                         let entry = entries[idx]
                         VStack(spacing: 2) {
-                            MediaRowView(media: entry.manga) { MediaDetailView(runner: pluginRunner, media: entry.manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getMangaUpdate(manga: $0) } }
+                            MediaRowView(media: entry.manga) {
+                                mediaDestination(entry.manga)
+                            }
                             HStack {
                                 Text(entry.chapter.title ?? "Chapter \(entry.chapter.chapter.map { String(Int($0)) } ?? "—")")
                                     .font(.caption)
@@ -214,7 +235,7 @@ struct SourceView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
                         ForEach(mangas, id: \.key) { manga in
-                            MediaBigCardView(media: manga) { MediaDetailView(runner: pluginRunner, media: manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getMangaUpdate(manga: $0) } }
+                            MediaBigCardView(media: manga) { mediaDestination(manga) }
                         }
                     }
                     .padding(.horizontal)
@@ -223,7 +244,7 @@ struct SourceView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         ForEach(animes, id: \.key) { anime in
-                            MediaCardView(media: anime) { MediaDetailView(runner: pluginRunner, media: anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) } }
+                            MediaCardView(media: anime) { mediaDestination(anime) }
                         }
                     }
                     .padding(.horizontal)
@@ -231,7 +252,7 @@ struct SourceView: View {
             case .animeList(_, _, let animes, _):
                 VStack {
                     ForEach(animes, id: \.key) { anime in
-                        MediaRowView(media: anime) { MediaDetailView(runner: pluginRunner, media: anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) } }
+                        MediaRowView(media: anime) { mediaDestination(anime) }
                         Divider().padding(.leading, 72)
                     }
                 }
@@ -240,7 +261,9 @@ struct SourceView: View {
                     ForEach(entries.indices, id: \.self) { idx in
                         let entry = entries[idx]
                         VStack(spacing: 2) {
-                            MediaRowView(media: entry.anime) { MediaDetailView(runner: pluginRunner, media: entry.anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) } }
+                            MediaRowView(media: entry.anime) {
+                                mediaDestination(entry.anime)
+                            }
                             HStack {
                                 Text(entry.episode.title ?? "Episode \(entry.episode.episode.map { String(Int($0)) } ?? "—")")
                                     .font(.caption)
@@ -259,7 +282,7 @@ struct SourceView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
                         ForEach(animes, id: \.key) { anime in
-                            MediaBigCardView(media: anime) { MediaDetailView(runner: pluginRunner, media: anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) } }
+                            MediaBigCardView(media: anime) { mediaDestination(anime) }
                         }
                     }
                     .padding(.horizontal)
@@ -268,7 +291,7 @@ struct SourceView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         ForEach(novels, id: \.key) { novel in
-                            MediaCardView(media: novel) { MediaDetailView(runner: pluginRunner, media: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
+                            MediaCardView(media: novel) { mediaDestination(novel) }
                         }
                     }
                     .padding(.horizontal)
@@ -276,7 +299,7 @@ struct SourceView: View {
             case .novelList(_, _, let novels, _):
                 VStack {
                     ForEach(novels, id: \.key) { novel in
-                        MediaRowView(media: novel) { MediaDetailView(runner: pluginRunner, media: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
+                        MediaRowView(media: novel) { mediaDestination(novel) }
                         Divider().padding(.leading, 72)
                     }
                 }
@@ -285,7 +308,9 @@ struct SourceView: View {
                     ForEach(entries.indices, id: \.self) { idx in
                         let entry = entries[idx]
                         VStack(spacing: 2) {
-                            MediaRowView(media: entry.novel) { MediaDetailView(runner: pluginRunner, media: entry.novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
+                            MediaRowView(media: entry.novel) {
+                                mediaDestination(entry.novel)
+                            }
                             HStack {
                                 Text(entry.chapter.title ?? "Chapter \(entry.chapter.chapter.map { String(Int($0)) } ?? "—")")
                                     .font(.caption)
@@ -325,7 +350,7 @@ struct SourceView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
                         ForEach(novels, id: \.key) { novel in
-                            MediaBigCardView(media: novel) { MediaDetailView(runner: pluginRunner, media: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
+                            MediaBigCardView(media: novel) { mediaDestination(novel) }
                         }
                     }
                     .padding(.horizontal)
@@ -334,135 +359,85 @@ struct SourceView: View {
                 Text("Unsupported component type.")
                     .foregroundColor(.secondary)
                     .padding()
+        }
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
+        switch viewModel.searchPhase {
+        case .idle, .loading:
+            ProgressView("Searching source...")
+        case .failure(let error):
+            failureView(message: "Search error: \(error)") {
+                viewModel.performSearch(query: viewModel.searchQuery)
             }
+        case .cancelled:
+            failureView(message: "Search was cancelled.") {
+                viewModel.performSearch(query: viewModel.searchQuery)
+            }
+        case .empty:
+            Text("No results found.")
+                .foregroundStyle(.secondary)
+        case .content:
+            renderSearchList()
+        }
+    }
+
+    @ViewBuilder
+    private func renderSearchList() -> some View {
+        switch viewModel.plugin.info.type {
+        case .anime:
+            List(viewModel.searchAnimes, id: \.key) { anime in
+                MediaRowView(media: anime) { mediaDestination(anime) }
+            }
+            .listStyle(.plain)
+        case .manga:
+            List(viewModel.searchMangas, id: \.key) { manga in
+                MediaRowView(media: manga) { mediaDestination(manga) }
+            }
+            .listStyle(.plain)
+        case .novel:
+            List(viewModel.searchNovels, id: \.key) { novel in
+                MediaRowView(media: novel) { mediaDestination(novel) }
+            }
+            .listStyle(.plain)
+        @unknown default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func mediaDestination(_ manga: Manga) -> some View {
+        if let destination = viewModel.destination(for: manga) {
+            viewFactory.searchRouteFactory.destination(for: destination)
         } else {
             EmptyView()
         }
     }
 
     @ViewBuilder
-    private func renderSearchList() -> some View {
-        if let pluginRunner = runner {
-            switch plugin.info.type {
-            case .anime:
-                List(searchAnimes, id: \.key) { anime in
-                    MediaRowView(media: anime) { MediaDetailView(runner: pluginRunner, media: anime, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) } }
-                }
-                .listStyle(.plain)
-            case .manga:
-                List(searchMangas, id: \.key) { manga in
-                    MediaRowView(media: manga) { MediaDetailView(runner: pluginRunner, media: manga, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getMangaUpdate(manga: $0) } }
-                }
-                .listStyle(.plain)
-            case .novel:
-                List(searchNovels, id: \.key) { novel in
-                    MediaRowView(media: novel) { MediaDetailView(runner: pluginRunner, media: novel, pluginId: plugin.url.deletingPathExtension().lastPathComponent) { try await pluginRunner.getNovelUpdate(novel: $0) } }
-                }
-                .listStyle(.plain)
-            }
+    private func mediaDestination(_ anime: Anime) -> some View {
+        if let destination = viewModel.destination(for: anime) {
+            viewFactory.searchRouteFactory.destination(for: destination)
         } else {
             EmptyView()
         }
     }
 
-    private func performSearch(query: String) {
-        searchTask?.cancel()
-
-        guard !query.isEmpty else {
-            // Clear stale search results; the home layout is already loaded
-            searchMangas = []
-            searchAnimes = []
-            searchNovels = []
-            return
-        }
-
-        searchTask = Task {
-            // Debounce
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled, let pluginRunner = self.runner else {
-                AppLogger.ui.debug("🔍 [SourceView] Search skipped — cancelled or runner nil")
-                return
-            }
-
-            do {
-                AppLogger.ui.debug("\("🔍 [SourceView] Searching '\(query)")' on \(plugin.info.name)")
-                switch plugin.info.type {
-                case .anime:
-                    let result = try await pluginRunner.getSearchAnimeList(query: query, page: 1, filters: [])
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run { self.searchAnimes = result.entries }
-                case .manga:
-                    let result = try await pluginRunner.getSearchMangaList(query: query, page: 1, filters: [])
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run { self.searchMangas = result.entries }
-                case .novel:
-                    let result = try await pluginRunner.getSearchNovelList(query: query, page: 1, filters: [])
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run { self.searchNovels = result.entries }
-                }
-                AppLogger.ui.debug("\("🔍 [SourceView] Search complete for '\(query)")'")
-            } catch is CancellationError {
-                AppLogger.ui.debug("\("🔍 [SourceView] Search cancelled for '\(query)")'")
-            } catch {
-                AppLogger.ui.error("🔍 [SourceView] Search failed: \(error)")
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    self.errorMessage = "Search error: \(error.localizedDescription)"
-                }
-            }
+    @ViewBuilder
+    private func mediaDestination(_ novel: Novel) -> some View {
+        if let destination = viewModel.destination(for: novel) {
+            viewFactory.searchRouteFactory.destination(for: destination)
+        } else {
+            EmptyView()
         }
     }
 
-    private func loadPlugin() async {
-        guard !isLoaded else {
-            AppLogger.ui.debug("📦 [SourceView] loadPlugin skipped — already loaded for \(plugin.info.name)")
-            return
-        }
-        AppLogger.ui.debug("\("📦 [SourceView] loadPlugin START for \(plugin.info.name)") (id: \(plugin.id))")
-        do {
-            AppLogger.ui.debug("📦 [SourceView] Getting cached runner from PluginManager...")
-            let pluginRunner = try await pluginManager.getRunner(for: plugin.id)
-            AppLogger.ui.debug("📦 [SourceView] Runner obtained")
-
-            guard !Task.isCancelled else {
-                AppLogger.ui.debug("📦 [SourceView] Task cancelled after getRunner")
-                return
-            }
-
-            self.runner = pluginRunner
-
-            AppLogger.ui.debug("📦 [SourceView] Fetching settings schema...")
-            let schema = try? await pluginRunner.getSettings()
-
-            guard !Task.isCancelled else {
-                AppLogger.ui.debug("📦 [SourceView] Task cancelled after getSettings")
-                return
-            }
-
-            AppLogger.ui.debug("📦 [SourceView] Fetching home layout...")
-            let layout = try await pluginRunner.getHome()
-
-            guard !Task.isCancelled else {
-                AppLogger.ui.debug("📦 [SourceView] Task cancelled after getHome")
-                return
-            }
-
-            AppLogger.ui.debug("\("📦 [SourceView] loadPlugin SUCCESS — \(layout.components.count)") components")
-            await MainActor.run {
-                self.settingsSchema = schema
-                self.homeLayout = layout
-                self.isLoaded = true
-            }
-        } catch is CancellationError {
-            // Don't mark isLoaded — let a future .task re-attempt
-            AppLogger.ui.debug("📦 [SourceView] loadPlugin CANCELLED for \(plugin.info.name)")
-        } catch {
-            AppLogger.ui.error("📦 [SourceView] loadPlugin FAILED for \(self.plugin.info.name): \(error)")
-            await MainActor.run {
-                SnackBarManager.shared.showError(error, title: "Failed to load \(self.plugin.info.name)")
-                self.errorMessage = error.localizedDescription
-                self.isLoaded = true
-            }
+    private func failureView(message: String, retry: @escaping () -> Void) -> some View {
+        VStack(spacing: 12) {
+            Text(message).foregroundColor(.red)
+            Button("Retry", action: retry)
+                .buttonStyle(.bordered)
         }
     }
 }

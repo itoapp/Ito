@@ -13,6 +13,12 @@ enum AppMessageKind: Equatable {
     case repositoryRefreshFailed
     case repositoryInstallFailed
     case debugLogsCopied
+    case sourceLoadFailed
+    case sourceSearchFailed
+    case pluginSettingsLoadFailed
+    case pluginSettingsPersistenceFailed
+    case pluginSettingsReloadFailed
+    case sourceArchivedPluginDeleteFailed
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -95,6 +101,42 @@ extension AppMessageKind {
                 style: .success,
                 title: "Copied to clipboard",
                 detail: nil
+            )
+        case .sourceLoadFailed:
+            return .init(
+                style: .error,
+                title: "Failed to load source",
+                detail: "Please try again."
+            )
+        case .sourceSearchFailed:
+            return .init(
+                style: .error,
+                title: "Search failed",
+                detail: "The source could not complete the search."
+            )
+        case .pluginSettingsLoadFailed:
+            return .init(
+                style: .error,
+                title: "Settings unavailable",
+                detail: "Plugin settings could not be loaded."
+            )
+        case .pluginSettingsPersistenceFailed:
+            return .init(
+                style: .error,
+                title: "Settings not saved",
+                detail: "The plugin setting could not be saved."
+            )
+        case .pluginSettingsReloadFailed:
+            return .init(
+                style: .error,
+                title: "Settings reload failed",
+                detail: "Plugin settings could not be reloaded."
+            )
+        case .sourceArchivedPluginDeleteFailed:
+            return .init(
+                style: .error,
+                title: "Failed to remove plugin",
+                detail: "Plugin removal encountered an error. Refresh plugin state before retrying."
             )
         }
     }
