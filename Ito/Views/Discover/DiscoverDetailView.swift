@@ -13,33 +13,34 @@ private struct DetailNavTitleKey: PreferenceKey {
 }
 
 struct DiscoverDetailView: View {
-    @State var media: DiscoverMedia
-
-    @ObservedObject private var pluginManager: PluginManager
-    @StateObject private var resolverViewModel: SourceResolverViewModel
+    @StateObject private var viewModel: DiscoverDetailViewModel
+    private let viewFactory: AppViewFactory
     @State private var isDescriptionExpanded = false
     @State private var showNavTitle = false
 
-    @State private var themeDominant: Color?
-    @State private var themeSecondary: Color?
+    init(viewModel: DiscoverDetailViewModel, viewFactory: AppViewFactory) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+        self.viewFactory = viewFactory
+    }
 
-    // Manual Rejection Alert
-    @State private var mappingToReject: MatchedSource?
-    @State private var showingRejectConfirmation = false
+    private var media: DiscoverMedia { viewModel.media }
+    private var resolverViewModel: SourceResolverViewModel { viewModel.sourceResolver }
+    private var themeDominant: Color? { viewModel.theme.map { Color(hex: $0.dominantHex) } }
+    private var themeSecondary: Color? { viewModel.theme.map { Color(hex: $0.secondaryHex) } }
 
-    // Manual Confirmation Alert for fuzzy/ambiguous
-    @State private var mappingToConfirm: MatchedSource?
-    @State private var showingConfirmAlert = false
-
-    init(media: DiscoverMedia, pluginManager: PluginManager) {
-        self._media = State(initialValue: media)
-        self._pluginManager = ObservedObject(wrappedValue: pluginManager)
-        self._resolverViewModel = StateObject(
-            wrappedValue: SourceResolverViewModel(media: media, pluginManager: pluginManager)
+    private var showingConfirmAlert: Binding<Bool> {
+        Binding(
+            get: { viewModel.confirmationCandidate != nil },
+            set: { _ in }
         )
     }
 
-    private var uniqueMediaKey: String { "anilist_\(media.id)" }
+    private var showingRejectConfirmation: Binding<Bool> {
+        Binding(
+            get: { viewModel.rejectionCandidate != nil },
+            set: { _ in }
+        )
+    }
 
     private var cleanDescription: String? {
         guard let desc = media.description, !desc.isEmpty else { return nil }
@@ -72,16 +73,7 @@ struct DiscoverDetailView: View {
                         statusLabel: media.status?.replacingOccurrences(of: "_", with: " ").capitalized,
                         pluginId: media.averageScore != nil ? "★ \(media.averageScore!)%" : (media.format?.replacingOccurrences(of: "_", with: " ") ?? "Discover"),
                         onImageLoaded: { uiImage in
-                            let key = uniqueMediaKey
-                            Task {
-                                await ThemeManager.shared.extractAndCache(image: uiImage, for: key)
-                                if let theme = await ThemeManager.shared.getTheme(for: key) {
-                                    withAnimation(.easeIn(duration: 0.6)) {
-                                        self.themeDominant = Color(hex: theme.dominantHex)
-                                        self.themeSecondary = Color(hex: theme.secondaryHex)
-                                    }
-                                }
-                            }
+                            viewModel.heroImageLoaded(uiImage)
                         }
                     )
                     .background(
@@ -102,12 +94,15 @@ struct DiscoverDetailView: View {
             NavigationLink(
                 isActive: navigationBinding,
                 destination: {
-                    SourceDestinationHost(resolverViewModel: resolverViewModel)
+                    viewFactory.makeSourceDestinationView(
+                        resolverViewModel: resolverViewModel
+                    )
                 },
                 label: { EmptyView() }
             )
         }
         .coordinateSpace(name: "scroll")
+        .animation(.easeIn(duration: 0.6), value: viewModel.theme)
         .onPreferenceChange(DetailNavTitleKey.self) { heroGone in
             withAnimation(.easeInOut(duration: 0.18)) { showNavTitle = heroGone }
         }
@@ -122,33 +117,21 @@ struct DiscoverDetailView: View {
                 }
             }
         }
-        .task {
-            if let theme = await ThemeManager.shared.getTheme(for: uniqueMediaKey) {
-                self.themeDominant = Color(hex: theme.dominantHex)
-                self.themeSecondary = Color(hex: theme.secondaryHex)
-            }
-
-            if let fetched = try? await DiscoverManager.shared.fetchMediaDetails(id: media.id) {
-                await MainActor.run { self.media = fetched }
-            }
-        }
-        .onAppear {
-            resolverViewModel.startCheckAndResolve()
-        }
-        .alert("Reject Source?", isPresented: $showingRejectConfirmation, presenting: mappingToReject) { match in
+        .task { viewModel.start() }
+        .alert("Reject Source?", isPresented: showingRejectConfirmation, presenting: viewModel.rejectionCandidate) { match in
             Button("Reject", role: .destructive) {
-                resolverViewModel.rejectAndMark(match: match)
+                viewModel.rejectPresentedSource(match)
             }
-            Button("Cancel", role: .cancel) {}
-        } message: { match in
+            Button("Cancel", role: .cancel) { viewModel.cancelRejection() }
+        } message: { _ in
             Text("Are you sure you want to reject this match?")
         }
-        .alert("Confirm Source?", isPresented: $showingConfirmAlert, presenting: mappingToConfirm) { match in
+        .alert("Confirm Source?", isPresented: showingConfirmAlert, presenting: viewModel.confirmationCandidate) { match in
             Button("Confirm", role: .none) {
-                resolverViewModel.confirmAndRoute(match: match)
+                viewModel.confirmPresentedSource(match)
             }
-            Button("Cancel", role: .cancel) {}
-        } message: { match in
+            Button("Cancel", role: .cancel) { viewModel.cancelConfirmation() }
+        } message: { _ in
             Text("This is an ambiguous match. Are you sure you want to link it?")
         }
     }
@@ -167,6 +150,20 @@ struct DiscoverDetailView: View {
             }
 
             infoRow
+
+            if viewModel.detailLoadState == .failed {
+                HStack(spacing: 12) {
+                    Text("Full details could not be refreshed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Retry") {
+                        viewModel.retryDetails()
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+                .padding(.horizontal, 16)
+            }
 
             Divider().padding(.horizontal, 16)
 
@@ -278,7 +275,7 @@ struct DiscoverDetailView: View {
             case .savedSource(let mapping, let payload):
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        if let plugin = pluginManager.installedPlugins[mapping.pluginId],
+                        if let plugin = viewModel.installedPlugins[mapping.pluginId],
                            let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
                             Image(uiImage: uiImage)
                                 .resizable()
@@ -296,7 +293,8 @@ struct DiscoverDetailView: View {
                                 .font(.headline)
                                 .lineLimit(1)
 
-                            let pluginName = pluginManager.installedPlugins[mapping.pluginId]?.info.name ?? mapping.pluginId
+                            let pluginName = viewModel.installedPlugins[mapping.pluginId]?.info.name
+                                ?? mapping.pluginId
                             Text("Saved Source • \(pluginName) • Confirmed")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -310,6 +308,7 @@ struct DiscoverDetailView: View {
                         }
                         .font(.caption.weight(.bold))
                         .buttonStyle(.borderedProminent)
+                        .disabled(resolverViewModel.processingMatchIdentity != nil)
                     }
                     .padding(.horizontal, 16)
 
@@ -319,6 +318,7 @@ struct DiscoverDetailView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 16)
+                    .disabled(resolverViewModel.processingMatchIdentity != nil)
                 }
             case .loading(let matches):
                 VStack(spacing: 12) {
@@ -411,22 +411,20 @@ struct DiscoverDetailView: View {
 
     private func matchesList(_ matches: [MatchedSource]) -> some View {
         VStack(spacing: 0) {
-            ForEach(Array(matches.enumerated()), id: \.offset) { index, match in
+            ForEach(Array(matches.enumerated()), id: \.element.sourceIdentity) { index, match in
                 ResolvedSourceRow(
                     match: match,
-                    pluginManager: pluginManager,
-                    isProcessing: resolverViewModel.processingMatchId == match.media.key(),
+                    installedPlugins: viewModel.installedPlugins,
+                    isProcessing: resolverViewModel.isProcessing(match),
                     onConfirm: {
                         if match.decision == .autoConfirm {
-                            resolverViewModel.confirmAndRoute(match: match)
+                            viewModel.confirmSourceDirectly(match)
                         } else {
-                            mappingToConfirm = match
-                            showingConfirmAlert = true
+                            viewModel.requestConfirmation(for: match)
                         }
                     },
                     onReject: {
-                        mappingToReject = match
-                        showingRejectConfirmation = true
+                        viewModel.requestRejection(for: match)
                     }
                 )
                 if index != matches.count - 1 {
@@ -448,7 +446,7 @@ struct DiscoverDetailView: View {
                 HStack(spacing: 12) {
                     ForEach(recommendations) { recMedia in
                         NavigationLink(
-                            destination: DiscoverDetailView(media: recMedia, pluginManager: pluginManager)
+                            destination: viewFactory.makeDiscoverDetailView(media: recMedia)
                         ) {
                             DiscoverRecommendationCard(media: recMedia)
                         }
@@ -462,7 +460,7 @@ struct DiscoverDetailView: View {
     }
 }
 
-private struct SourceDestinationHost: View {
+struct SourceDestinationHost: View {
     @ObservedObject var resolverViewModel: SourceResolverViewModel
     @EnvironmentObject private var libraryManager: LibraryManager
     @EnvironmentObject private var trackerManager: TrackerManager
@@ -592,14 +590,14 @@ private struct DiscoverRecommendationCard: View {
 
 private struct ResolvedSourceRow: View {
     let match: MatchedSource
-    @ObservedObject var pluginManager: PluginManager
+    let installedPlugins: [String: InstalledPlugin]
     let isProcessing: Bool
     let onConfirm: () -> Void
     let onReject: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            if let plugin = pluginManager.installedPlugins[match.pluginID],
+            if let plugin = installedPlugins[match.pluginID],
                let iconData = plugin.iconData, let uiImage = UIImage(data: iconData) {
                 Image(uiImage: uiImage)
                     .resizable()
@@ -622,7 +620,7 @@ private struct ResolvedSourceRow: View {
                     .foregroundStyle(match.decision == .discard ? .secondary : .primary)
                     .lineLimit(1)
 
-                let pluginName = pluginManager.installedPlugins[match.pluginID]?.info.name ?? match.pluginID
+                let pluginName = installedPlugins[match.pluginID]?.info.name ?? match.pluginID
                 Text("\(pluginName) • \(matchMethodString(match.matchMethod))")
                     .font(.caption)
                     .foregroundStyle(.secondary)

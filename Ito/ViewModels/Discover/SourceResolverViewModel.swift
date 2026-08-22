@@ -1,8 +1,5 @@
-import Foundation
-import SwiftUI
 import Combine
-import GRDB
-import OSLog
+import Foundation
 import ito_runner
 
 public struct SourceRoute: Equatable {
@@ -22,6 +19,32 @@ public struct SourceRoute: Equatable {
         lhs.pluginID == rhs.pluginID
             && lhs.media.key() == rhs.media.key()
             && lhs.anilistID == rhs.anilistID
+    }
+}
+
+@MainActor
+protocol SourceRouteBuilding {
+    func route(
+        media: ResolvedPluginMedia,
+        pluginID: String,
+        context: any SourceRunnerContext,
+        anilistID: Int?
+    ) -> SourceRoute
+}
+
+struct SourceRouteFactory: SourceRouteBuilding {
+    func route(
+        media: ResolvedPluginMedia,
+        pluginID: String,
+        context: any SourceRunnerContext,
+        anilistID: Int?
+    ) -> SourceRoute {
+        SourceRoute(
+            media: media,
+            pluginID: pluginID,
+            runner: context.runner,
+            anilistID: anilistID
+        )
     }
 }
 
@@ -72,17 +95,34 @@ public struct SourceRoutePresentationState: Equatable {
     }
 }
 
-public protocol PluginProviding: Sendable {
-    var installedPlugins: [String: InstalledPlugin] { get }
-    @MainActor func getRunner(for pluginId: String) async throws -> ItoRunner
-    func getSearchAdapter(for pluginId: String, mediaType: PluginMediaType) async throws -> any PluginSearching
-}
+public struct SourceMatchIdentity: Hashable, Sendable {
+    public let pluginID: String
+    public let pluginVersion: String?
+    public let mediaKey: String
+    public let mediaKind: String
 
-extension PluginManager: @unchecked Sendable, PluginProviding {
-    public func getSearchAdapter(for pluginId: String, mediaType: PluginMediaType) async throws -> any PluginSearching {
-        let runner = try await getRunner(for: pluginId)
-        guard let plugin = installedPlugins[pluginId] else { throw URLError(.badURL) }
-        return PluginSearchAdapter(pluginID: plugin.id, pluginVersion: plugin.info.version, mediaType: mediaType, runner: runner)
+    public init(match: MatchedSource) {
+        self.init(
+            pluginID: match.pluginID,
+            pluginVersion: match.pluginVersion,
+            media: match.media
+        )
+    }
+
+    public init(
+        pluginID: String,
+        pluginVersion: String?,
+        media: ResolvedPluginMedia
+    ) {
+        self.pluginID = pluginID
+        self.pluginVersion = pluginVersion
+        mediaKey = media.key()
+        switch media {
+        case .manga:
+            mediaKind = "manga"
+        case .anime:
+            mediaKind = "anime"
+        }
     }
 }
 
@@ -101,15 +141,54 @@ public final class SourceResolverViewModel: ObservableObject {
     }
 
     @Published public private(set) var state: State = .idle
-    @Published public private(set) var isSearching: Bool = false
+    @Published public private(set) var isSearching = false
     @Published public private(set) var pluginSearchError: String?
-    @Published public private(set) var processingMatchId: String?
-
-    // MARK: - Route Coordinator
+    @Published public private(set) var processingMatchIdentity: SourceMatchIdentity?
     @Published public private(set) var routePresentation = SourceRoutePresentationState()
 
     public var sourceRoute: SourceRoute? { routePresentation.route }
     public var isSourceDestinationPresented: Bool { routePresentation.isPresented }
+
+    private let media: DiscoverMedia
+    private let repository: any SourceMappingRepository
+    private let pluginProvider: any SourceResolverPluginProviding
+    private let routeFactory: any SourceRouteBuilding
+
+    private var mappingCheckTask: Task<Void, Never>?
+    private var resolutionTask: Task<Void, Never>?
+    private var routePreparationTask: Task<Void, Never>?
+    private var rejectionTask: Task<Void, Never>?
+    private var mappingOperationID: UUID?
+    private var resolutionOperationID: UUID?
+    private var actionOperationID: UUID?
+    private var hasStartedInitialLookup = false
+
+    var canonicalProvider: String { "anilist" }
+    private var canonicalMediaId: String { String(media.id) }
+    private var canonicalMediaType: PluginMediaType { media.type == "ANIME" ? .anime : .manga }
+
+    init(
+        media: DiscoverMedia,
+        repository: any SourceMappingRepository,
+        pluginProvider: any SourceResolverPluginProviding,
+        routeFactory: any SourceRouteBuilding
+    ) {
+        self.media = media
+        self.repository = repository
+        self.pluginProvider = pluginProvider
+        self.routeFactory = routeFactory
+    }
+
+    deinit {
+        mappingCheckTask?.cancel()
+        resolutionTask?.cancel()
+        routePreparationTask?.cancel()
+        rejectionTask?.cancel()
+    }
+
+    public func isProcessing(_ match: MatchedSource) -> Bool {
+        processingMatchIdentity == SourceMatchIdentity(match: match)
+    }
 
     public func present(route: SourceRoute) {
         routePresentation.present(route)
@@ -131,34 +210,6 @@ public final class SourceResolverViewModel: ObservableObject {
         routePresentation.destinationDidDisappear()
     }
 
-    private let media: DiscoverMedia
-    private let repository: SourceMappingRepository
-    private let pluginManager: any PluginProviding
-    private var resolutionTask: Task<Void, Never>?
-    private var mappingCheckTask: Task<Void, Never>?
-    private var routePreparationTask: Task<Void, Never>?
-    private var hasStartedInitialLookup = false
-
-    var canonicalProvider: String { "anilist" }
-    private var canonicalMediaId: String { String(media.id) }
-    private var canonicalMediaType: PluginMediaType { media.type == "ANIME" ? .anime : .manga }
-
-    deinit {
-        mappingCheckTask?.cancel()
-        resolutionTask?.cancel()
-        routePreparationTask?.cancel()
-    }
-
-    public init(
-        media: DiscoverMedia,
-        repository: SourceMappingRepository = GRDBSourceMappingRepository(dbWriter: AppDatabase.shared.dbPool),
-        pluginManager: any PluginProviding
-    ) {
-        self.media = media
-        self.repository = repository
-        self.pluginManager = pluginManager
-    }
-
     private func beginInitialLookup() -> Bool {
         guard !hasStartedInitialLookup else { return false }
         hasStartedInitialLookup = true
@@ -167,44 +218,140 @@ public final class SourceResolverViewModel: ObservableObject {
 
     public func startCheckAndResolve() {
         guard beginInitialLookup() else { return }
-        mappingCheckTask?.cancel()
-        mappingCheckTask = Task { [weak self] in
-            await self?.performCheckAndResolve()
-        }
+        startMappingCheck()
     }
 
     func checkAndResolve() async {
         guard beginInitialLookup() else { return }
-        await performCheckAndResolve()
+        let operationID = UUID()
+        mappingOperationID = operationID
+        await runMappingCheck(operationID: operationID)
     }
 
-    private func performCheckAndResolve() async {
-        guard !Task.isCancelled else { return }
+    private func startMappingCheck() {
+        mappingCheckTask?.cancel()
+        let operationID = UUID()
+        mappingOperationID = operationID
+        let repository = repository
+        let pluginProvider = pluginProvider
+        let canonicalProvider = canonicalProvider
+        let canonicalMediaID = canonicalMediaId
+        let canonicalMediaType = canonicalMediaType
+        mappingCheckTask = Task { [weak self, repository, pluginProvider] in
+            await Self.performMappingCheck(
+                repository: repository,
+                pluginProvider: pluginProvider,
+                canonicalProvider: canonicalProvider,
+                canonicalMediaID: canonicalMediaID,
+                canonicalMediaType: canonicalMediaType,
+                isCurrent: { [weak self] in
+                    self?.isCurrentMappingOperation(operationID) == true
+                },
+                mappingNotFound: { [weak self] in
+                    guard self?.mappingOperationID == operationID else { return }
+                    self?.mappingOperationID = nil
+                    self?.mappingCheckTask = nil
+                    self?.resolve()
+                },
+                mappingFound: { [weak self] mapping, payload in
+                    guard self?.mappingOperationID == operationID else { return }
+                    self?.mappingOperationID = nil
+                    self?.mappingCheckTask = nil
+                    self?.setSavedSourceState(mapping: mapping, payload: payload)
+                }
+            )
+        }
+    }
 
-        guard let (mapping, payload) = await checkExistingMapping() else {
-            guard !Task.isCancelled else { return }
-            resolve()
+    private func runMappingCheck(operationID: UUID) async {
+        await Self.performMappingCheck(
+            repository: repository,
+            pluginProvider: pluginProvider,
+            canonicalProvider: canonicalProvider,
+            canonicalMediaID: canonicalMediaId,
+            canonicalMediaType: canonicalMediaType,
+            isCurrent: { [weak self] in
+                self?.isCurrentMappingOperation(operationID) == true
+            },
+            mappingNotFound: { [weak self] in
+                guard self?.mappingOperationID == operationID else { return }
+                self?.mappingOperationID = nil
+                self?.resolve()
+            },
+            mappingFound: { [weak self] mapping, payload in
+                guard self?.mappingOperationID == operationID else { return }
+                self?.mappingOperationID = nil
+                self?.setSavedSourceState(mapping: mapping, payload: payload)
+            }
+        )
+    }
+
+    private static func performMappingCheck(
+        repository: any SourceMappingRepository,
+        pluginProvider: any SourceResolverPluginProviding,
+        canonicalProvider: String,
+        canonicalMediaID: String,
+        canonicalMediaType: PluginMediaType,
+        isCurrent: @escaping @MainActor () -> Bool,
+        mappingNotFound: @escaping @MainActor () -> Void,
+        mappingFound: @escaping @MainActor (SourceMappingRecord, ResolvedPluginMedia) -> Void
+    ) async {
+        guard isCurrent() else { return }
+        guard let (mapping, payload) = await findExistingMapping(
+            repository: repository,
+            pluginProvider: pluginProvider,
+            canonicalProvider: canonicalProvider,
+            canonicalMediaID: canonicalMediaID,
+            canonicalMediaType: canonicalMediaType
+        ) else {
+            guard isCurrent() else { return }
+            mappingNotFound()
             return
         }
 
-        await markMappingUsed(mapping)
-        guard !Task.isCancelled else { return }
-        setSavedSourceState(mapping: mapping, payload: payload)
+        try? await repository.upsert(verifiedMapping(mapping))
+        guard isCurrent() else { return }
+        mappingFound(mapping, payload)
     }
 
-    private func prepareRoute(media: ResolvedPluginMedia, pluginID: String) async throws -> SourceRoute {
-        let runner = try await pluginManager.getRunner(for: pluginID)
-        return SourceRoute(
+    private func isCurrentMappingOperation(_ operationID: UUID) -> Bool {
+        mappingOperationID == operationID && !Task.isCancelled
+    }
+
+    private func prepareRoute(
+        media: ResolvedPluginMedia,
+        pluginID: String
+    ) async throws -> SourceRoute {
+        try await Self.prepareRoute(
             media: media,
             pluginID: pluginID,
-            runner: runner,
+            pluginProvider: pluginProvider,
+            routeFactory: routeFactory,
             anilistID: canonicalProvider == "anilist" ? self.media.id : nil
         )
     }
 
-    public func resolve() {
-        guard !isSearching else { return }
+    private static func prepareRoute(
+        media: ResolvedPluginMedia,
+        pluginID: String,
+        pluginProvider: any SourceResolverPluginProviding,
+        routeFactory: any SourceRouteBuilding,
+        anilistID: Int?
+    ) async throws -> SourceRoute {
+        let context = try await pluginProvider.sourceRunnerContext(for: pluginID)
+        return routeFactory.route(
+            media: media,
+            pluginID: pluginID,
+            context: context,
+            anilistID: anilistID
+        )
+    }
 
+    public func resolve() {
+        guard !isSearching, processingMatchIdentity == nil else { return }
+
+        mappingOperationID = nil
+        mappingCheckTask?.cancel()
         resolutionTask?.cancel()
 
         let request = SourceSearchRequest(
@@ -217,160 +364,286 @@ public final class SourceResolverViewModel: ObservableObject {
             titleNative: media.titleNative,
             synonyms: media.synonyms
         )
-
+        let operationID = UUID()
+        resolutionOperationID = operationID
         isSearching = true
         state = .loading(matches: [])
+        let repository = repository
+        let pluginProvider = pluginProvider
 
-        resolutionTask = Task {
-            defer { self.isSearching = false }
-
-            do {
-                let matchingPlugins = pluginManager.installedPlugins.values.filter {
-                    if request.mediaType == .anime { return $0.info.type == .anime }
-                    return $0.info.type == .manga
+        resolutionTask = Task { [weak self, repository, pluginProvider] in
+            await Self.performResolution(
+                request: request,
+                repository: repository,
+                pluginProvider: pluginProvider,
+                isCurrent: { [weak self] in
+                    self?.isCurrentResolution(operationID) == true
+                },
+                publish: { [weak self] publishedState in
+                    guard self?.isCurrentResolution(operationID) == true else { return }
+                    self?.state = publishedState
+                },
+                finish: { [weak self] in
+                    self?.finishResolution(operationID: operationID)
                 }
-                guard !matchingPlugins.isEmpty else {
-                    if !Task.isCancelled {
-                        self.state = .noCompatiblePlugins
-                    }
-                    return
-                }
-
-                var adapters: [any PluginSearching] = []
-                for plugin in matchingPlugins {
-                    if let adapter = try? await pluginManager.getSearchAdapter(for: plugin.id, mediaType: request.mediaType) {
-                        adapters.append(adapter)
-                    }
-                }
-
-                let rejectedRecords = try await repository.fetchAll(canonicalProvider: request.canonicalProvider, canonicalMediaId: request.canonicalMediaId, mediaType: request.mediaType).filter { $0.decision == .discard }
-                var rejectedKeysByPlugin: [String: Set<String>] = [:]
-                for record in rejectedRecords {
-                    rejectedKeysByPlugin[record.pluginId, default: []].insert(record.pluginMediaKey)
-                }
-
-                let resolver = SourceResolver(plugins: adapters)
-                let result = await resolver.resolve(
-                    request: request,
-                    isRejected: { [rejectedKeysByPlugin] pluginId, key in rejectedKeysByPlugin[pluginId]?.contains(key) ?? false }
-                ) { [weak self] partialMatches in
-                    guard let self = self, self.isSearching else { return }
-                    self.state = .loading(matches: partialMatches)
-                }
-
-                guard !Task.isCancelled && !result.isCancelled else {
-                    self.state = .cancelled
-                    return
-                }
-
-                if !result.pluginFailures.isEmpty {
-                    self.state = .partialFailure(matches: result.matches, failedPlugins: Array(result.pluginFailures.keys))
-                } else if result.matches.isEmpty {
-                    self.state = .empty
-                } else {
-                    self.state = .completed(matches: result.matches)
-                }
-
-            } catch {
-                if Task.isCancelled {
-                    self.state = .cancelled
-                } else {
-                    self.state = .fatalFailure(error: error.localizedDescription)
-                }
-            }
+            )
         }
     }
 
-    public func setSavedSourceState(mapping: SourceMappingRecord, payload: ResolvedPluginMedia) {
-        self.state = .savedSource(mapping: mapping, payload: payload)
+    private static func performResolution(
+        request: SourceSearchRequest,
+        repository: any SourceMappingRepository,
+        pluginProvider: any SourceResolverPluginProviding,
+        isCurrent: @escaping @MainActor @Sendable () -> Bool,
+        publish: @escaping @MainActor @Sendable (State) -> Void,
+        finish: @escaping @MainActor @Sendable () -> Void
+    ) async {
+        defer { finish() }
+
+        do {
+            let matchingPlugins = pluginProvider.installedPlugins.values.filter {
+                if request.mediaType == .anime { return $0.info.type == .anime }
+                return $0.info.type == .manga
+            }
+            guard !matchingPlugins.isEmpty else {
+                guard isCurrent() else { return }
+                publish(.noCompatiblePlugins)
+                return
+            }
+
+            var adapters: [any PluginSearching] = []
+            for plugin in matchingPlugins {
+                guard isCurrent() else { return }
+                if let adapter = try? await pluginProvider.sourceSearchAdapter(
+                    for: plugin.id,
+                    mediaType: request.mediaType
+                ) {
+                    adapters.append(adapter)
+                }
+            }
+
+            let records = try await repository.fetchAll(
+                canonicalProvider: request.canonicalProvider,
+                canonicalMediaId: request.canonicalMediaId,
+                mediaType: request.mediaType
+            )
+            var rejectedKeysByPlugin: [String: Set<String>] = [:]
+            for record in records where record.decision == .discard {
+                rejectedKeysByPlugin[record.pluginId, default: []].insert(record.pluginMediaKey)
+            }
+
+            guard isCurrent() else { return }
+            let resolver = SourceResolver(plugins: adapters)
+            let result = await resolver.resolve(
+                request: request,
+                isRejected: { [rejectedKeysByPlugin] pluginID, key in
+                    rejectedKeysByPlugin[pluginID]?.contains(key) ?? false
+                }
+            ) { partialMatches in
+                guard isCurrent() else { return }
+                publish(.loading(matches: partialMatches))
+            }
+
+            guard isCurrent() else { return }
+            guard !result.isCancelled else {
+                publish(.cancelled)
+                return
+            }
+
+            if !result.pluginFailures.isEmpty {
+                publish(.partialFailure(
+                    matches: result.matches,
+                    failedPlugins: result.pluginFailures.keys.sorted()
+                ))
+            } else if result.matches.isEmpty {
+                publish(.empty)
+            } else {
+                publish(.completed(matches: result.matches))
+            }
+        } catch {
+            guard isCurrent() else { return }
+            publish(.fatalFailure(error: "Unable to search sources. Please try again."))
+        }
+    }
+
+    private func finishResolution(operationID: UUID) {
+        guard resolutionOperationID == operationID else { return }
+        resolutionOperationID = nil
+        resolutionTask = nil
+        isSearching = false
+    }
+
+    private func isCurrentResolution(_ operationID: UUID) -> Bool {
+        resolutionOperationID == operationID && !Task.isCancelled
+    }
+
+    public func setSavedSourceState(
+        mapping: SourceMappingRecord,
+        payload: ResolvedPluginMedia
+    ) {
+        state = .savedSource(mapping: mapping, payload: payload)
     }
 
     public func cancel() {
+        resolutionOperationID = nil
         resolutionTask?.cancel()
         resolutionTask = nil
         isSearching = false
         state = .cancelled
     }
 
+    func cancelOwnedOperations() {
+        mappingOperationID = nil
+        resolutionOperationID = nil
+        actionOperationID = nil
+        mappingCheckTask?.cancel()
+        resolutionTask?.cancel()
+        routePreparationTask?.cancel()
+        rejectionTask?.cancel()
+        mappingCheckTask = nil
+        resolutionTask = nil
+        routePreparationTask = nil
+        rejectionTask = nil
+        isSearching = false
+        processingMatchIdentity = nil
+    }
+
     public func checkExistingMapping() async -> (SourceMappingRecord, ResolvedPluginMedia)? {
-        do {
-            let confirmed = try await repository.fetchConfirmed(
-                canonicalProvider: canonicalProvider,
-                canonicalMediaId: canonicalMediaId,
-                mediaType: canonicalMediaType
-            )
+        await Self.findExistingMapping(
+            repository: repository,
+            pluginProvider: pluginProvider,
+            canonicalProvider: canonicalProvider,
+            canonicalMediaID: canonicalMediaId,
+            canonicalMediaType: canonicalMediaType
+        )
+    }
 
-            for mapping in confirmed {
-                guard let payload = mapping.encodedPayload,
-                      let version = mapping.payloadVersion,
-                      let decoded = try? JSONDecoder().decode(SourceMediaSnapshot.self, from: payload),
-                      decoded.version == version else { continue }
+    private static func findExistingMapping(
+        repository: any SourceMappingRepository,
+        pluginProvider: any SourceResolverPluginProviding,
+        canonicalProvider: String,
+        canonicalMediaID: String,
+        canonicalMediaType: PluginMediaType
+    ) async -> (SourceMappingRecord, ResolvedPluginMedia)? {
+        guard let confirmed = try? await repository.fetchConfirmed(
+            canonicalProvider: canonicalProvider,
+            canonicalMediaId: canonicalMediaID,
+            mediaType: canonicalMediaType
+        ) else {
+            return nil
+        }
 
-                guard let plugin = pluginManager.installedPlugins[mapping.pluginId] else { continue }
-
-                let decodedType: PluginMediaType
-                switch decoded.payload {
-                case .anime: decodedType = .anime
-                case .manga: decodedType = .manga
-                }
-                guard decodedType == canonicalMediaType else { continue }
-
-                let currentVersion = plugin.info.version
-                if let storedVersion = mapping.pluginVersion, currentVersion != storedVersion {
-                    continue
-                }
-
-                return (mapping, decoded.payload)
+        for mapping in confirmed {
+            guard let payload = mapping.encodedPayload,
+                  let version = mapping.payloadVersion,
+                  let decoded = try? JSONDecoder().decode(SourceMediaSnapshot.self, from: payload),
+                  decoded.version == version,
+                  let plugin = pluginProvider.installedPlugins[mapping.pluginId] else {
+                continue
             }
-        } catch {
-            AppLogger.database.error("Failed to check existing mapping: \(error)")
+
+            let decodedType: PluginMediaType
+            switch decoded.payload {
+            case .anime:
+                decodedType = .anime
+            case .manga:
+                decodedType = .manga
+            }
+            guard decodedType == canonicalMediaType else { continue }
+
+            if let storedVersion = mapping.pluginVersion,
+               plugin.info.version != storedVersion {
+                continue
+            }
+            return (mapping, decoded.payload)
         }
         return nil
     }
 
     public func markMappingUsed(_ mapping: SourceMappingRecord) async {
-        do {
-            let updated = SourceMappingRecord(
-                canonicalProvider: mapping.canonicalProvider,
-                canonicalMediaId: mapping.canonicalMediaId,
-                mediaType: mapping.mediaType,
-                pluginId: mapping.pluginId,
-                pluginMediaKey: mapping.pluginMediaKey,
-                decision: mapping.decision,
-                matchMethod: mapping.matchMethod,
-                confidence: mapping.confidence,
-                titleSnapshot: mapping.titleSnapshot,
-                createdAt: mapping.createdAt,
-                updatedAt: mapping.updatedAt,
-                coverURLSnapshot: mapping.coverURLSnapshot,
-                encodedPayload: mapping.encodedPayload,
-                payloadVersion: mapping.payloadVersion,
-                pluginVersion: mapping.pluginVersion,
-                lastVerifiedAt: Date()
-            )
-            try await repository.upsert(updated)
-        } catch {
-            AppLogger.database.error("Failed to update mapping verification timestamp: \(error)")
-        }
+        try? await repository.upsert(Self.verifiedMapping(mapping))
+    }
+
+    private static func verifiedMapping(_ mapping: SourceMappingRecord) -> SourceMappingRecord {
+        SourceMappingRecord(
+            canonicalProvider: mapping.canonicalProvider,
+            canonicalMediaId: mapping.canonicalMediaId,
+            mediaType: mapping.mediaType,
+            pluginId: mapping.pluginId,
+            pluginMediaKey: mapping.pluginMediaKey,
+            decision: mapping.decision,
+            matchMethod: mapping.matchMethod,
+            confidence: mapping.confidence,
+            titleSnapshot: mapping.titleSnapshot,
+            createdAt: mapping.createdAt,
+            updatedAt: mapping.updatedAt,
+            coverURLSnapshot: mapping.coverURLSnapshot,
+            encodedPayload: mapping.encodedPayload,
+            payloadVersion: mapping.payloadVersion,
+            pluginVersion: mapping.pluginVersion,
+            lastVerifiedAt: Date()
+        )
     }
 
     public func confirmAndRoute(match: MatchedSource) {
-        guard processingMatchId == nil else { return }
-        processingMatchId = match.media.key()
+        guard processingMatchIdentity == nil else { return }
+        stopResolutionForAction()
+        beginConfirmAndRoute(match)
+    }
+
+    private func beginConfirmAndRoute(_ match: MatchedSource) {
+        let identity = SourceMatchIdentity(match: match)
+        let operationID = UUID()
+        processingMatchIdentity = identity
+        actionOperationID = operationID
         pluginSearchError = nil
-
         routePreparationTask?.cancel()
-        routePreparationTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.processingMatchId = nil }
+        let repository = repository
+        let pluginProvider = pluginProvider
+        let routeFactory = routeFactory
+        let canonicalProvider = canonicalProvider
+        let canonicalMediaID = canonicalMediaId
+        let canonicalMediaType = canonicalMediaType
+        let anilistID = canonicalProvider == "anilist" ? media.id : nil
 
+        routePreparationTask = Task { [weak self, repository, pluginProvider, routeFactory] in
+            var didPersist = false
             do {
-                try await self.confirmAndPrepareRoute(match)
+                let mapping = try await Self.persistConfirmation(
+                    match,
+                    repository: repository,
+                    canonicalProvider: canonicalProvider,
+                    canonicalMediaID: canonicalMediaID,
+                    canonicalMediaType: canonicalMediaType
+                )
+                didPersist = true
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
+                }
+                self?.state = .savedSource(mapping: mapping, payload: match.media)
+
+                let route = try await Self.prepareRoute(
+                    media: match.media,
+                    pluginID: match.pluginID,
+                    pluginProvider: pluginProvider,
+                    routeFactory: routeFactory,
+                    anilistID: anilistID
+                )
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
+                }
+                self?.present(route: route)
+                self?.finishAction(operationID, identity: identity)
             } catch is CancellationError {
-                return
+                self?.finishAction(operationID, identity: identity)
             } catch {
-                AppLogger.database.error("Failed to confirm and route: \(error)")
-                self.pluginSearchError = "Failed to save or open source: \(error.localizedDescription)"
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
+                }
+                self?.pluginSearchError = didPersist
+                    ? "The source was saved, but could not be opened. Try Open again."
+                    : "The source could not be saved. Please try again."
+                self?.finishAction(operationID, identity: identity)
             }
         }
     }
@@ -383,71 +656,153 @@ public final class SourceResolverViewModel: ObservableObject {
         present(route: route)
     }
 
-    public func openSavedSource(mapping: SourceMappingRecord, payload: ResolvedPluginMedia) {
-        guard processingMatchId == nil else { return }
-        processingMatchId = payload.key()
+    public func openSavedSource(
+        mapping: SourceMappingRecord,
+        payload: ResolvedPluginMedia
+    ) {
+        guard processingMatchIdentity == nil else { return }
+        let identity = SourceMatchIdentity(
+            pluginID: mapping.pluginId,
+            pluginVersion: mapping.pluginVersion,
+            media: payload
+        )
+        let operationID = UUID()
+        processingMatchIdentity = identity
+        actionOperationID = operationID
         pluginSearchError = nil
-
         routePreparationTask?.cancel()
-        routePreparationTask = Task { [weak self] in
-            guard let self else { return }
-            defer { self.processingMatchId = nil }
+        let pluginProvider = pluginProvider
+        let routeFactory = routeFactory
+        let anilistID = canonicalProvider == "anilist" ? media.id : nil
 
+        routePreparationTask = Task { [weak self, pluginProvider, routeFactory] in
             do {
-                let route = try await self.prepareRoute(media: payload, pluginID: mapping.pluginId)
-                try Task.checkCancellation()
-                self.present(route: route)
+                let route = try await Self.prepareRoute(
+                    media: payload,
+                    pluginID: mapping.pluginId,
+                    pluginProvider: pluginProvider,
+                    routeFactory: routeFactory,
+                    anilistID: anilistID
+                )
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
+                }
+                self?.present(route: route)
+                self?.finishAction(operationID, identity: identity)
             } catch is CancellationError {
-                return
+                self?.finishAction(operationID, identity: identity)
             } catch {
-                AppLogger.database.error("Failed to open saved source: \(error)")
-                self.pluginSearchError = "Failed to open saved source: \(error.localizedDescription)"
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
+                }
+                self?.pluginSearchError = "The saved source could not be opened. Please try again."
+                self?.finishAction(operationID, identity: identity)
             }
         }
     }
 
     public func rejectAndMark(match: MatchedSource) {
-        guard processingMatchId == nil else { return }
-        processingMatchId = match.media.key()
+        guard processingMatchIdentity == nil else { return }
+        stopResolutionForAction()
+        let identity = SourceMatchIdentity(match: match)
+        let operationID = UUID()
+        processingMatchIdentity = identity
+        actionOperationID = operationID
         pluginSearchError = nil
+        rejectionTask?.cancel()
+        let repository = repository
+        let canonicalProvider = canonicalProvider
+        let canonicalMediaID = canonicalMediaId
+        let canonicalMediaType = canonicalMediaType
 
-        Task {
+        rejectionTask = Task { [weak self, repository] in
             do {
-                try await rejectMatch(match)
-                await MainActor.run { processingMatchId = nil }
-            } catch {
-                AppLogger.database.error("Failed to reject match: \(error)")
-                await MainActor.run {
-                    self.pluginSearchError = "Failed to reject mapping: \(error.localizedDescription)"
-                    self.processingMatchId = nil
+                try await Self.persistRejection(
+                    match,
+                    repository: repository,
+                    canonicalProvider: canonicalProvider,
+                    canonicalMediaID: canonicalMediaID,
+                    canonicalMediaType: canonicalMediaType
+                )
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
                 }
+                self?.markRejected(identity: identity)
+                self?.finishAction(operationID, identity: identity)
+            } catch is CancellationError {
+                self?.finishAction(operationID, identity: identity)
+            } catch {
+                guard self?.isCurrentAction(operationID, identity: identity) == true else {
+                    return
+                }
+                self?.pluginSearchError = "The source rejection could not be saved. Please try again."
+                self?.finishAction(operationID, identity: identity)
             }
         }
     }
 
+    private func isCurrentAction(
+        _ operationID: UUID,
+        identity: SourceMatchIdentity
+    ) -> Bool {
+        actionOperationID == operationID
+            && processingMatchIdentity == identity
+            && !Task.isCancelled
+    }
+
+    private func finishAction(
+        _ operationID: UUID,
+        identity: SourceMatchIdentity
+    ) {
+        guard actionOperationID == operationID,
+              processingMatchIdentity == identity else {
+            return
+        }
+        actionOperationID = nil
+        processingMatchIdentity = nil
+        routePreparationTask = nil
+        rejectionTask = nil
+    }
+
     @discardableResult
     func confirmMatch(_ match: MatchedSource) async throws -> SourceMappingRecord {
+        try await Self.persistConfirmation(
+            match,
+            repository: repository,
+            canonicalProvider: canonicalProvider,
+            canonicalMediaID: canonicalMediaId,
+            canonicalMediaType: canonicalMediaType
+        )
+    }
+
+    private static func persistConfirmation(
+        _ match: MatchedSource,
+        repository: any SourceMappingRepository,
+        canonicalProvider: String,
+        canonicalMediaID: String,
+        canonicalMediaType: PluginMediaType
+    ) async throws -> SourceMappingRecord {
         let snapshot = SourceMediaSnapshot(version: 1, payload: match.media)
         let payload = try JSONEncoder().encode(snapshot)
 
         let mediaKey: String
         let title: String
-        let coverUrl: String?
+        let coverURL: String?
         switch match.media {
-        case .manga(let m):
-            mediaKey = m.key
-            title = m.title
-            coverUrl = m.cover
-        case .anime(let a):
-            mediaKey = a.key
-            title = a.title
-            coverUrl = a.cover
+        case .manga(let manga):
+            mediaKey = manga.key
+            title = manga.title
+            coverURL = manga.cover
+        case .anime(let anime):
+            mediaKey = anime.key
+            title = anime.title
+            coverURL = anime.cover
         }
 
         let now = Date()
         let record = SourceMappingRecord(
             canonicalProvider: canonicalProvider,
-            canonicalMediaId: canonicalMediaId,
+            canonicalMediaId: canonicalMediaID,
             mediaType: canonicalMediaType,
             pluginId: match.pluginID,
             pluginMediaKey: mediaKey,
@@ -457,45 +812,105 @@ public final class SourceResolverViewModel: ObservableObject {
             titleSnapshot: title,
             createdAt: now,
             updatedAt: now,
-            coverURLSnapshot: coverUrl,
+            coverURLSnapshot: coverURL,
             encodedPayload: payload,
             payloadVersion: 1,
             pluginVersion: match.pluginVersion,
             lastVerifiedAt: now
         )
-
         try await repository.upsert(record)
         return record
     }
 
     func rejectMatch(_ match: MatchedSource) async throws {
-        // Remove from current state to prevent full search restart
-        if case .completed(let matches) = state {
-            let updated = matches.map { $0 == match ? MatchedSource(pluginID: $0.pluginID, pluginVersion: $0.pluginVersion, media: $0.media, matchMethod: $0.matchMethod, score: $0.score, decision: .discard) : $0 }
-            self.state = .completed(matches: updated)
-        }
+        let identity = SourceMatchIdentity(match: match)
+        try await persistRejection(match)
+        markRejected(identity: identity)
+    }
 
-        let mediaKey: String
-        switch match.media {
-        case .manga(let m): mediaKey = m.key
-        case .anime(let a): mediaKey = a.key
-        }
+    private func persistRejection(_ match: MatchedSource) async throws {
+        try await Self.persistRejection(
+            match,
+            repository: repository,
+            canonicalProvider: canonicalProvider,
+            canonicalMediaID: canonicalMediaId,
+            canonicalMediaType: canonicalMediaType
+        )
+    }
 
+    private static func persistRejection(
+        _ match: MatchedSource,
+        repository: any SourceMappingRepository,
+        canonicalProvider: String,
+        canonicalMediaID: String,
+        canonicalMediaType: PluginMediaType
+    ) async throws {
         try await repository.persistRejection(
             canonicalProvider: canonicalProvider,
-            canonicalMediaId: canonicalMediaId,
+            canonicalMediaId: canonicalMediaID,
             mediaType: canonicalMediaType,
             pluginId: match.pluginID,
-            pluginMediaKey: mediaKey
+            pluginMediaKey: match.media.key()
         )
+    }
+
+    private func markRejected(identity: SourceMatchIdentity) {
+        switch state {
+        case .loading(let matches):
+            state = .loading(matches: markingRejected(identity, in: matches))
+        case .completed(let matches):
+            state = .completed(matches: markingRejected(identity, in: matches))
+        case .partialFailure(let matches, let failedPlugins):
+            state = .partialFailure(
+                matches: markingRejected(identity, in: matches),
+                failedPlugins: failedPlugins
+            )
+        default:
+            break
+        }
+    }
+
+    private func markingRejected(
+        _ identity: SourceMatchIdentity,
+        in matches: [MatchedSource]
+    ) -> [MatchedSource] {
+        matches.map { match in
+            guard SourceMatchIdentity(match: match) == identity else { return match }
+            return MatchedSource(
+                pluginID: match.pluginID,
+                pluginVersion: match.pluginVersion,
+                media: match.media,
+                matchMethod: match.matchMethod,
+                score: match.score,
+                decision: .discard
+            )
+        }
+    }
+
+    private func stopResolutionForAction() {
+        resolutionOperationID = nil
+        resolutionTask?.cancel()
+        resolutionTask = nil
+        isSearching = false
+        if case .loading(let matches) = state, !matches.isEmpty {
+            state = .completed(matches: matches)
+        }
     }
 }
 
 public extension ResolvedPluginMedia {
     func key() -> String {
         switch self {
-        case .manga(let m): return m.key
-        case .anime(let a): return a.key
+        case .manga(let manga):
+            return manga.key
+        case .anime(let anime):
+            return anime.key
         }
+    }
+}
+
+public extension MatchedSource {
+    var sourceIdentity: SourceMatchIdentity {
+        SourceMatchIdentity(match: self)
     }
 }

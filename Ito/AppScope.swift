@@ -12,6 +12,7 @@ struct PreparedApplicationDependencies {
     let browsePluginManager: any BrowsePluginManaging
     let browseFileOperations: any BrowsePluginFileOperating
     let source: PreparedSourceDependencies
+    let discoverDetail: PreparedDiscoverDetailDependencies
     let discoverService: any DiscoverHomeFilterServing
     let discoverCache: any DiscoverCaching
     let discoverClock: any DiscoverClock
@@ -28,6 +29,7 @@ struct PreparedApplicationDependencies {
         browsePluginManager: any BrowsePluginManaging,
         browseFileOperations: any BrowsePluginFileOperating,
         source: PreparedSourceDependencies? = nil,
+        discoverDetail: PreparedDiscoverDetailDependencies? = nil,
         discoverService: any DiscoverHomeFilterServing = DiscoverManager.shared,
         discoverCache: any DiscoverCaching = InMemoryDiscoverCache(),
         discoverClock: any DiscoverClock = SystemDiscoverClock(),
@@ -43,6 +45,7 @@ struct PreparedApplicationDependencies {
         self.browsePluginManager = browsePluginManager
         self.browseFileOperations = browseFileOperations
         self.source = source ?? .unavailable()
+        self.discoverDetail = discoverDetail ?? .unavailable()
         self.discoverService = discoverService
         self.discoverCache = discoverCache
         self.discoverClock = discoverClock
@@ -56,6 +59,9 @@ struct PreparedApplicationDependencies {
         notificationManager: NotificationManager,
         storageManager: StorageManager,
         discordRPCManager: DiscordRPCManager,
+        sourceMappingRepository: any SourceMappingRepository,
+        discoverDetailService: any DiscoverDetailServing,
+        discoverDetailThemeService: any DiscoverDetailThemeServing,
         recentSearchDefaults: UserDefaults = .standard,
         browsePluginsDirectory: URL? = nil
     ) -> Self {
@@ -88,6 +94,13 @@ struct PreparedApplicationDependencies {
                 settingsStore: pluginManager.pluginSettingsStore,
                 pluginStatePublisher: pluginManager,
                 fileDeletion: fileOperations
+            ),
+            discoverDetail: PreparedDiscoverDetailDependencies(
+                sourceMappingRepository: sourceMappingRepository,
+                pluginProvider: pluginManager,
+                detailService: discoverDetailService,
+                themeService: discoverDetailThemeService,
+                sourceRouteFactory: SourceRouteFactory()
             )
         )
     }
@@ -275,6 +288,7 @@ final class AppScope {
     let debugLogMessagePresenter: any DebugLogMessagePresenting
     let repositoryManagementMessagePresenter: any RepositoryManagementMessagePresenting
     let sourceMessagePresenter: any SourceMessagePresenting
+    let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -294,6 +308,10 @@ final class AppScope {
         self.repositoryManagementMessagePresenter = repositoryManagementMessagePresenter
         let sourceMessagePresenter = AppMessageSourcePresenter(messageCenter: messageCenter)
         self.sourceMessagePresenter = sourceMessagePresenter
+        let discoverDetailMessagePresenter = AppMessageDiscoverDetailPresenter(
+            messageCenter: messageCenter
+        )
+        self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
@@ -307,7 +325,9 @@ final class AppScope {
             pluginManager: preparedDependencies.browsePluginManager,
             repositoryMessagePresenter: repositoryManagementMessagePresenter,
             sourceDependencies: preparedDependencies.source,
-            sourceMessagePresenter: sourceMessagePresenter
+            sourceMessagePresenter: sourceMessagePresenter,
+            discoverDetailDependencies: preparedDependencies.discoverDetail,
+            discoverDetailMessagePresenter: discoverDetailMessagePresenter
         )
     }
 
@@ -318,6 +338,9 @@ final class AppScope {
         notificationManager: NotificationManager,
         storageManager: StorageManager,
         discordRPCManager: DiscordRPCManager,
+        sourceMappingRepository: any SourceMappingRepository,
+        discoverDetailService: any DiscoverDetailServing,
+        discoverDetailThemeService: any DiscoverDetailThemeServing,
         recentSearchDefaults: UserDefaults = .standard,
         browsePluginsDirectory: URL? = nil
     ) -> AppScope {
@@ -329,6 +352,9 @@ final class AppScope {
                 notificationManager: notificationManager,
                 storageManager: storageManager,
                 discordRPCManager: discordRPCManager,
+                sourceMappingRepository: sourceMappingRepository,
+                discoverDetailService: discoverDetailService,
+                discoverDetailThemeService: discoverDetailThemeService,
                 recentSearchDefaults: recentSearchDefaults,
                 browsePluginsDirectory: browsePluginsDirectory
             )

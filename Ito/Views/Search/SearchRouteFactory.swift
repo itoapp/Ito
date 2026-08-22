@@ -10,6 +10,8 @@ struct AppViewFactory {
     private let repositoryMessagePresenter: any RepositoryManagementMessagePresenting
     private let sourceDependencies: PreparedSourceDependencies
     private let sourceMessagePresenter: any SourceMessagePresenting
+    private let discoverDetailDependencies: PreparedDiscoverDetailDependencies
+    private let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
 
     init(
         rootModels: RootModelStore,
@@ -18,6 +20,8 @@ struct AppViewFactory {
         repositoryMessagePresenter: any RepositoryManagementMessagePresenting,
         sourceDependencies: PreparedSourceDependencies,
         sourceMessagePresenter: any SourceMessagePresenting,
+        discoverDetailDependencies: PreparedDiscoverDetailDependencies,
+        discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting,
         searchRouteFactory: SearchRouteFactory = SearchRouteFactory()
     ) {
         self.rootModels = rootModels
@@ -26,6 +30,8 @@ struct AppViewFactory {
         self.repositoryMessagePresenter = repositoryMessagePresenter
         self.sourceDependencies = sourceDependencies
         self.sourceMessagePresenter = sourceMessagePresenter
+        self.discoverDetailDependencies = discoverDetailDependencies
+        self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
         self.searchRouteFactory = searchRouteFactory
     }
 
@@ -109,7 +115,40 @@ struct AppViewFactory {
     }
 
     func makeDiscoverView() -> DiscoverView {
-        DiscoverView(viewModel: rootModels.discoverViewModel)
+        DiscoverView(
+            viewModel: rootModels.discoverViewModel,
+            viewFactory: self
+        )
+    }
+
+    func makeDiscoverDetailView(media: DiscoverMedia) -> DiscoverDetailView {
+        DiscoverDetailView(
+            viewModel: makeDiscoverDetailViewModel(media: media),
+            viewFactory: self
+        )
+    }
+
+    func makeDiscoverDetailViewModel(media: DiscoverMedia) -> DiscoverDetailViewModel {
+        let resolver = SourceResolverViewModel(
+            media: media,
+            repository: discoverDetailDependencies.sourceMappingRepository,
+            pluginProvider: discoverDetailDependencies.pluginProvider,
+            routeFactory: discoverDetailDependencies.sourceRouteFactory
+        )
+        return DiscoverDetailViewModel(
+            media: media,
+            detailService: discoverDetailDependencies.detailService,
+            themeService: discoverDetailDependencies.themeService,
+            messagePresenter: discoverDetailMessagePresenter,
+            pluginProvider: discoverDetailDependencies.pluginProvider,
+            sourceResolver: resolver
+        )
+    }
+
+    func makeSourceDestinationView(
+        resolverViewModel: SourceResolverViewModel
+    ) -> SourceDestinationHost {
+        SourceDestinationHost(resolverViewModel: resolverViewModel)
     }
 
     func makeSettingsView() -> SettingsView {
