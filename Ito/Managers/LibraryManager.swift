@@ -7,6 +7,10 @@ import ito_runner
 
 @MainActor
 public class LibraryManager: ObservableObject, LibraryManaging {
+    enum DurableMutationError: Error {
+        case identifierCollision
+    }
+
     public static let shared = LibraryManager(dbPool: AppDatabase.shared.dbPool)
 
     @Published public private(set) var categories: [LibraryCategory] = []
@@ -19,6 +23,12 @@ public class LibraryManager: ObservableObject, LibraryManaging {
     private var itemObserver: DatabaseCancellable?
     private var linkObserver: DatabaseCancellable?
     private let dbPool: DatabasePool
+
+    private struct DurableSnapshot {
+        let categories: [LibraryCategory]
+        let items: [LibraryItem]
+        let links: [ItemCategoryLink]
+    }
 
     public init(dbPool: DatabasePool) {
         self.dbPool = dbPool
@@ -159,6 +169,150 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         saveOrRemoveItem(id: anime.key) {
             LibraryItem(id: anime.key, title: anime.title, coverUrl: anime.cover, pluginId: pluginId, isAnime: true, pluginType: .anime, rawPayload: payload, anilistId: nil, knownChapterCount: count)
         }
+    }
+
+    // MARK: - Awaitable Media Detail Mutations
+
+    func saveMangaDurably(manga: Manga, pluginId: String) async throws -> String {
+        let payload = try JSONEncoder().encode(manga)
+        return try await saveItemDurably(
+            sourceItemID: manga.key,
+            item: LibraryItem(
+                id: manga.key,
+                title: manga.title,
+                coverUrl: manga.cover,
+                pluginId: pluginId,
+                isAnime: false,
+                pluginType: .manga,
+                rawPayload: payload,
+                anilistId: nil,
+                knownChapterCount: manga.chapters?.count ?? 0
+            )
+        )
+    }
+
+    func saveAnimeDurably(anime: Anime, pluginId: String) async throws -> String {
+        let payload = try JSONEncoder().encode(anime)
+        return try await saveItemDurably(
+            sourceItemID: anime.key,
+            item: LibraryItem(
+                id: anime.key,
+                title: anime.title,
+                coverUrl: anime.cover,
+                pluginId: pluginId,
+                isAnime: true,
+                pluginType: .anime,
+                rawPayload: payload,
+                anilistId: nil,
+                knownChapterCount: anime.episodes?.count ?? 0
+            )
+        )
+    }
+
+    func saveNovelDurably(novel: Novel, pluginId: String) async throws -> String {
+        let payload = try JSONEncoder().encode(novel)
+        return try await saveItemDurably(
+            sourceItemID: novel.key,
+            item: LibraryItem(
+                id: novel.key,
+                title: novel.title,
+                coverUrl: novel.cover,
+                pluginId: pluginId,
+                isAnime: false,
+                pluginType: .novel,
+                rawPayload: payload,
+                anilistId: nil,
+                knownChapterCount: novel.chapters?.count ?? 0
+            )
+        )
+    }
+
+    func removeItemDurably(id: String, pluginId: String) async throws {
+        let possibleIDs = [id, "\(pluginId)_\(id)"]
+        let snapshot = try await dbPool.write { db in
+            for possibleID in possibleIDs {
+                guard let existing = try LibraryItem.fetchOne(db, key: possibleID),
+                      existing.pluginId == pluginId else { continue }
+                try existing.delete(db)
+            }
+            return try Self.fetchDurableSnapshot(db)
+        }
+        apply(snapshot)
+    }
+
+    private func saveItemDurably(
+        sourceItemID: String,
+        item: LibraryItem
+    ) async throws -> String {
+        let legacyID = "\(item.pluginId)_\(sourceItemID)"
+        let mutation = try await dbPool.write { db in
+            let sourceItem = try LibraryItem.fetchOne(db, key: sourceItemID)
+            let legacyItem = try LibraryItem.fetchOne(db, key: legacyID)
+            let ownedItem = [sourceItem, legacyItem]
+                .compactMap { $0 }
+                .first { $0.pluginId == item.pluginId }
+            let storedItem: LibraryItem
+            if let ownedItem {
+                storedItem = ownedItem
+            } else {
+                if sourceItem == nil {
+                    storedItem = item
+                } else if legacyItem == nil {
+                    storedItem = Self.copy(item, replacingIDWith: legacyID)
+                } else {
+                    throw DurableMutationError.identifierCollision
+                }
+                try storedItem.insert(db)
+                if let uncategorized = try LibraryCategory
+                    .filter(Column("isSystemCategory") == true)
+                    .fetchOne(db) {
+                    try ItemCategoryLink(
+                        itemId: storedItem.id,
+                        categoryId: uncategorized.id
+                    ).insert(db)
+                }
+            }
+            return (try Self.fetchDurableSnapshot(db), storedItem.id)
+        }
+        apply(mutation.0)
+        return mutation.1
+    }
+
+    nonisolated private static func copy(
+        _ item: LibraryItem,
+        replacingIDWith id: String
+    ) -> LibraryItem {
+        LibraryItem(
+            id: id,
+            title: item.title,
+            coverUrl: item.coverUrl,
+            pluginId: item.pluginId,
+            isAnime: item.isAnime,
+            pluginType: item.pluginType,
+            rawPayload: item.rawPayload,
+            anilistId: item.anilistId,
+            status: item.status,
+            lastCheckedAt: item.lastCheckedAt,
+            lastUpdatedAt: item.lastUpdatedAt,
+            knownChapterCount: item.knownChapterCount
+        )
+    }
+
+    nonisolated private static func fetchDurableSnapshot(
+        _ db: Database
+    ) throws -> DurableSnapshot {
+        DurableSnapshot(
+            categories: try LibraryCategory.order(Column("sortOrder")).fetchAll(db),
+            items: try LibraryItem.order(Column("title")).fetchAll(db),
+            links: try ItemCategoryLink.fetchAll(db)
+        )
+    }
+
+    private func apply(_ snapshot: DurableSnapshot) {
+        categories = snapshot.categories
+        items = snapshot.items
+        links = snapshot.links
+        isLoading = false
     }
 
     // MARK: - Category CRUD

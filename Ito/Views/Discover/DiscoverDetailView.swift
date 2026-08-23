@@ -462,6 +462,7 @@ struct DiscoverDetailView: View {
 
 struct SourceDestinationHost: View {
     @ObservedObject var resolverViewModel: SourceResolverViewModel
+    let viewFactory: AppViewFactory
     @EnvironmentObject private var libraryManager: LibraryManager
     @EnvironmentObject private var trackerManager: TrackerManager
 
@@ -498,15 +499,27 @@ struct SourceDestinationHost: View {
     private func destinationContent(_ route: SourceRoute) -> some View {
         switch route.media {
         case .manga(let manga):
-            MediaDetailView(runner: route.runner, media: manga, pluginId: route.pluginID) { updated in
+            viewFactory.makeMangaDetailView(
+                runner: route.runner,
+                media: manga,
+                pluginID: route.pluginID
+            ) { updated in
                 try await route.runner.getMangaUpdate(manga: updated)
             }
             .onReceive(libraryManager.$items) { items in
                 linkAniListIfNeeded(itemKey: manga.key, route: route, items: items)
             }
         case .anime(let anime):
-            MediaDetailView(runner: route.runner, media: anime, pluginId: route.pluginID) { updated in
-                try await route.runner.getAnimeUpdate(anime: updated, needsDetails: true, needsEpisodes: true)
+            viewFactory.makeAnimeDetailView(
+                runner: route.runner,
+                media: anime,
+                pluginID: route.pluginID
+            ) { updated in
+                try await route.runner.getAnimeUpdate(
+                    anime: updated,
+                    needsDetails: true,
+                    needsEpisodes: true
+                )
             }
             .onReceive(libraryManager.$items) { items in
                 linkAniListIfNeeded(itemKey: anime.key, route: route, items: items)

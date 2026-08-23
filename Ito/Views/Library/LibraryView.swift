@@ -16,6 +16,7 @@ private struct LibraryGroup: Identifiable {
 // MARK: - LibraryView
 
 struct LibraryView: View {
+    let viewFactory: AppViewFactory
     @EnvironmentObject private var libraryManager: LibraryManager
     @EnvironmentObject private var updateManager: UpdateManager
     @EnvironmentObject private var settingsStore: AppSettingsStore
@@ -157,7 +158,7 @@ struct LibraryView: View {
                     Section {
                         LazyVGrid(columns: columns, spacing: 14) {
                             ForEach(filteredItems) { item in
-                                LibraryItemView(item: item, isEditing: isEditing) {
+                                LibraryItemView(item: item, isEditing: isEditing, viewFactory: viewFactory) {
                                     itemToCategorize = item.id
                                 }
                             }
@@ -173,7 +174,7 @@ struct LibraryView: View {
                             } else {
                                 LazyVGrid(columns: columns, spacing: 14) {
                                     ForEach(group.items) { item in
-                                        LibraryItemView(item: item, isEditing: isEditing) {
+                                        LibraryItemView(item: item, isEditing: isEditing, viewFactory: viewFactory) {
                                             itemToCategorize = item.id
                                         }
                                     }
@@ -339,7 +340,7 @@ struct LibraryView: View {
             LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(0..<8, id: \.self) { _ in
                     let fakeItem = LibraryItem(id: UUID().uuidString, title: "Loading Item Title", coverUrl: nil, pluginId: "", isAnime: false, pluginType: .manga, rawPayload: Data(), anilistId: nil)
-                    LibraryItemView(item: fakeItem, isEditing: false)
+                    LibraryItemView(item: fakeItem, isEditing: false, viewFactory: viewFactory)
                 }
             }
             .padding(.horizontal, 16)
@@ -444,6 +445,7 @@ struct SectionHeaderView: View {
 struct LibraryItemView: View {
     let item: LibraryItem
     let isEditing: Bool
+    let viewFactory: AppViewFactory
     var onAssignCategories: (() -> Void)?
 
     @EnvironmentObject private var pluginManager: PluginManager
@@ -467,7 +469,9 @@ struct LibraryItemView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            NavigationLink(destination: DeferredPluginView(item: item)) {
+            NavigationLink(
+                destination: DeferredPluginView(item: item, viewFactory: viewFactory)
+            ) {
                 cardContent
                     .contentShape(Rectangle())
             }
@@ -628,6 +632,7 @@ struct LibraryItemView: View {
 
 struct DeferredPluginView: View {
     let item: LibraryItem
+    let viewFactory: AppViewFactory
     @EnvironmentObject private var pluginManager: PluginManager
     @EnvironmentObject private var repoManager: RepoManager
 
@@ -669,19 +674,41 @@ struct DeferredPluginView: View {
         switch item.effectiveType {
         case .anime:
             if let anime = decodedAnime {
-                MediaDetailView(runner: runner, media: anime, pluginId: item.pluginId) { try await runner.getAnimeUpdate(anime: $0, needsDetails: true, needsEpisodes: true) }
+                viewFactory.makeAnimeDetailView(
+                    runner: runner,
+                    media: anime,
+                    pluginID: item.pluginId
+                ) {
+                    try await runner.getAnimeUpdate(
+                        anime: $0,
+                        needsDetails: true,
+                        needsEpisodes: true
+                    )
+                }
             } else {
                 errorView("Failed to decode the saved anime data.")
             }
         case .manga:
             if let manga = decodedManga {
-                MediaDetailView(runner: runner, media: manga, pluginId: item.pluginId) { try await runner.getMangaUpdate(manga: $0) }
+                viewFactory.makeMangaDetailView(
+                    runner: runner,
+                    media: manga,
+                    pluginID: item.pluginId
+                ) {
+                    try await runner.getMangaUpdate(manga: $0)
+                }
             } else {
                 errorView("Failed to decode the saved manga data.")
             }
         case .novel:
             if let novel = decodedNovel {
-                MediaDetailView(runner: runner, media: novel, pluginId: item.pluginId) { try await runner.getNovelUpdate(novel: $0) }
+                viewFactory.makeNovelDetailView(
+                    runner: runner,
+                    media: novel,
+                    pluginID: item.pluginId
+                ) {
+                    try await runner.getNovelUpdate(novel: $0)
+                }
             } else {
                 errorView("Failed to decode the saved novel data.")
             }

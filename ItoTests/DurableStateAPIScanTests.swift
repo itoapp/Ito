@@ -50,14 +50,20 @@ struct DurableStateAPIScanTests {
     }
 
     @Test func mediaDetailRelinkDelegatesToSharedRemapperTransaction() throws {
-        let source = try read("Ito/Views/Browse/MediaDetailView.swift")
-        #expect(source.contains("remapper.relink("))
-        #expect(!source.contains("AppDatabase.shared"))
-        #expect(!source.contains("UPDATE itemCategoryLink"))
-        #expect(!source.contains("UPDATE readingHistory"))
-        #expect(!source.contains("readProgressKey"))
-        #expect(!source.contains("trackerLink"))
-        #expect(!source.contains("updateBadge"))
+        let viewModel = try read("Ito/ViewModels/MediaDetailViewModel.swift")
+        let dependencies = try read("Ito/Services/MediaDetail/MediaDetailDependencies.swift")
+        #expect(viewModel.contains("dependencies.relink.relink("))
+        #expect(dependencies.contains("extension LibrarySourceRemapper: MediaDetailRelinkServing"))
+        #expect(dependencies.contains("_ = try await relink("))
+        #expect(dependencies.contains("possibleSourceItemIds: possibleSourceItemIDs"))
+        for source in [viewModel, dependencies] {
+            #expect(!source.contains("AppDatabase.shared"))
+            #expect(!source.contains("UPDATE itemCategoryLink"))
+            #expect(!source.contains("UPDATE readingHistory"))
+            #expect(!source.contains("readProgressKey"))
+            #expect(!source.contains("trackerLink"))
+            #expect(!source.contains("updateBadge"))
+        }
     }
 
     @Test func missingItemUpdateDeletesScopedBadgeInDatabaseTransaction() throws {
@@ -126,7 +132,7 @@ struct DurableStateAPIScanTests {
             "Ito/Views/Reader/ReaderView.swift",
             "Ito/Views/Reader/NovelReaderView.swift",
             "Ito/Views/Reader/VideoPlayerView.swift",
-            "Ito/Views/Browse/MediaDetailView.swift",
+            "Ito/ViewModels/MediaDetailViewModel.swift",
             "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift",
             "Ito/Views/Library/LibraryView.swift"
         ]
@@ -135,7 +141,10 @@ struct DurableStateAPIScanTests {
             "Ito/Views/Reader/ReaderView.swift": ["markAsRead(", "updateProgress(media:"],
             "Ito/Views/Reader/NovelReaderView.swift": ["markAsRead(", "updateProgress(media:"],
             "Ito/Views/Reader/VideoPlayerView.swift": ["markAsWatched(", "updateProgress(media:"],
-            "Ito/Views/Browse/MediaDetailView.swift": ["isRead(media:", "trackerId(for:"],
+            "Ito/ViewModels/MediaDetailViewModel.swift": [
+                "dependencies.progress.isRead(",
+                "dependencies.tracker.state(for:mediaIdentity)"
+            ],
             "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift": [
                 "linkStore.link(media:",
                 "linkStore.unlink(media:"

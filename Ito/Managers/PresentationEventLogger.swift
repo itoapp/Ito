@@ -6,6 +6,7 @@ public enum PresentationFeature: String, Equatable, Sendable {
     case trackingSettings = "tracking_settings"
     case trackerSearch = "tracker_search"
     case trackerDetails = "tracker_details"
+    case mediaDetail = "media_detail"
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {
@@ -20,6 +21,11 @@ public enum PresentationEventKind: String, Equatable, Sendable {
     case link
     case unlink
     case externalURL = "external_url"
+    case detailLoad = "detail_load"
+    case libraryMutation = "library_mutation"
+    case relinkSearch = "relink_search"
+    case relink
+    case baseline
 }
 
 public enum PresentationEventPhase: String, Equatable, Sendable {

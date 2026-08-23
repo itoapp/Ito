@@ -25,6 +25,11 @@ enum AppMessageKind: Equatable {
     case trackingLinkPersistenceFailed
     case trackingUnlinkFailed
     case trackingExternalPageOpenFailed
+    case mediaDetailLoadFailed
+    case mediaDetailSaveFailed
+    case mediaDetailUnsaveFailed
+    case mediaDetailSaved(actionToken: UUID)
+    case mediaDetailTrackerProgressFailed
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -36,6 +41,22 @@ struct AppMessagePresentation: Equatable {
     let style: ToastMessage.Style
     let title: String
     let detail: String?
+    let actionTitle: String?
+    let actionID: String?
+
+    init(
+        style: ToastMessage.Style,
+        title: String,
+        detail: String?,
+        actionTitle: String? = nil,
+        actionID: String? = nil
+    ) {
+        self.style = style
+        self.title = title
+        self.detail = detail
+        self.actionTitle = actionTitle
+        self.actionID = actionID
+    }
 }
 
 extension AppMessageKind {
@@ -180,6 +201,38 @@ extension AppMessageKind {
                 title: "Tracker page unavailable",
                 detail: "The tracker page could not be opened."
             )
+        case .mediaDetailLoadFailed:
+            return .init(
+                style: .error,
+                title: "Failed to load details",
+                detail: "Please try again."
+            )
+        case .mediaDetailSaveFailed:
+            return .init(
+                style: .error,
+                title: "Not saved",
+                detail: "The library change could not be saved. Please try again."
+            )
+        case .mediaDetailUnsaveFailed:
+            return .init(
+                style: .error,
+                title: "Still in library",
+                detail: "The library change could not be saved. Please try again."
+            )
+        case .mediaDetailSaved(let actionToken):
+            return .init(
+                style: .success,
+                title: "Saved to Uncategorized",
+                detail: nil,
+                actionTitle: "Move",
+                actionID: actionToken.uuidString
+            )
+        case .mediaDetailTrackerProgressFailed:
+            return .init(
+                style: .error,
+                title: "Local progress not updated",
+                detail: "Tracking succeeded, but local progress could not be saved."
+            )
         }
     }
 }
@@ -189,6 +242,7 @@ final class AppMessageCenter: ObservableObject {
     @Published private(set) var currentMessage: AppMessage?
 
     private var queuedMessages: [AppMessage] = []
+    private var mediaDetailActionItemIDs: [UUID: String] = [:]
 
     @discardableResult
     func publish(_ kind: AppMessageKind) -> UUID {
@@ -202,8 +256,23 @@ final class AppMessageCenter: ObservableObject {
     }
 
     func dismiss(messageID: UUID) {
-        guard currentMessage?.id == messageID else { return }
-        currentMessage = queuedMessages.isEmpty ? nil : queuedMessages.removeFirst()
+        guard let current = currentMessage, current.id == messageID else { return }
+        if case .mediaDetailSaved(let actionToken) = current.kind {
+            mediaDetailActionItemIDs.removeValue(forKey: actionToken)
+        }
+        self.currentMessage = queuedMessages.isEmpty ? nil : queuedMessages.removeFirst()
+    }
+
+    @discardableResult
+    func publishMediaDetailSaved(itemID: String) -> UUID {
+        let actionToken = UUID()
+        mediaDetailActionItemIDs[actionToken] = itemID
+        return publish(.mediaDetailSaved(actionToken: actionToken))
+    }
+
+    func mediaDetailItemID(forActionID actionID: String) -> String? {
+        guard let token = UUID(uuidString: actionID) else { return nil }
+        return mediaDetailActionItemIDs[token]
     }
 
     var queuedMessageCount: Int {

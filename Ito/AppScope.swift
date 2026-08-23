@@ -4,6 +4,7 @@ import Foundation
 struct PreparedApplicationDependencies {
     let settings: PreparedSettingsDependencies
     let tracking: PreparedTrackingDependencies
+    let mediaDetail: PreparedMediaDetailDependencies?
     let searchExecutor: any SearchPluginExecuting
     let recentSearchStore: any RecentSearchPersisting
     let searchDebounceMilliseconds: Int?
@@ -22,6 +23,7 @@ struct PreparedApplicationDependencies {
     init(
         settings: PreparedSettingsDependencies,
         tracking: PreparedTrackingDependencies? = nil,
+        mediaDetail: PreparedMediaDetailDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
         recentSearchStore: any RecentSearchPersisting,
         searchDebounceMilliseconds: Int?,
@@ -39,6 +41,7 @@ struct PreparedApplicationDependencies {
     ) {
         self.settings = settings
         self.tracking = tracking ?? .unavailable()
+        self.mediaDetail = mediaDetail
         self.searchExecutor = searchExecutor
         self.recentSearchStore = recentSearchStore
         self.searchDebounceMilliseconds = searchDebounceMilliseconds
@@ -61,6 +64,10 @@ struct PreparedApplicationDependencies {
         settingsStore: AppSettingsStore,
         trackerManager: TrackerManager,
         readProgressManager: ReadProgressManager,
+        libraryManager: LibraryManager,
+        updateManager: UpdateManager,
+        librarySourceRemapper: LibrarySourceRemapper,
+        themeManager: ThemeManager,
         notificationManager: NotificationManager,
         storageManager: StorageManager,
         discordRPCManager: DiscordRPCManager,
@@ -73,6 +80,11 @@ struct PreparedApplicationDependencies {
         let fileOperations = LocalBrowsePluginFileOperations(
             pluginsDirectory: browsePluginsDirectory
         )
+        let tracking = PreparedTrackingDependencies.production(
+            trackerManager: trackerManager,
+            settingsStore: settingsStore,
+            readProgressManager: readProgressManager
+        )
         return Self(
             settings: PreparedSettingsDependencies(
                 settingsStore: settingsStore,
@@ -83,10 +95,17 @@ struct PreparedApplicationDependencies {
                 logReader: SystemDebugLogReader(),
                 clipboardWriter: SystemClipboardWriter()
             ),
-            tracking: .production(
-                trackerManager: trackerManager,
+            tracking: tracking,
+            mediaDetail: .production(
+                libraryManager: libraryManager,
+                readProgressManager: readProgressManager,
+                tracking: tracking,
+                themeManager: themeManager,
+                librarySourceRemapper: librarySourceRemapper,
+                updateManager: updateManager,
                 settingsStore: settingsStore,
-                readProgressManager: readProgressManager
+                pluginManager: pluginManager,
+                discordRPCManager: discordRPCManager
             ),
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
@@ -300,6 +319,7 @@ final class AppScope {
     let sourceMessagePresenter: any SourceMessagePresenting
     let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
     let trackingMessagePresenter: any TrackingMessagePresenting
+    let mediaDetailMessagePresenter: any MediaDetailMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -325,6 +345,10 @@ final class AppScope {
         self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
         let trackingMessagePresenter = AppMessageTrackingPresenter(messageCenter: messageCenter)
         self.trackingMessagePresenter = trackingMessagePresenter
+        let mediaDetailMessagePresenter = AppMessageMediaDetailPresenter(
+            messageCenter: messageCenter
+        )
+        self.mediaDetailMessagePresenter = mediaDetailMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
@@ -343,6 +367,8 @@ final class AppScope {
             discoverDetailMessagePresenter: discoverDetailMessagePresenter,
             trackingDependencies: preparedDependencies.tracking,
             trackingMessagePresenter: trackingMessagePresenter,
+            mediaDetailDependencies: preparedDependencies.mediaDetail,
+            mediaDetailMessagePresenter: mediaDetailMessagePresenter,
             presentationLogger: preparedDependencies.presentationLogger
         )
     }
@@ -353,6 +379,10 @@ final class AppScope {
         settingsStore: AppSettingsStore,
         trackerManager: TrackerManager,
         readProgressManager: ReadProgressManager,
+        libraryManager: LibraryManager,
+        updateManager: UpdateManager,
+        librarySourceRemapper: LibrarySourceRemapper,
+        themeManager: ThemeManager,
         notificationManager: NotificationManager,
         storageManager: StorageManager,
         discordRPCManager: DiscordRPCManager,
@@ -369,6 +399,10 @@ final class AppScope {
                 settingsStore: settingsStore,
                 trackerManager: trackerManager,
                 readProgressManager: readProgressManager,
+                libraryManager: libraryManager,
+                updateManager: updateManager,
+                librarySourceRemapper: librarySourceRemapper,
+                themeManager: themeManager,
                 notificationManager: notificationManager,
                 storageManager: storageManager,
                 discordRPCManager: discordRPCManager,
