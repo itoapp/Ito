@@ -13,6 +13,7 @@ struct AppViewFactory {
     private let discoverDetailDependencies: PreparedDiscoverDetailDependencies
     private let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
     let trackingViewFactory: TrackingViewFactory
+    let mediaDetailViewFactory: MediaDetailViewFactory?
 
     init(
         rootModels: RootModelStore,
@@ -25,8 +26,10 @@ struct AppViewFactory {
         discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting,
         trackingDependencies: PreparedTrackingDependencies,
         trackingMessagePresenter: any TrackingMessagePresenting,
+        mediaDetailDependencies: PreparedMediaDetailDependencies?,
+        mediaDetailMessagePresenter: any MediaDetailMessagePresenting,
         presentationLogger: any PresentationEventLogging,
-        searchRouteFactory: SearchRouteFactory = SearchRouteFactory()
+        searchRouteFactory: SearchRouteFactory? = nil
     ) {
         self.rootModels = rootModels
         self.repositoryManagement = repositoryManagement
@@ -36,12 +39,24 @@ struct AppViewFactory {
         self.sourceMessagePresenter = sourceMessagePresenter
         self.discoverDetailDependencies = discoverDetailDependencies
         self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
-        self.trackingViewFactory = TrackingViewFactory(
+        let trackingViewFactory = TrackingViewFactory(
             dependencies: trackingDependencies,
             messagePresenter: trackingMessagePresenter,
             presentationLogger: presentationLogger
         )
-        self.searchRouteFactory = searchRouteFactory
+        self.trackingViewFactory = trackingViewFactory
+        let mediaDetailViewFactory = mediaDetailDependencies.map {
+            MediaDetailViewFactory(
+                dependencies: $0,
+                messagePresenter: mediaDetailMessagePresenter,
+                presentationLogger: presentationLogger,
+                trackingViewFactory: trackingViewFactory
+            )
+        }
+        self.mediaDetailViewFactory = mediaDetailViewFactory
+        self.searchRouteFactory = searchRouteFactory ?? SearchRouteFactory(
+            mediaDetailViewFactory: mediaDetailViewFactory
+        )
     }
 
     func makeSearchView() -> SearchView {
@@ -157,7 +172,64 @@ struct AppViewFactory {
     func makeSourceDestinationView(
         resolverViewModel: SourceResolverViewModel
     ) -> SourceDestinationHost {
-        SourceDestinationHost(resolverViewModel: resolverViewModel)
+        SourceDestinationHost(resolverViewModel: resolverViewModel, viewFactory: self)
+    }
+
+    @ViewBuilder
+    func makeMangaDetailView(
+        runner: ItoRunner,
+        media: Manga,
+        pluginID: String,
+        loader: @escaping (Manga) async throws -> Manga
+    ) -> some View {
+        if let mediaDetailViewFactory {
+            mediaDetailViewFactory.makeMangaView(
+                runner: runner,
+                media: media,
+                pluginID: pluginID,
+                loader: loader
+            )
+        } else {
+            Text("Media details are unavailable.")
+        }
+    }
+
+    @ViewBuilder
+    func makeAnimeDetailView(
+        runner: ItoRunner,
+        media: Anime,
+        pluginID: String,
+        loader: @escaping (Anime) async throws -> Anime
+    ) -> some View {
+        if let mediaDetailViewFactory {
+            mediaDetailViewFactory.makeAnimeView(
+                runner: runner,
+                media: media,
+                pluginID: pluginID,
+                loader: loader
+            )
+        } else {
+            Text("Media details are unavailable.")
+        }
+    }
+
+    @ViewBuilder
+    func makeNovelDetailView(
+        runner: ItoRunner,
+        media: Novel,
+        pluginID: String,
+        loader: @escaping (Novel) async throws -> Novel
+    ) -> some View {
+        if let mediaDetailViewFactory {
+            mediaDetailViewFactory.makeNovelView(
+                runner: runner,
+                media: media,
+                pluginID: pluginID,
+                loader: loader
+            )
+        } else {
+            Text("Media details are unavailable.")
+        }
     }
 
     func makeSettingsView() -> SettingsView {
@@ -214,6 +286,12 @@ struct AppViewFactory {
 }
 
 struct SearchRouteFactory {
+    private let mediaDetailViewFactory: MediaDetailViewFactory?
+
+    init(mediaDetailViewFactory: MediaDetailViewFactory? = nil) {
+        self.mediaDetailViewFactory = mediaDetailViewFactory
+    }
+
     func route(for destination: SearchDestination) -> SearchDetailRoute {
         switch destination {
         case .manga(let pluginID, let context, let media):
@@ -241,7 +319,10 @@ struct SearchRouteFactory {
     }
 
     func destination(for destination: SearchDestination) -> some View {
-        SearchDestinationHost(route: route(for: destination))
+        SearchDestinationHost(
+            route: route(for: destination),
+            mediaDetailViewFactory: mediaDetailViewFactory
+        )
     }
 }
 
@@ -268,31 +349,44 @@ enum SearchDetailRoute {
 
 private struct SearchDestinationHost: View {
     let route: SearchDetailRoute
+    let mediaDetailViewFactory: MediaDetailViewFactory?
 
     @ViewBuilder
     var body: some View {
         switch route {
         case .manga(let pluginID, let runner, let media, let loader):
-            MediaDetailView(
-                runner: runner,
-                media: media,
-                pluginId: pluginID,
-                loader: loader
-            )
+            if let mediaDetailViewFactory {
+                mediaDetailViewFactory.makeMangaView(
+                    runner: runner,
+                    media: media,
+                    pluginID: pluginID,
+                    loader: loader
+                )
+            } else {
+                Text("Media details are unavailable.")
+            }
         case .anime(let pluginID, let runner, let media, let loader):
-            MediaDetailView(
-                runner: runner,
-                media: media,
-                pluginId: pluginID,
-                loader: loader
-            )
+            if let mediaDetailViewFactory {
+                mediaDetailViewFactory.makeAnimeView(
+                    runner: runner,
+                    media: media,
+                    pluginID: pluginID,
+                    loader: loader
+                )
+            } else {
+                Text("Media details are unavailable.")
+            }
         case .novel(let pluginID, let runner, let media, let loader):
-            MediaDetailView(
-                runner: runner,
-                media: media,
-                pluginId: pluginID,
-                loader: loader
-            )
+            if let mediaDetailViewFactory {
+                mediaDetailViewFactory.makeNovelView(
+                    runner: runner,
+                    media: media,
+                    pluginID: pluginID,
+                    loader: loader
+                )
+            } else {
+                Text("Media details are unavailable.")
+            }
         }
     }
 }

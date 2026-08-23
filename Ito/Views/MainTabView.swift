@@ -21,7 +21,7 @@ private struct MainTabContentView: View {
     var body: some View {
         ZStack {
             TabView(selection: $router.selectedTab) {
-                LibraryView()
+                LibraryView(viewFactory: appScope.viewFactory)
                     .tabItem {
                         Label("Library", systemImage: "books.vertical")
                     }

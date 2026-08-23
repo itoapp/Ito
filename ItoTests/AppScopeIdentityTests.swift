@@ -227,7 +227,7 @@ final class AppScopeIdentityTests: XCTestCase {
             )
         }
         for unmigratedTab in [
-            "LibraryView()",
+            "LibraryView(viewFactory: appScope.viewFactory)",
             "appScope.viewFactory.makeSettingsView()"
         ] {
             XCTAssertTrue(tabSource.contains(unmigratedTab))
@@ -312,10 +312,13 @@ final class AppScopeIdentityTests: XCTestCase {
             usernameDefaults: fixtureDefaults
         )
         let readProgressManager = ReadProgressManager(dbPool: database.dbPool)
+        let libraryManager = LibraryManager(dbPool: database.dbPool)
+        let updateManager = UpdateManager(dbPool: database.dbPool)
+        let librarySourceRemapper = LibrarySourceRemapper(dbPool: database.dbPool)
         let notificationManager = NotificationManager()
         let storageManager = StorageManager(pluginManager: pluginManager)
         let discordRPCManager = DiscordRPCManager(
-            libraryManager: LibraryManager(dbPool: database.dbPool)
+            libraryManager: libraryManager
         )
         let sourceMappingRepository = GRDBSourceMappingRepository(
             dbWriter: database.dbPool
@@ -326,6 +329,10 @@ final class AppScopeIdentityTests: XCTestCase {
             settingsStore: settingsStore,
             trackerManager: trackerManager,
             readProgressManager: readProgressManager,
+            libraryManager: libraryManager,
+            updateManager: updateManager,
+            librarySourceRemapper: librarySourceRemapper,
+            themeManager: ThemeManager.shared,
             notificationManager: notificationManager,
             storageManager: storageManager,
             discordRPCManager: discordRPCManager,

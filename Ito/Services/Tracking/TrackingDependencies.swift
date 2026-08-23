@@ -58,8 +58,11 @@ protocol TrackerOAuthAuthenticating: AnyObject {
 
 @MainActor
 protocol TrackerSheetServicing: AnyObject {
+    var sheetStatePublisher: AnyPublisher<Void, Never> { get }
     func authenticatedProviders() -> [TrackerProviderPresentation]
+    func hasLocalLink(for media: MediaIdentity) -> Bool
     func remoteMediaID(for media: MediaIdentity, providerID: String) -> String?
+    func refreshState() async throws
 }
 
 @MainActor
@@ -187,6 +190,7 @@ final class TrackerProviderService:
     private let trackerManager: TrackerManager
     private let oauthAuthenticator: any TrackerOAuthAuthenticating
     private let stateSubject: CurrentValueSubject<TrackerSettingsAuthoritativeState, Never>
+    private let sheetStateSubject = PassthroughSubject<Void, Never>()
     private var cancellables = Set<AnyCancellable>()
 
     init(
@@ -202,6 +206,7 @@ final class TrackerProviderService:
                 Task { @MainActor [weak self] in
                     await Task.yield()
                     self?.publishSettingsState()
+                    self?.sheetStateSubject.send()
                 }
             }
             .store(in: &cancellables)
@@ -217,6 +222,10 @@ final class TrackerProviderService:
 
     var settingsStatePublisher: AnyPublisher<TrackerSettingsAuthoritativeState, Never> {
         stateSubject.eraseToAnyPublisher()
+    }
+
+    var sheetStatePublisher: AnyPublisher<Void, Never> {
+        sheetStateSubject.eraseToAnyPublisher()
     }
 
     func authenticate(providerID: String) async throws {
@@ -239,8 +248,17 @@ final class TrackerProviderService:
         trackerManager.authenticatedProviders.map(Self.presentation(for:))
     }
 
+    func hasLocalLink(for media: MediaIdentity) -> Bool {
+        trackerManager.hasLinks(for: media)
+    }
+
     func remoteMediaID(for media: MediaIdentity, providerID: String) -> String? {
         trackerManager.trackerId(for: media, providerId: providerID)
+    }
+
+    func refreshState() async throws {
+        try await trackerManager.reload()
+        publishSettingsState()
     }
 
     func searchMedia(
@@ -302,6 +320,7 @@ final class TrackerProviderService:
                 Task { @MainActor [weak self] in
                     await Task.yield()
                     self?.publishSettingsState()
+                    self?.sheetStateSubject.send()
                 }
             }
             .store(in: &cancellables)
@@ -391,6 +410,10 @@ final class UnavailableTrackingService:
         subject.eraseToAnyPublisher()
     }
 
+    var sheetStatePublisher: AnyPublisher<Void, Never> {
+        Empty().eraseToAnyPublisher()
+    }
+
     func authenticate(providerID: String) async throws {
         _ = providerID
         throw TrackingServiceError.unavailable
@@ -405,10 +428,19 @@ final class UnavailableTrackingService:
 
     func authenticatedProviders() -> [TrackerProviderPresentation] { [] }
 
+    func hasLocalLink(for media: MediaIdentity) -> Bool {
+        _ = media
+        return false
+    }
+
     func remoteMediaID(for media: MediaIdentity, providerID: String) -> String? {
         _ = media
         _ = providerID
         return nil
+    }
+
+    func refreshState() async throws {
+        throw TrackingServiceError.unavailable
     }
 
     func searchMedia(

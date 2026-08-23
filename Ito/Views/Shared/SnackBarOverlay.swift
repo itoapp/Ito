@@ -120,7 +120,9 @@ struct SnackBarOverlay: View {
 
                     if let actionTitle = toast.actionTitle, let actionId = toast.actionId {
                         Button {
-                            showingSheetForId = actionId
+                            showingSheetForId = messageCenter.mediaDetailItemID(
+                                forActionID: actionId
+                            ) ?? actionId
                             withAnimation {
                                 manager.isShowing = false
                             }
@@ -175,7 +177,9 @@ struct SnackBarOverlay: View {
                 id: message.id,
                 style: presentation.style,
                 title: presentation.title,
-                message: presentation.detail
+                message: presentation.detail,
+                actionId: presentation.actionID,
+                actionTitle: presentation.actionTitle
             )
         }
         guard manager.isShowing else { return nil }

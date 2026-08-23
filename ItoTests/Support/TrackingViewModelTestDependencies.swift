@@ -39,16 +39,26 @@ final class TrackerOAuthAuthenticatorFake: TrackerOAuthAuthenticating {
 
 @MainActor
 final class TrackerSheetServiceFake: TrackerSheetServicing {
+    private let sheetStateSubject = PassthroughSubject<Void, Never>()
     var providers: [TrackerProviderPresentation]
     var remoteIDs: [MediaIdentity: [String: String]]
+    var locallyLinkedMedia: Set<MediaIdentity>
+    var refreshError: (any Error)?
     private(set) var lookupRequests: [(media: MediaIdentity, providerID: String)] = []
+    private(set) var refreshCount = 0
+
+    var sheetStatePublisher: AnyPublisher<Void, Never> {
+        sheetStateSubject.eraseToAnyPublisher()
+    }
 
     init(
         providers: [TrackerProviderPresentation] = [],
-        remoteIDs: [MediaIdentity: [String: String]] = [:]
+        remoteIDs: [MediaIdentity: [String: String]] = [:],
+        locallyLinkedMedia: Set<MediaIdentity> = []
     ) {
         self.providers = providers
         self.remoteIDs = remoteIDs
+        self.locallyLinkedMedia = locallyLinkedMedia
     }
 
     func authenticatedProviders() -> [TrackerProviderPresentation] {
@@ -58,6 +68,19 @@ final class TrackerSheetServiceFake: TrackerSheetServicing {
     func remoteMediaID(for media: MediaIdentity, providerID: String) -> String? {
         lookupRequests.append((media, providerID))
         return remoteIDs[media]?[providerID]
+    }
+
+    func hasLocalLink(for media: MediaIdentity) -> Bool {
+        locallyLinkedMedia.contains(media)
+    }
+
+    func refreshState() async throws {
+        refreshCount += 1
+        if let refreshError { throw refreshError }
+    }
+
+    func sendStateChange() {
+        sheetStateSubject.send()
     }
 }
 
