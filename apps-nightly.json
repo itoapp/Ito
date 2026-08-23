@@ -23,6 +23,15 @@
       },
       "versions": [
         {
+          "version": "1.0.0-nightly.20260823.37",
+          "buildVersion": "37",
+          "date": "2026-08-23T09:56:04Z",
+          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260823-37/Ito-1.0.0-nightly.20260823.37-unsigned.ipa",
+          "size": 9915093,
+          "localizedDescription": "Automated unsigned nightly from main at bab7cc7. This build may be unstable.",
+          "minOSVersion": "15.4"
+        },
+        {
           "version": "1.0.0-nightly.20260822.36",
           "buildVersion": "36",
           "date": "2026-08-22T09:57:57Z",
@@ -138,24 +147,15 @@
           "size": 9761411,
           "localizedDescription": "Automated unsigned nightly from main at 6c17793. This build may be unstable.",
           "minOSVersion": "15.4"
-        },
-        {
-          "version": "1.0.0-nightly.20260809.23",
-          "buildVersion": "23",
-          "date": "2026-08-09T10:05:15Z",
-          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260809-23/Ito-1.0.0-nightly.20260809.23-unsigned.ipa",
-          "size": 9761995,
-          "localizedDescription": "Automated unsigned nightly from main at 6c17793. This build may be unstable.",
-          "minOSVersion": "15.4"
         }
       ],
-      "version": "1.0.0-nightly.20260822.36",
-      "buildVersion": "36",
-      "date": "2026-08-22T09:57:57Z",
-      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260822-36/Ito-1.0.0-nightly.20260822.36-unsigned.ipa",
-      "size": 9841180,
+      "version": "1.0.0-nightly.20260823.37",
+      "buildVersion": "37",
+      "date": "2026-08-23T09:56:04Z",
+      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260823-37/Ito-1.0.0-nightly.20260823.37-unsigned.ipa",
+      "size": 9915093,
       "minOSVersion": "15.4",
-      "versionDescription": "Automated unsigned nightly from main at 50b78fa. This build may be unstable."
+      "versionDescription": "Automated unsigned nightly from main at bab7cc7. This build may be unstable."
     }
   ],
   "news": []
