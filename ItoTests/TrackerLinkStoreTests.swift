@@ -71,4 +71,37 @@ struct TrackerLinkStoreTests {
             #expect(count == 1)
         }
     }
+
+    @Test func unlinkFailurePreservesPublishedAndDurableMapping() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let manager = TrackerManager(
+            dbPool: database.dbPool,
+            credentialStore: FakeTrackerCredentialStore(),
+            legacyTokenStore: FakeLegacyTokenStore(),
+            usernameDefaults: UserDefaults(suiteName: UUID().uuidString)!
+        )
+        let media = MediaIdentity(pluginId: "plugin", canonicalMediaId: "media")
+        try await manager.link(media: media, providerId: "anilist", remoteMediaId: "remote")
+        try await database.dbPool.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_tracker_delete
+                BEFORE DELETE ON trackerLink
+                BEGIN
+                    SELECT RAISE(ABORT, 'injected tracker delete failure');
+                END
+                """)
+        }
+
+        await #expect(throws: (any Error).self) {
+            try await manager.unlink(media: media, providerId: "anilist")
+        }
+
+        #expect(manager.trackerId(for: media, providerId: "anilist") == "remote")
+        try await database.dbPool.read { db in
+            let record = try TrackerLinkRecord.fetchOne(db)
+            #expect(record?.remoteMediaId == "remote")
+            #expect(try TrackerLinkRecord.fetchCount(db) == 1)
+        }
+    }
 }

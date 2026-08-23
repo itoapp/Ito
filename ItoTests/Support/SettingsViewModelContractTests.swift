@@ -179,6 +179,7 @@ extension SettingsViewModelTests {
                 "appearance",
                 "library",
                 "privacy",
+                "trackers",
                 "readerUnavailable",
                 "storage",
                 "networkUnavailable",
@@ -204,6 +205,7 @@ extension SettingsViewModelTests {
             "case .appearance:\n            makeAppearanceSettingsView()",
             "case .library:\n            makeLibrarySettingsView()",
             "case .privacy:\n            makePrivacySettingsView()",
+            "case .trackers:\n            makeTrackerSettingsView()",
             "case .storage:\n            makeStorageSettingsView()",
             "case .debugLogs:\n            makeDebugLogView()"
         ] {
@@ -231,7 +233,9 @@ extension SettingsViewModelTests {
             settingsSource.components(separatedBy: "struct SettingsView").first
         )
 
-        XCTAssertTrue(settingsSource.contains("destination: TrackerSettingsView()"))
+        XCTAssertTrue(settingsSource.contains(
+            "destination: viewFactory.makeSettingsDestination(for: .trackers)"
+        ))
         XCTAssertTrue(settingsSource.contains("destination: BackupSettingsView()"))
         XCTAssertTrue(settingsSource.contains("NavigationView"))
         XCTAssertTrue(settingsSource.contains("NavigationLink"))
@@ -242,7 +246,6 @@ extension SettingsViewModelTests {
         XCTAssertFalse(appFactorySource.contains("ManageExtensionsView("))
 
         for excludedCase in [
-            "tracker",
             "backup",
             "repository",
             "source",

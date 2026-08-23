@@ -1,150 +1,123 @@
 import SwiftUI
 
-enum TrackerSettingsCredentialState: Equatable {
-    case loading
-    case deferred
-    case ready
-    case unavailable
-
-    init(_ bootstrapState: TrackerManager.CredentialBootstrapState) {
-        switch bootstrapState {
-        case .notStarted, .inFlight:
-            self = .loading
-        case .retryableProtectedDataFailure:
-            self = .deferred
-        case .ready, .conflict:
-            self = .ready
-        case .recoverableVerificationFailure, .permanentFailure:
-            self = .unavailable
-        }
-    }
-}
-
 struct TrackerSettingsView: View {
-    @EnvironmentObject private var trackerManager: TrackerManager
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-    @State private var authenticatingProvider: String?
-    @State private var authError: String?
-    @State private var errorProvider: String?
+    @StateObject private var viewModel: TrackerSettingsViewModel
 
-    // Force a view refresh after auth changes
-    @State private var refreshTrigger = false
+    init(viewModel: TrackerSettingsViewModel) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         List {
-            ForEach(trackerManager.providers, id: \.identifier) { provider in
-                Section(header: Text(provider.name), footer: Text("Sync your progress automatically with \(provider.name).")) {
-                    switch TrackerSettingsCredentialState(trackerManager.credentialBootstrapState) {
-                    case .loading:
-                        HStack {
-                            ProgressView()
-                                .padding(.trailing, 8)
-                            Text("Checking saved credentials…")
-                        }
-                    case .deferred:
-                        Label("Saved credentials will be checked when protected data is available.", systemImage: "lock.fill")
-                            .foregroundColor(.secondary)
-                    case .unavailable:
-                        Label("Saved credentials are currently unavailable.", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                    case .ready where provider.isAuthenticated:
-                        HStack {
-                            Image(systemName: "person.crop.circle.fill")
-                                .foregroundColor(.blue)
-                            if let username = provider.username {
-                                Text("Logged in as \(username)")
-                            } else {
-                                Text("Logged in")
-                            }
-                            Spacer()
-                        }
+            ForEach(viewModel.providers) { provider in
+                Section(
+                    header: Text(provider.name),
+                    footer: Text("Sync your progress automatically with \(provider.name).")
+                ) {
+                    providerContent(provider)
 
-                        Button(action: {
-                            logout(provider: provider)
-                        }) {
-                            Text("Log Out")
-                                .foregroundColor(.red)
-                        }
-                    case .ready:
-                        Button(action: {
-                            authenticate(provider: provider)
-                        }) {
-                            HStack {
-                                if authenticatingProvider == provider.identifier {
-                                    ProgressView()
-                                        .padding(.trailing, 8)
-                                }
-                                Text("Login with \(provider.name)")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                        .disabled(authenticatingProvider != nil)
-                    }
-
-                    if let error = authError, errorProvider == provider.identifier {
-                        Text(error)
+                    if let failure = viewModel.failure(for: provider.identifier) {
+                        Text(failure.message)
                             .font(.caption)
                             .foregroundColor(.red)
                     }
                 }
             }
 
-            Section(header: Text("Preferences"), footer: Text("When updating or tracking a series, automatically mark all previous chapters or episodes as read/watched in your local library.")) {
-                Toggle("Sync Trackers to Local Library", isOn: Binding(
-                    get: { settingsStore.autoSyncTrackersToLocal },
-                    set: { value in
-                        Task {
-                            try? await settingsStore.set(
-                                value,
-                                for: AppPreferenceCatalog.autoSyncTrackersToLocal
-                            )
-                        }
-                    }
-                ))
+            Section(
+                header: Text("Preferences"),
+                footer: Text("When updating or tracking a series, automatically mark all previous chapters or episodes as read/watched in your local library.")
+            ) {
+                Toggle(
+                    "Sync Trackers to Local Library",
+                    isOn: $viewModel.syncTrackersToLocal
+                )
             }
         }
         .navigationTitle("Trackers")
         .navigationBarTitleDisplayMode(.inline)
-        .id(refreshTrigger) // forces list to redraw when auth changes
+        .onAppear(perform: viewModel.refreshAuthoritativeState)
+        .onDisappear(perform: viewModel.cancelOwnedWork)
     }
 
-    private func authenticate(provider: any TrackerProvider) {
-        authenticatingProvider = provider.identifier
-        authError = nil
-        errorProvider = nil
-
-        Task {
-            defer { authenticatingProvider = nil }
-            do {
-                try await provider.authenticate(using: OAuthManager.shared)
-                refreshTrigger.toggle()
-            } catch {
-                authError = "Authentication failed: \(error.localizedDescription)"
-                errorProvider = provider.identifier
+    @ViewBuilder
+    private func providerContent(_ provider: TrackerProviderPresentation) -> some View {
+        switch viewModel.credentialState {
+        case .loading:
+            HStack {
+                ProgressView()
+                    .padding(.trailing, 8)
+                Text("Checking saved credentials…")
             }
-        }
-    }
-
-    private func logout(provider: any TrackerProvider) {
-        authenticatingProvider = provider.identifier
-        authError = nil
-        errorProvider = nil
-
-        Task {
-            defer { authenticatingProvider = nil }
-            do {
-                try await provider.logout()
-                refreshTrigger.toggle()
-            } catch {
-                authError = "Logout failed: \(error.localizedDescription)"
-                errorProvider = provider.identifier
+        case .deferred:
+            Label(
+                "Saved credentials will be checked when protected data is available.",
+                systemImage: "lock.fill"
+            )
+            .foregroundColor(.secondary)
+        case .unavailable:
+            Label(
+                "Saved credentials are currently unavailable.",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .foregroundColor(.orange)
+        case .ready where provider.isAuthenticated:
+            HStack {
+                Image(systemName: "person.crop.circle.fill")
+                    .foregroundColor(.blue)
+                if let username = provider.username {
+                    Text("Logged in as \(username)")
+                } else {
+                    Text("Logged in")
+                }
+                Spacer()
             }
+
+            Button {
+                viewModel.logout(providerID: provider.identifier)
+            } label: {
+                HStack {
+                    if viewModel.operatingProviderID == provider.identifier,
+                       viewModel.operationKind == .logout {
+                        ProgressView()
+                            .padding(.trailing, 8)
+                    }
+                    Text("Log Out")
+                        .foregroundColor(.red)
+                }
+            }
+            .disabled(viewModel.isAuthenticationOperationActive)
+        case .ready:
+            Button {
+                viewModel.authenticate(providerID: provider.identifier)
+            } label: {
+                HStack {
+                    if viewModel.operatingProviderID == provider.identifier,
+                       viewModel.operationKind == .authentication {
+                        ProgressView()
+                            .padding(.trailing, 8)
+                    }
+                    Text("Login with \(provider.name)")
+                        .foregroundColor(.blue)
+                }
+            }
+            .disabled(viewModel.isAuthenticationOperationActive)
         }
     }
 }
 
 struct TrackerSettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        TrackerSettingsView()
+        let dependencies = PreparedTrackingDependencies.unavailable()
+        return NavigationView {
+            TrackerSettingsView(
+                viewModel: TrackerSettingsViewModel(
+                    service: dependencies.settingsService,
+                    settingsStore: dependencies.settingsStore,
+                    messagePresenter: NoopTrackingMessagePresenter(),
+                    presentationLogger: OSLogPresentationEventLogger()
+                )
+            )
+        }
     }
 }

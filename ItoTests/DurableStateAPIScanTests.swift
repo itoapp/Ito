@@ -127,7 +127,7 @@ struct DurableStateAPIScanTests {
             "Ito/Views/Reader/NovelReaderView.swift",
             "Ito/Views/Reader/VideoPlayerView.swift",
             "Ito/Views/Browse/MediaDetailView.swift",
-            "Ito/Views/Tracker/TrackerSheets.swift",
+            "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift",
             "Ito/Views/Library/LibraryView.swift"
         ]
         let scopedCallPatterns = [
@@ -136,7 +136,10 @@ struct DurableStateAPIScanTests {
             "Ito/Views/Reader/NovelReaderView.swift": ["markAsRead(", "updateProgress(media:"],
             "Ito/Views/Reader/VideoPlayerView.swift": ["markAsWatched(", "updateProgress(media:"],
             "Ito/Views/Browse/MediaDetailView.swift": ["isRead(media:", "trackerId(for:"],
-            "Ito/Views/Tracker/TrackerSheets.swift": ["link(media:", "unlink(media:"],
+            "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift": [
+                "linkStore.link(media:",
+                "linkStore.unlink(media:"
+            ],
             "Ito/Views/Library/LibraryView.swift": [
                 "MediaIdentity(pluginId:item.pluginId,itemId:item.id)",
                 "badgeCount(for:mediaIdentity)",
@@ -560,145 +563,84 @@ struct DurableStateAPIScanTests {
     }
 
     @Test func trackerSheetsPublishOnlyAfterPersistenceCommitAndSurfaceFailures() throws {
-        let source = try read("Ito/Views/Tracker/TrackerSheets.swift")
+        let viewModel = try read("Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift")
+        let sheets = try read("Ito/Views/Tracker/TrackerSheets.swift")
 
-        let orchestratorBodyStart = try #require(source.range(of: "public var body: some View"))
-        let linkHelperStart = try #require(
-            source.range(
-                of: "private func linkAndPublish(",
-                range: orchestratorBodyStart.upperBound..<source.endIndex
-            )
+        let saveStart = try #require(viewModel.range(of: "func save()"))
+        let unlinkStart = try #require(
+            viewModel.range(of: "func stopTracking()", range: saveStart.upperBound..<viewModel.endIndex)
         )
-        let orchestratorBody = String(
-            source[orchestratorBodyStart.lowerBound..<linkHelperStart.lowerBound]
+        let saveRange = saveStart.lowerBound..<unlinkStart.lowerBound
+        let remoteUpdate = try #require(
+            viewModel.range(of: "try await detailsService.updateProgress(", range: saveRange)
         )
-        #expect(
-            orchestratorBody.components(separatedBy: "await linkAndPublish(").count - 1 == 2,
-            "Both new-link paths must use the commit-ordered helper"
+        let remoteFailure = try #require(
+            viewModel.range(of: "failure = .remoteUpdate", range: remoteUpdate.upperBound..<saveRange.upperBound)
         )
-
-        let linkHelperEnd = try #require(
-            source.range(
-                of: "struct PresentationDetentsModifier",
-                range: linkHelperStart.upperBound..<source.endIndex
-            )
+        let conditionalLink = try #require(
+            viewModel.range(of: "if !isLocallyLinked {", range: remoteFailure.upperBound..<saveRange.upperBound)
         )
-        let linkHelper = linkHelperStart.lowerBound..<linkHelperEnd.lowerBound
         let awaitedLink = try #require(
-            source.range(of: "try await trackerManager.link(", range: linkHelper)
-        )
-        let trackedCallback = try #require(
-            source.range(of: "onTracked?(media, progress, status)", range: linkHelper)
-        )
-        let linkSuccess = try #require(
-            source.range(
-                of: "return true",
-                range: trackedCallback.upperBound..<linkHelper.upperBound
-            )
+            viewModel.range(of: "try await linkStore.link(", range: conditionalLink.upperBound..<saveRange.upperBound)
         )
         let linkFailure = try #require(
-            source.range(
-                of: "showPersistenceError = true",
-                range: linkSuccess.upperBound..<linkHelper.upperBound
+            viewModel.range(
+                of: "failure = .linkPersistenceAfterRemoteUpdate",
+                range: awaitedLink.upperBound..<saveRange.upperBound
             )
         )
-        #expect(awaitedLink.lowerBound < trackedCallback.lowerBound)
-        #expect(trackedCallback.lowerBound < linkSuccess.lowerBound)
-        #expect(linkSuccess.lowerBound < linkFailure.lowerBound)
+        let savedOutput = try #require(
+            viewModel.range(of: "output = TrackerDetailsOutput(", range: linkFailure.upperBound..<saveRange.upperBound)
+        )
+        #expect(remoteUpdate.lowerBound < remoteFailure.lowerBound)
+        #expect(remoteFailure.lowerBound < conditionalLink.lowerBound)
+        #expect(conditionalLink.lowerBound < awaitedLink.lowerBound)
+        #expect(awaitedLink.lowerBound < linkFailure.lowerBound)
+        #expect(linkFailure.lowerBound < savedOutput.lowerBound)
+        #expect(
+            viewModel.range(of: "return", range: remoteFailure.upperBound..<conditionalLink.lowerBound) != nil,
+            "Remote failure must return before local linking"
+        )
+        #expect(
+            viewModel.range(of: "return", range: linkFailure.upperBound..<savedOutput.lowerBound) != nil,
+            "Link failure must return before publishing save success"
+        )
 
-        let searchSaveStart = try #require(
-            source.range(of: "let didTrack = await onTrack(")
+        let unlinkEnd = try #require(
+            viewModel.range(of: "func cancel()", range: unlinkStart.upperBound..<viewModel.endIndex)
         )
-        let searchSaveEnd = try #require(
-            source.range(
-                of: "return didTrack",
-                range: searchSaveStart.upperBound..<source.endIndex
-            )
-        )
-        let searchDismiss = try #require(
-            source.range(
-                of: "dismiss()",
-                range: searchSaveStart.upperBound..<searchSaveEnd.lowerBound
-            )
-        )
-        let successfulLinkGuard = try #require(
-            source.range(
-                of: "if didTrack {",
-                range: searchSaveStart.upperBound..<searchDismiss.lowerBound
-            )
-        )
-        #expect(searchSaveStart.lowerBound < searchDismiss.lowerBound)
-        #expect(successfulLinkGuard.lowerBound < searchDismiss.lowerBound)
-
-        let saveProgressStart = try #require(source.range(of: "private func saveProgress()"))
-        let awaitedSaveCallback = try #require(
-            source.range(
-                of: "let shouldDismiss = await onSave(",
-                range: saveProgressStart.upperBound..<source.endIndex
-            )
-        )
-        let detailsDismiss = try #require(
-            source.range(
-                of: "dismiss()",
-                range: awaitedSaveCallback.upperBound..<source.endIndex
-            )
-        )
-        let successfulSaveGuard = try #require(
-            source.range(
-                of: "if shouldDismiss {",
-                range: awaitedSaveCallback.upperBound..<detailsDismiss.lowerBound
-            )
-        )
-        #expect(awaitedSaveCallback.lowerBound < detailsDismiss.lowerBound)
-        #expect(successfulSaveGuard.lowerBound < detailsDismiss.lowerBound)
-
-        let unlinkHelperStart = try #require(source.range(of: "private func stopTracking()"))
-        let unlinkHelperEnd = try #require(
-            source.range(
-                of: "private func calculateLocalProgress()",
-                range: unlinkHelperStart.upperBound..<source.endIndex
-            )
-        )
-        let unlinkHelper = unlinkHelperStart.lowerBound..<unlinkHelperEnd.lowerBound
+        let unlinkRange = unlinkStart.lowerBound..<unlinkEnd.lowerBound
         let awaitedUnlink = try #require(
-            source.range(of: "try await trackerManager.unlink(", range: unlinkHelper)
-        )
-        let deleteCallback = try #require(
-            source.range(of: "onDelete?()", range: unlinkHelper)
-        )
-        let unlinkDismiss = try #require(
-            source.range(
-                of: "dismiss()",
-                range: deleteCallback.upperBound..<unlinkHelper.upperBound
-            )
+            viewModel.range(of: "try await linkStore.unlink(", range: unlinkRange)
         )
         let unlinkFailure = try #require(
-            source.range(
-                of: "showPersistenceError = true",
-                range: unlinkDismiss.upperBound..<unlinkHelper.upperBound
+            viewModel.range(of: "failure = .unlinkPersistence", range: awaitedUnlink.upperBound..<unlinkRange.upperBound)
+        )
+        let unlinkOutput = try #require(
+            viewModel.range(
+                of: "output = TrackerDetailsOutput(id: UUID(), kind: .unlinked)",
+                range: unlinkFailure.upperBound..<unlinkRange.upperBound
             )
         )
-        #expect(awaitedUnlink.lowerBound < deleteCallback.lowerBound)
-        #expect(deleteCallback.lowerBound < unlinkDismiss.lowerBound)
-        #expect(unlinkDismiss.lowerBound < unlinkFailure.lowerBound)
+        #expect(awaitedUnlink.lowerBound < unlinkFailure.lowerBound)
+        #expect(unlinkFailure.lowerBound < unlinkOutput.lowerBound)
+        #expect(
+            viewModel.range(of: "return", range: unlinkFailure.upperBound..<unlinkOutput.lowerBound) != nil,
+            "Unlink failure must return before publishing unlinked success"
+        )
 
-        #expect(
-            source.components(separatedBy: ".alert(\"Tracker Change Not Saved\"").count - 1 == 3,
-            "Both link paths and the unlink path must present persistence failures"
-        )
-        #expect(
-            source.contains(
-                "Text(\"Your tracker change couldn't be saved. Please try again.\")"
-            )
-        )
-        #expect(
-            String(source[linkHelper]).contains("error.localizedDescription") == false,
-            "Persistence alerts must not expose raw error details"
-        )
-        #expect(
-            String(source[unlinkHelper]).contains("error.localizedDescription") == false,
-            "Persistence alerts must not expose raw error details"
-        )
+        #expect(!sheets.contains("trackerManager.link("))
+        #expect(!sheets.contains("trackerManager.unlink("))
+        #expect(!sheets.contains("error.localizedDescription"))
+        #expect(sheets.contains("case .saved(let progress, let status):"))
+        #expect(sheets.contains("case .unlinked:"))
+        #expect(sheets.contains("onTracked?(media, progress, status)"))
+        #expect(sheets.contains("onTracked?(media, nil, nil)"))
+        #expect(sheets.contains(".alert(\"Tracker Change Not Saved\""))
+        #expect(viewModel.contains("messagePresenter.present(.remoteUpdateFailed)"))
+        #expect(viewModel.contains("messagePresenter.present(.linkPersistenceFailed)"))
+        #expect(viewModel.contains("messagePresenter.present(.unlinkFailed)"))
+        #expect(!viewModel.contains("error.localizedDescription"))
     }
 
     private var storePaths: [String] {

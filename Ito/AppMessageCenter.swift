@@ -20,6 +20,11 @@ enum AppMessageKind: Equatable {
     case pluginSettingsReloadFailed
     case sourceArchivedPluginDeleteFailed
     case discoverDetailRefreshFailed
+    case trackingPreferencePersistenceFailed
+    case trackingRemoteUpdateFailed
+    case trackingLinkPersistenceFailed
+    case trackingUnlinkFailed
+    case trackingExternalPageOpenFailed
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -144,6 +149,36 @@ extension AppMessageKind {
                 style: .error,
                 title: "Details unavailable",
                 detail: "Full media details could not be refreshed. The available summary is still shown."
+            )
+        case .trackingPreferencePersistenceFailed:
+            return .init(
+                style: .error,
+                title: "Preference not saved",
+                detail: "Tracker sync settings could not be saved."
+            )
+        case .trackingRemoteUpdateFailed:
+            return .init(
+                style: .error,
+                title: "Tracker not updated",
+                detail: "The remote tracker entry could not be updated."
+            )
+        case .trackingLinkPersistenceFailed:
+            return .init(
+                style: .error,
+                title: "Tracker link not saved",
+                detail: "The remote entry changed, but its local link still needs to be saved."
+            )
+        case .trackingUnlinkFailed:
+            return .init(
+                style: .error,
+                title: "Tracking not stopped",
+                detail: "The local tracker link could not be removed."
+            )
+        case .trackingExternalPageOpenFailed:
+            return .init(
+                style: .error,
+                title: "Tracker page unavailable",
+                detail: "The tracker page could not be opened."
             )
         }
     }

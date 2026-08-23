@@ -12,6 +12,7 @@ struct AppViewFactory {
     private let sourceMessagePresenter: any SourceMessagePresenting
     private let discoverDetailDependencies: PreparedDiscoverDetailDependencies
     private let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
+    let trackingViewFactory: TrackingViewFactory
 
     init(
         rootModels: RootModelStore,
@@ -22,6 +23,9 @@ struct AppViewFactory {
         sourceMessagePresenter: any SourceMessagePresenting,
         discoverDetailDependencies: PreparedDiscoverDetailDependencies,
         discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting,
+        trackingDependencies: PreparedTrackingDependencies,
+        trackingMessagePresenter: any TrackingMessagePresenting,
+        presentationLogger: any PresentationEventLogging,
         searchRouteFactory: SearchRouteFactory = SearchRouteFactory()
     ) {
         self.rootModels = rootModels
@@ -32,6 +36,11 @@ struct AppViewFactory {
         self.sourceMessagePresenter = sourceMessagePresenter
         self.discoverDetailDependencies = discoverDetailDependencies
         self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
+        self.trackingViewFactory = TrackingViewFactory(
+            dependencies: trackingDependencies,
+            messagePresenter: trackingMessagePresenter,
+            presentationLogger: presentationLogger
+        )
         self.searchRouteFactory = searchRouteFactory
     }
 
@@ -164,6 +173,8 @@ struct AppViewFactory {
             makeLibrarySettingsView()
         case .privacy:
             makePrivacySettingsView()
+        case .trackers:
+            makeTrackerSettingsView()
         case .readerUnavailable:
             Text("Reader Settings View")
         case .storage:
@@ -191,6 +202,10 @@ struct AppViewFactory {
 
     func makeStorageSettingsView() -> StorageSettingsView {
         StorageSettingsView(viewModel: rootModels.storageSettingsViewModel)
+    }
+
+    func makeTrackerSettingsView() -> TrackerSettingsView {
+        trackingViewFactory.makeTrackerSettingsView()
     }
 
     func makeDebugLogView() -> DebugLogView {

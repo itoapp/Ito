@@ -450,6 +450,8 @@ public final class DurableStateBootstrap: ObservableObject {
             pluginManager: runtime.pluginManager,
             repoManager: runtime.repoManager,
             settingsStore: runtime.settingsStore,
+            trackerManager: runtime.trackerManager,
+            readProgressManager: runtime.readProgressManager,
             notificationManager: runtime.notificationManager,
             storageManager: runtime.storageManager,
             discordRPCManager: runtime.discordRPCManager,
