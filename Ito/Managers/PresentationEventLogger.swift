@@ -3,11 +3,23 @@ import OSLog
 
 public enum PresentationFeature: String, Equatable, Sendable {
     case search
+    case trackingSettings = "tracking_settings"
+    case trackerSearch = "tracker_search"
+    case trackerDetails = "tracker_details"
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {
     case operation
     case pluginExecution = "plugin_execution"
+    case authentication
+    case logout
+    case preferenceWrite = "preference_write"
+    case trackerSearch = "tracker_search"
+    case remoteLoad = "remote_load"
+    case remoteUpdate = "remote_update"
+    case link
+    case unlink
+    case externalURL = "external_url"
 }
 
 public enum PresentationEventPhase: String, Equatable, Sendable {
@@ -19,6 +31,11 @@ public enum PresentationErrorCategory: String, Equatable, Sendable {
     case pluginUnavailable = "plugin_unavailable"
     case pluginExecution = "plugin_execution"
     case pluginTrap = "plugin_trap"
+    case authentication
+    case logout
+    case network
+    case persistence
+    case externalURL = "external_url"
     case unknown
 }
 

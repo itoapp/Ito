@@ -1,145 +1,120 @@
-import OSLog
-import SwiftUI
 import NukeUI
+import SwiftUI
 
-public struct TrackerSheetOrchestrator: View {
-    let mediaIdentity: MediaIdentity
-    let title: String
-    let isAnime: Bool
+struct TrackerSheetOrchestrator: View {
+    let configuration: TrackerSheetConfiguration
+    let factory: TrackingViewFactory
     var onTracked: ((TrackerMedia, Int?, String?) -> Void)?
 
-    @Environment(\.dismiss) var dismiss
-    @EnvironmentObject private var trackerManager: TrackerManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedProviderID: String?
 
-    @State private var selectedProvider: (any TrackerProvider)?
-    @State private var showPersistenceError = false
-
-    public init(
-        mediaIdentity: MediaIdentity,
-        title: String,
-        isAnime: Bool,
-        onTracked: ((TrackerMedia, Int?, String?) -> Void)? = nil
-    ) {
-        self.mediaIdentity = mediaIdentity
-        self.title = title
-        self.isAnime = isAnime
-        self.onTracked = onTracked
-    }
-
-    public var body: some View {
-        let authenticatedProviders = trackerManager.authenticatedProviders
-
-        if authenticatedProviders.isEmpty {
-            NavigationView {
-                VStack(spacing: 20) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 50))
-                        .foregroundColor(.orange)
-                    Text("No Trackers Authenticated")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Please go to Settings > Trackers to log in to a service like AniList before tracking.")
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                }
-                .navigationTitle("Track Series")
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationBarItems(trailing: Button("Close") { dismiss() })
-            }
-        } else if authenticatedProviders.count == 1 {
-            // Bypass selection
-            let provider = authenticatedProviders.first!
-            if let existingId = trackerManager.trackerId(for: mediaIdentity, providerId: provider.identifier) {
-                let media = TrackerMedia(id: existingId, title: title, titleRomaji: nil, coverImage: nil, format: nil, episodes: nil, chapters: nil)
-                NavigationView {
-                    TrackerDetailsSheet(provider: provider, mediaIdentity: mediaIdentity, media: media, showCancelButton: true, onSave: { progress, status in
-                        onTracked?(media, progress, status)
-                        dismiss()
-                        return true
-                    }, onDelete: {
-                        onTracked?(media, nil, nil) // notify deleted
-                    })
-                }
-            } else {
-                TrackerSearchSheet(provider: provider, mediaIdentity: mediaIdentity, title: title, isAnime: isAnime) { media, progress, status in
-                    await linkAndPublish(media, provider: provider, progress: progress, status: status)
-                }
-                .alert("Tracker Change Not Saved", isPresented: $showPersistenceError) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text("Your tracker change couldn't be saved. Please try again.")
-                }
-            }
+    var body: some View {
+        if configuration.providers.isEmpty {
+            unauthenticatedView
+        } else if configuration.providers.count == 1,
+                  let provider = configuration.providers.first {
+            providerDestination(provider)
+        } else if let provider = selectedProvider {
+            providerDestination(provider)
         } else {
-            // Selection Sheet
-            if let provider = selectedProvider {
-                if let existingId = trackerManager.trackerId(for: mediaIdentity, providerId: provider.identifier) {
-                    let media = TrackerMedia(id: existingId, title: title, titleRomaji: nil, coverImage: nil, format: nil, episodes: nil, chapters: nil)
-                    TrackerDetailsSheet(provider: provider, mediaIdentity: mediaIdentity, media: media, showCancelButton: true, onSave: { progress, status in
-                        onTracked?(media, progress, status)
-                        dismiss()
-                        return true
-                    }, onDelete: {
-                        onTracked?(media, nil, nil)
-                    })
-                } else {
-                    TrackerSearchSheet(provider: provider, mediaIdentity: mediaIdentity, title: title, isAnime: isAnime) { media, progress, status in
-                        await linkAndPublish(media, provider: provider, progress: progress, status: status)
-                    }
-                    .alert("Tracker Change Not Saved", isPresented: $showPersistenceError) {
-                        Button("OK", role: .cancel) { }
-                    } message: {
-                        Text("Your tracker change couldn't be saved. Please try again.")
-                    }
-                }
-            } else {
-                NavigationView {
-                    List(authenticatedProviders, id: \.identifier) { provider in
-                        Button(action: {
-                            selectedProvider = provider
-                        }) {
-                            HStack {
-                                Text(provider.name)
-                                    .foregroundColor(.primary)
-                                Spacer()
-                                if trackerManager.trackerId(for: mediaIdentity, providerId: provider.identifier) != nil {
-                                    Text("Tracked")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                        .padding(.trailing, 4)
-                                }
-                                Image(systemName: "chevron.right")
-                                    .foregroundColor(.gray)
-                            }
-                        }
-                    }
-                    .navigationTitle("Select Tracker")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .navigationBarItems(trailing: Button("Cancel") { dismiss() })
-                }
-                .modifier(PresentationDetentsModifier())
-            }
+            providerSelectionView
         }
     }
 
-    private func linkAndPublish(
-        _ media: TrackerMedia,
-        provider: any TrackerProvider,
-        progress: Int?,
-        status: String?
-    ) async -> Bool {
-        do {
-            try await trackerManager.link(
-                media: mediaIdentity,
-                providerId: provider.identifier,
-                remoteMediaId: media.id
+    private var selectedProvider: TrackerSheetProviderPresentation? {
+        guard let selectedProviderID else { return nil }
+        return configuration.providers.first { $0.id == selectedProviderID }
+    }
+
+    private var unauthenticatedView: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 50))
+                    .foregroundColor(.orange)
+                Text("No Trackers Authenticated")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                Text("Please go to Settings > Trackers to log in to a service like AniList before tracking.")
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+            }
+            .navigationTitle("Track Series")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(trailing: Button("Close") { dismiss() })
+        }
+    }
+
+    private var providerSelectionView: some View {
+        NavigationView {
+            List(configuration.providers) { provider in
+                Button {
+                    selectedProviderID = provider.id
+                } label: {
+                    HStack {
+                        Text(provider.provider.name)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        if provider.isTracked {
+                            Text("Tracked")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                                .padding(.trailing, 4)
+                        }
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                    }
+                }
+            }
+            .navigationTitle("Select Tracker")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(trailing: Button("Cancel") { dismiss() })
+        }
+        .modifier(PresentationDetentsModifier())
+    }
+
+    @ViewBuilder
+    private func providerDestination(_ provider: TrackerSheetProviderPresentation) -> some View {
+        if let destination = factory.makeExistingDetailsDestination(
+            configuration: configuration,
+            provider: provider
+        ) {
+            NavigationView {
+                TrackerDetailsSheet(
+                    viewModel: factory.makeDetailsViewModel(destination: destination),
+                    onOutput: { output in
+                        handleDetailsOutput(output, media: destination.media)
+                    }
+                )
+            }
+        } else {
+            TrackerSearchSheet(
+                viewModel: factory.makeSearchViewModel(
+                    configuration: configuration,
+                    provider: provider
+                ),
+                makeDetailsViewModel: factory.makeDetailsViewModel,
+                onTracked: { media, progress, status in
+                    onTracked?(media, progress, status)
+                    dismiss()
+                }
             )
+        }
+    }
+
+    private func handleDetailsOutput(_ output: TrackerDetailsOutput, media: TrackerMedia) {
+        switch output.kind {
+        case .saved(let progress, let status):
             onTracked?(media, progress, status)
-            return true
-        } catch {
-            showPersistenceError = true
-            return false
+            dismiss()
+        case .unlinked:
+            onTracked?(media, nil, nil)
+            dismiss()
+        case .cancelled:
+            onTracked?(media, nil, nil)
+            dismiss()
         }
     }
 }
@@ -155,35 +130,20 @@ struct PresentationDetentsModifier: ViewModifier {
 }
 
 struct TrackerSearchSheet: View {
-    let provider: any TrackerProvider
-    let mediaIdentity: MediaIdentity
-    let title: String
-    let isAnime: Bool
+    @StateObject private var viewModel: TrackerSearchViewModel
+    private let makeDetailsViewModel: (TrackerDetailsDestination) -> TrackerDetailsViewModel
+    private let onTracked: (TrackerMedia, Int?, String?) -> Void
 
-    @State private var searchQuery: String
-    @State private var searchResults: [TrackerMedia] = []
-    @State private var isLoading = false
-    @State private var selectedMedia: TrackerMedia?
-    @State private var errorMessage: String?
-
-    @State private var showDetailsSheet = false
-
-    var onTrack: (TrackerMedia, Int?, String?) async -> Bool
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.dismiss) private var dismiss
 
     init(
-        provider: any TrackerProvider,
-        mediaIdentity: MediaIdentity,
-        title: String,
-        isAnime: Bool,
-        onTrack: @escaping (TrackerMedia, Int?, String?) async -> Bool
+        viewModel: TrackerSearchViewModel,
+        makeDetailsViewModel: @escaping (TrackerDetailsDestination) -> TrackerDetailsViewModel,
+        onTracked: @escaping (TrackerMedia, Int?, String?) -> Void
     ) {
-        self.provider = provider
-        self.mediaIdentity = mediaIdentity
-        self.title = title
-        self.isAnime = isAnime
-        self._searchQuery = State(initialValue: title)
-        self.onTrack = onTrack
+        self._viewModel = StateObject(wrappedValue: viewModel)
+        self.makeDetailsViewModel = makeDetailsViewModel
+        self.onTracked = onTracked
     }
 
     var body: some View {
@@ -192,433 +152,353 @@ struct TrackerSearchSheet: View {
                 HStack {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.gray)
-                    TextField("Search \(provider.name)", text: $searchQuery, onCommit: performSearch)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                    if isLoading {
+                    TextField(
+                        "Search \(viewModel.providerName)",
+                        text: $viewModel.searchQuery,
+                        onCommit: viewModel.performSearch
+                    )
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    if viewModel.isLoading {
                         ProgressView()
                     }
                 }
                 .padding()
 
-                if let error = errorMessage {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                        .padding(.horizontal)
+                if let errorMessage = viewModel.errorMessage {
+                    HStack {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                        Spacer()
+                        Button("Retry", action: viewModel.retry)
+                            .font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal)
                 }
 
-                List(searchResults) { media in
-                    HStack {
-                        if let cover = media.coverImage, let url = URL(string: cover) {
-                            LazyImage(url: url) { state in
-                                if let image = state.image {
-                                    image.resizable().aspectRatio(contentMode: .fill)
-                                } else {
-                                    Color.gray.opacity(0.3)
-                                }
-                            }
-                            .frame(width: 50, height: 75)
-                            .cornerRadius(4)
-                        }
-
-                        VStack(alignment: .leading) {
-                            Text(media.title)
-                                .font(.headline)
-                                .lineLimit(2)
-                            if let romaji = media.titleRomaji {
-                                Text(romaji)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Text(media.format ?? (isAnime ? "Anime" : "Manga"))
-                                .font(.caption2)
-                                .padding(4)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(4)
-                        }
-
-                        Spacer()
-
-                        if selectedMedia?.id == media.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.title2)
-                        }
-                    }
+                List(viewModel.results) { media in
+                    TrackerSearchResultRow(
+                        media: media,
+                        isAnime: viewModel.isAnime,
+                        isSelected: viewModel.selectedMedia?.id == media.id
+                    )
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        self.selectedMedia = media
+                        viewModel.select(mediaID: media.id)
                     }
                 }
 
                 ZStack {
-                    if let selectedMedia = selectedMedia {
-                        NavigationLink(
-                            destination: TrackerDetailsSheet(provider: provider, mediaIdentity: mediaIdentity, media: selectedMedia, onSave: { progress, newStatus in
-                                let didTrack = await onTrack(selectedMedia, progress, newStatus)
-                                if didTrack {
-                                    showDetailsSheet = false
-                                    dismiss()
-                                }
-                                return didTrack
-                            }),
-                            isActive: $showDetailsSheet
-                        ) {
-                            EmptyView()
-                        }
-                    }
+                    NavigationLink(
+                        isActive: $viewModel.isPresentingDetails,
+                        destination: detailsDestination,
+                        label: { EmptyView() }
+                    )
 
-                    Button(action: {
-                        if selectedMedia != nil {
-                            showDetailsSheet = true
-                        }
-                    }) {
+                    Button(action: viewModel.presentSelectedDetails) {
                         Text("Select Series")
                             .fontWeight(.bold)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(selectedMedia == nil ? Color.gray : Color.blue)
+                            .background(viewModel.selectedMedia == nil ? Color.gray : Color.blue)
                             .foregroundColor(.white)
                             .cornerRadius(10)
                     }
-                    .disabled(selectedMedia == nil)
+                    .disabled(viewModel.selectedMedia == nil)
                 }
                 .padding()
             }
-            .navigationTitle("Search on \(provider.name)")
+            .navigationTitle("Search on \(viewModel.providerName)")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarItems(leading: Button("Back") { dismiss() }, trailing: Button("Cancel") { dismiss() })
-            .task {
-                performSearch()
+            .navigationBarItems(
+                leading: Button("Back", action: dismissSearch),
+                trailing: Button("Cancel", action: dismissSearch)
+            )
+            .task { viewModel.start() }
+            .onDisappear {
+                if viewModel.destination == nil {
+                    viewModel.cancelOwnedWork()
+                }
             }
         }
     }
 
-    private func performSearch() {
-        guard !searchQuery.isEmpty else { return }
-        isLoading = true
-        errorMessage = nil
-
-        Task {
-            do {
-                let results = try await provider.searchMedia(title: searchQuery, isAnime: isAnime)
-                await MainActor.run {
-                    self.searchResults = results
-                    self.isLoading = false
-                    if let first = results.first, first.title.lowercased() == searchQuery.lowercased() {
-                        self.selectedMedia = first
+    @ViewBuilder
+    private func detailsDestination() -> some View {
+        if let destination = viewModel.destination {
+            TrackerDetailsSheet(
+                viewModel: makeDetailsViewModel(destination),
+                onOutput: { output in
+                    switch output.kind {
+                    case .saved(let progress, let status):
+                        onTracked(destination.media, progress, status)
+                    case .unlinked:
+                        onTracked(destination.media, nil, nil)
+                    case .cancelled:
+                        viewModel.navigationBindingDidSet(false)
                     }
                 }
-            } catch {
-                await MainActor.run {
-                    self.errorMessage = error.localizedDescription
-                    self.isLoading = false
+            )
+        } else {
+            EmptyView()
+        }
+    }
+
+    private func dismissSearch() {
+        viewModel.cancelOwnedWork()
+        dismiss()
+    }
+}
+
+private struct TrackerSearchResultRow: View {
+    let media: TrackerMedia
+    let isAnime: Bool
+    let isSelected: Bool
+
+    var body: some View {
+        HStack {
+            if let cover = media.coverImage, let url = URL(string: cover) {
+                LazyImage(url: url) { state in
+                    if let image = state.image {
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Color.gray.opacity(0.3)
+                    }
                 }
+                .frame(width: 50, height: 75)
+                .cornerRadius(4)
+            }
+
+            VStack(alignment: .leading) {
+                Text(media.title)
+                    .font(.headline)
+                    .lineLimit(2)
+                if let romaji = media.titleRomaji {
+                    Text(romaji)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Text(media.format ?? (isAnime ? "Anime" : "Manga"))
+                    .font(.caption2)
+                    .padding(4)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(4)
+            }
+
+            Spacer()
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .font(.title2)
             }
         }
     }
 }
 
 struct TrackerDetailsSheet: View {
-    let provider: any TrackerProvider
-    let mediaIdentity: MediaIdentity
-    let media: TrackerMedia
-    var showCancelButton: Bool = false
+    @StateObject private var viewModel: TrackerDetailsViewModel
+    private let onOutput: (TrackerDetailsOutput) -> Void
 
-    var onSave: (Int?, String?) async -> Bool
-    var onDelete: (() -> Void)?
-
-    @State private var status: String? = "PLANNING"
-    @State private var progress: String = "0"
-    @State private var score: Double = 0
-    @State private var startDate = Date()
-    @State private var finishDate: Date?
-    @State private var isSaving = false
-    @State private var isUnlinking = false
-    @State private var isLoadingEntry = true
-    @State private var isNewEntry = true
-    @State private var showPersistenceError = false
-
-    let statuses = ["CURRENT", "PLANNING", "COMPLETED", "DROPPED", "PAUSED", "REPEATING"]
-
-    private var currentStatusLabel: String {
-        let format = media.format ?? ""
-        if format == "MANGA" || format == "NOVEL" || format == "ONE_SHOT" {
-            return "Reading"
-        } else {
-            return "Watching"
-        }
+    init(
+        viewModel: TrackerDetailsViewModel,
+        onOutput: @escaping (TrackerDetailsOutput) -> Void
+    ) {
+        self._viewModel = StateObject(wrappedValue: viewModel)
+        self.onOutput = onOutput
     }
-
-    private func displayLabel(for statusOption: String) -> String {
-        if statusOption == "CURRENT" {
-            return currentStatusLabel
-        }
-        return statusOption.capitalized
-    }
-
-    @State private var showSyncAlert = false
-    @State private var maxLocalProgress: Int?
-
-    @Environment(\.dismiss) var dismiss
-    @EnvironmentObject private var progressManager: ReadProgressManager
-    @EnvironmentObject private var trackerManager: TrackerManager
 
     var body: some View {
         Form {
-            if isLoadingEntry {
+            switch viewModel.remoteEntryState {
+            case .loading:
                 HStack {
                     Spacer()
                     ProgressView("Checking existing progress...")
                     Spacer()
                 }
-            } else {
-                Section(header: Text("Series Info")) {
-                    HStack {
-                        if let cover = media.coverImage, let url = URL(string: cover) {
-                            LazyImage(url: url) { state in
-                                if let image = state.image {
-                                    image.resizable().aspectRatio(contentMode: .fill)
-                                } else {
-                                    Color.gray
-                                }
-                            }
-                            .frame(width: 60, height: 90)
-                            .cornerRadius(6)
-                        }
-                        Text(media.title)
-                            .font(.headline)
-                    }
+            case .failure:
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(viewModel.remoteLoadErrorMessage ?? "Tracker progress is unavailable.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Retry", action: viewModel.retryRemoteEntryLoad)
+                        .font(.callout.weight(.semibold))
                 }
-
-                Section(header: Text("Progress")) {
-                    Picker("Status", selection: $status) {
-                        ForEach(statuses, id: \.self) { statusOption in
-                            Text(displayLabel(for: statusOption))
-                                .tag(String?.some(statusOption))
-                        }
-                    }
-
-                    HStack {
-                        Text("Progress")
-                        Spacer()
-                        TextField("0", text: $progress)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 50)
-
-                        Stepper("", onIncrement: {
-                            if let val = Int(progress) { progress = String(val + 1) }
-                        }, onDecrement: {
-                            if let val = Int(progress), val > 0 { progress = String(val - 1) }
-                        })
-                        .labelsHidden()
-
-                        if let total = media.episodes ?? media.chapters {
-                            Text("/ \(total)")
-                                .foregroundColor(.secondary)
-                        } else {
-                            Text("/ ?")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-
-                    HStack {
-                        Text("Score")
-                        Spacer()
-                        Slider(value: $score, in: 0...10, step: 0.5)
-                        Text(String(format: "%.1f", score))
-                    }
-                }
-
-                Section(header: Text("Dates")) {
-                    DatePicker("Started", selection: $startDate, displayedComponents: .date)
-
-                    if finishDate != nil {
-                        DatePicker("Finished", selection: Binding(get: { finishDate ?? Date() }, set: { finishDate = $0 }), displayedComponents: .date)
-                        Button("Remove Finish Date") {
-                            finishDate = nil
-                        }
-                        .foregroundColor(.red)
-                    } else {
-                        Button("Add Finish Date") {
-                            finishDate = Date()
-                        }
-                    }
-                }
-                Section {
-                    Button(action: {
-                        calculateLocalProgress()
-                    }) {
-                        Label("Sync Local History", systemImage: "arrow.triangle.2.circlepath")
-                    }
-
-                    Button(action: {
-                        let urlStr = media.format == "MANGA" || media.format == "NOVEL" || media.format == "ONE_SHOT"
-                            ? "https://anilist.co/manga/\(media.id)"
-                            : "https://anilist.co/anime/\(media.id)"
-                        if let url = URL(string: urlStr) {
-                            UIApplication.shared.open(url)
-                        }
-                    }) {
-                        Label("View on \(provider.name)", systemImage: "safari")
-                    }
-
-                    if !isNewEntry {
-                        Button(role: .destructive, action: stopTracking) {
-                            HStack {
-                                if isUnlinking {
-                                    ProgressView()
-                                        .accessibilityLabel("Stopping tracking")
-                                }
-                                Label("Stop Tracking", systemImage: "trash")
-                                    .foregroundColor(.red)
-                            }
-                        }
-                        .disabled(isUnlinking)
-                    }
-                }
+                .frame(maxWidth: .infinity)
+            case .existing, .new:
+                detailsForm
             }
         }
         .navigationTitle("Update Entry")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(viewModel.isDurableOperationInFlight)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                if showCancelButton {
-                    Button("Cancel") {
-                        Task { @MainActor in
-                            _ = await onSave(nil, nil)
-                            dismiss()
-                        }
-                    }
+                if viewModel.showCancelButton {
+                    Button("Cancel", action: viewModel.cancel)
+                        .disabled(viewModel.isDurableOperationInFlight)
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(action: saveProgress) {
-                    if isSaving {
+                Button(action: viewModel.save) {
+                    if viewModel.isSaving {
                         ProgressView()
                     } else {
                         Text("Save").fontWeight(.bold)
                     }
                 }
-            }
-        }
-        .alert("Sync Local History", isPresented: $showSyncAlert) {
-            Button("Cancel", role: .cancel) { }
-            Button("Sync") {
-                if let maxLoc = maxLocalProgress {
-                    self.progress = String(maxLoc)
-                }
-            }
-        } message: {
-            if let maxLoc = maxLocalProgress {
-                Text("We found local reading/watching history up to chapter/episode \(maxLoc). Do you want to update your \(provider.name) progress to match?")
-            } else {
-                Text("No local reading or watching history was found for this series.")
-            }
-        }
-        .alert("Tracker Change Not Saved", isPresented: $showPersistenceError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Your tracker change couldn't be saved. Please try again.")
-        }
-        .task {
-            guard isLoadingEntry else { return }
-            await fetchExistingEntry()
-        }
-        .onChange(of: progress) { newValue in
-            if let val = Int(newValue), val > 0, status == "PLANNING" {
-                status = "CURRENT"
-            }
-        }
-    }
-
-    private func stopTracking() {
-        isUnlinking = true
-        Task { @MainActor in
-            do {
-                try await trackerManager.unlink(
-                    media: mediaIdentity,
-                    providerId: provider.identifier
+                .disabled(
+                    viewModel.remoteEntryState == .loading
+                        || viewModel.remoteEntryState == .failure
+                        || viewModel.isDurableOperationInFlight
                 )
-                onDelete?()
-                dismiss()
-            } catch {
-                isUnlinking = false
-                showPersistenceError = true
             }
         }
-    }
-
-    private func calculateLocalProgress() {
-        if let maxNum = progressManager.readChapterNumbers(for: mediaIdentity).max() {
-            self.maxLocalProgress = Int(maxNum)
-            self.showSyncAlert = true
-        } else {
-            self.maxLocalProgress = nil
-            self.showSyncAlert = true
+        .alert("Sync Local History", isPresented: $viewModel.isPresentingLocalProgressAlert) {
+            Button("Cancel", role: .cancel, action: viewModel.cancelLocalProgressSync)
+            if case .found = viewModel.localProgressCandidate {
+                Button("Sync", action: viewModel.confirmLocalProgressSync)
+            }
+        } message: {
+            switch viewModel.localProgressCandidate {
+            case .found(let maximum):
+                Text("We found local reading/watching history up to chapter/episode \(maximum). Do you want to update your \(viewModel.providerName) progress to match?")
+            case .notFound:
+                Text("No local reading or watching history was found for this series.")
+            case nil:
+                EmptyView()
+            }
         }
+        .alert("Tracker Change Not Saved", isPresented: $viewModel.isPresentingFailureAlert) {
+            Button("OK", role: .cancel, action: viewModel.dismissFailure)
+        } message: {
+            Text(viewModel.failure?.message ?? "Your tracker change couldn't be saved. Please try again.")
+        }
+        .task { viewModel.start() }
+        .onChange(of: viewModel.output?.id) { _ in
+            guard let output = viewModel.consumeOutput() else { return }
+            onOutput(output)
+        }
+        .onDisappear(perform: viewModel.cancelOwnedWork)
+        .interactiveDismissDisabled(viewModel.isDurableOperationInFlight)
     }
 
-    private func fetchExistingEntry() async {
-        do {
-            if let entry = try await provider.getMediaListEntry(mediaId: media.id) {
-                await MainActor.run {
-                    self.isNewEntry = false
+    private var detailsForm: some View {
+        Group {
+            Section(header: Text("Series Info")) {
+                HStack {
+                    if let cover = viewModel.media.coverImage, let url = URL(string: cover) {
+                        LazyImage(url: url) { state in
+                            if let image = state.image {
+                                image.resizable().aspectRatio(contentMode: .fill)
+                            } else {
+                                Color.gray
+                            }
+                        }
+                        .frame(width: 60, height: 90)
+                        .cornerRadius(6)
+                    }
+                    Text(viewModel.media.title)
+                        .font(.headline)
+                }
+            }
 
-                    if let statusStr = entry.status {
-                        self.status = statusStr
+            Section(header: Text("Progress")) {
+                Picker("Status", selection: $viewModel.status) {
+                    ForEach(TrackerDetailsViewModel.statuses, id: \.self) { statusOption in
+                        Text(viewModel.displayLabel(for: statusOption))
+                            .tag(String?.some(statusOption))
+                    }
+                }
+
+                HStack {
+                    Text("Progress")
+                    Spacer()
+                    TextField("0", text: $viewModel.progress)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 50)
+
+                    Stepper(
+                        "",
+                        onIncrement: viewModel.incrementProgress,
+                        onDecrement: viewModel.decrementProgress
+                    )
+                    .labelsHidden()
+
+                    if let total = viewModel.totalProgress {
+                        Text("/ \(total)")
+                            .foregroundColor(.secondary)
                     } else {
-                        self.status = "PLANNING"
-                    }
-                    if let prog = entry.progress {
-                        self.progress = String(prog)
-                    }
-                    if let scoreVal = entry.score {
-                        self.score = scoreVal
-                    }
-                    if let start = entry.startDate {
-                        self.startDate = start
-                    }
-                    if let end = entry.finishDate {
-                        self.finishDate = end
+                        Text("/ ?")
+                            .foregroundColor(.secondary)
                     }
                 }
-            } else {
-                await MainActor.run {
-                    self.isNewEntry = true
+
+                HStack {
+                    Text("Score")
+                    Spacer()
+                    Slider(value: $viewModel.score, in: 0...10, step: 0.5)
+                    Text(String(format: "%.1f", viewModel.score))
                 }
             }
-        } catch {
-            await MainActor.run {
-                self.isNewEntry = true
+
+            Section(header: Text("Dates")) {
+                DatePicker("Started", selection: $viewModel.startDate, displayedComponents: .date)
+
+                if viewModel.finishDate != nil {
+                    DatePicker(
+                        "Finished",
+                        selection: Binding(
+                            get: { viewModel.finishDate ?? Date() },
+                            set: { viewModel.finishDate = $0 }
+                        ),
+                        displayedComponents: .date
+                    )
+                    Button("Remove Finish Date") {
+                        viewModel.finishDate = nil
+                    }
+                    .foregroundColor(.red)
+                } else {
+                    Button("Add Finish Date") {
+                        viewModel.finishDate = Date()
+                    }
+                }
             }
-        }
 
-        await MainActor.run {
-            self.isLoadingEntry = false
-        }
-    }
+            Section {
+                Button(action: viewModel.prepareLocalProgressSync) {
+                    Label("Sync Local History", systemImage: "arrow.triangle.2.circlepath")
+                }
 
-    private func saveProgress() {
-        isSaving = true
-        Task { @MainActor in
-            var savedProgress: Int?
-            let progInt = Int(progress)
-            let effectiveStatus = status
+                Button(action: viewModel.openExternalURL) {
+                    HStack {
+                        if viewModel.isOpeningExternalURL {
+                            ProgressView()
+                        }
+                        Label("View on \(viewModel.providerName)", systemImage: "safari")
+                    }
+                }
+                .disabled(viewModel.isOpeningExternalURL)
 
-            do {
-                try await provider.updateProgress(mediaId: media.id, progress: progInt, status: effectiveStatus)
-                savedProgress = progInt
-            } catch {
-                AppLogger.ui.error("Failed saving TrackerProgress with status: \(error.localizedDescription)")
-            }
-
-            isSaving = false
-            let shouldDismiss = await onSave(savedProgress, effectiveStatus)
-            if shouldDismiss {
-                dismiss()
+                if viewModel.canStopTracking {
+                    Button(role: .destructive, action: viewModel.stopTracking) {
+                        HStack {
+                            if viewModel.isUnlinking {
+                                ProgressView()
+                                    .accessibilityLabel("Stopping tracking")
+                            }
+                            Label("Stop Tracking", systemImage: "trash")
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .disabled(viewModel.isDurableOperationInFlight)
+                }
             }
         }
     }

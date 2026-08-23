@@ -240,6 +240,7 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
     @EnvironmentObject var discordRPCManager: DiscordRPCManager
     @EnvironmentObject var librarySourceRemapper: LibrarySourceRemapper
     @EnvironmentObject var pluginManager: PluginManager
+    @Environment(\.trackingViewFactory) private var trackingViewFactory
 
     @State private var showTrackerSearch = false
     @State private var showNavTitle = false
@@ -337,19 +338,23 @@ public struct MediaDetailView<M: MediaDisplayable>: View {
             }
         }
         .sheet(isPresented: $showTrackerSearch) {
-            TrackerSheetOrchestrator(
-                mediaIdentity: mediaIdentity,
-                title: viewModel.media.title,
-                isAnime: viewModel.media is Anime
-            ) { _, progress, _ in
-                if let prog = progress, settingsStore.autoSyncTrackersToLocal {
-                    Task {
-                        try await progressManager.markReadUpTo(
-                            media: mediaIdentity,
-                            maxChapterNum: Float(prog)
-                        )
+            if let trackingViewFactory {
+                trackingViewFactory.makeTrackerSheet(
+                    mediaIdentity: mediaIdentity,
+                    title: viewModel.media.title,
+                    isAnime: viewModel.media is Anime
+                ) { _, progress, _ in
+                    if let prog = progress, settingsStore.autoSyncTrackersToLocal {
+                        Task {
+                            try await progressManager.markReadUpTo(
+                                media: mediaIdentity,
+                                maxChapterNum: Float(prog)
+                            )
+                        }
                     }
                 }
+            } else {
+                Text("Tracking is unavailable.")
             }
         }
         .fullScreenCover(item: $readingChapter) { wrapper in

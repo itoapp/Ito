@@ -305,6 +305,13 @@ final class AppScopeIdentityTests: XCTestCase {
             pluginManager: pluginManager
         )
         let settingsStore = AppSettingsStore(dbPool: database.dbPool)
+        let trackerManager = TrackerManager(
+            dbPool: database.dbPool,
+            credentialStore: FakeTrackerCredentialStore(),
+            legacyTokenStore: FakeLegacyTokenStore(),
+            usernameDefaults: fixtureDefaults
+        )
+        let readProgressManager = ReadProgressManager(dbPool: database.dbPool)
         let notificationManager = NotificationManager()
         let storageManager = StorageManager(pluginManager: pluginManager)
         let discordRPCManager = DiscordRPCManager(
@@ -317,6 +324,8 @@ final class AppScopeIdentityTests: XCTestCase {
             pluginManager: pluginManager,
             repoManager: repoManager,
             settingsStore: settingsStore,
+            trackerManager: trackerManager,
+            readProgressManager: readProgressManager,
             notificationManager: notificationManager,
             storageManager: storageManager,
             discordRPCManager: discordRPCManager,
@@ -328,6 +337,24 @@ final class AppScopeIdentityTests: XCTestCase {
         )
 
         XCTAssertTrue(dependencies.settings.settingsStore === settingsStore)
+        XCTAssertTrue(dependencies.tracking.settingsStore === settingsStore)
+        XCTAssertTrue(dependencies.tracking.localProgressReader === readProgressManager)
+        XCTAssertTrue(
+            dependencies.tracking.settingsService as AnyObject
+                === dependencies.tracking.sheetService as AnyObject
+        )
+        XCTAssertTrue(
+            dependencies.tracking.settingsService as AnyObject
+                === dependencies.tracking.searchService as AnyObject
+        )
+        XCTAssertTrue(
+            dependencies.tracking.settingsService as AnyObject
+                === dependencies.tracking.detailsService as AnyObject
+        )
+        XCTAssertTrue(
+            dependencies.tracking.settingsService as AnyObject
+                === dependencies.tracking.linkStore as AnyObject
+        )
         XCTAssertTrue(dependencies.settings.notificationAuthorization === notificationManager)
         XCTAssertTrue(dependencies.settings.storageAccess === storageManager)
         XCTAssertTrue(dependencies.settings.discordRPCManager === discordRPCManager)

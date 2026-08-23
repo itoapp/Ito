@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TrackerMediaEntry {
+public struct TrackerMediaEntry: Equatable, Sendable {
     public let status: String?
     public let progress: Int?
     public let score: Double?
@@ -16,7 +16,7 @@ public struct TrackerMediaEntry {
     }
 }
 
-public struct TrackerMedia: Identifiable, Codable {
+public struct TrackerMedia: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public let title: String
     public let titleRomaji: String?

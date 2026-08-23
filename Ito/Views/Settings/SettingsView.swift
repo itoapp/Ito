@@ -4,6 +4,7 @@ enum SettingsDestination: CaseIterable {
     case appearance
     case library
     case privacy
+    case trackers
     case readerUnavailable
     case storage
     case networkUnavailable
@@ -39,7 +40,7 @@ struct SettingsView: View {
                     NavigationLink(destination: viewFactory.makeSettingsDestination(for: .networkUnavailable)) {
                         Label("Network", systemImage: "wifi")
                     }
-                    NavigationLink(destination: TrackerSettingsView()) {
+                    NavigationLink(destination: viewFactory.makeSettingsDestination(for: .trackers)) {
                         Label("Trackers", systemImage: "arrow.triangle.2.circlepath")
                     }
                     NavigationLink(destination: BackupSettingsView()) {

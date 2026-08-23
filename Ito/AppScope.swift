@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 struct PreparedApplicationDependencies {
     let settings: PreparedSettingsDependencies
+    let tracking: PreparedTrackingDependencies
     let searchExecutor: any SearchPluginExecuting
     let recentSearchStore: any RecentSearchPersisting
     let searchDebounceMilliseconds: Int?
@@ -20,6 +21,7 @@ struct PreparedApplicationDependencies {
 
     init(
         settings: PreparedSettingsDependencies,
+        tracking: PreparedTrackingDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
         recentSearchStore: any RecentSearchPersisting,
         searchDebounceMilliseconds: Int?,
@@ -36,6 +38,7 @@ struct PreparedApplicationDependencies {
         discoverDebounceMilliseconds: Int? = DiscoverViewModel.productionDebounceMilliseconds
     ) {
         self.settings = settings
+        self.tracking = tracking ?? .unavailable()
         self.searchExecutor = searchExecutor
         self.recentSearchStore = recentSearchStore
         self.searchDebounceMilliseconds = searchDebounceMilliseconds
@@ -56,6 +59,8 @@ struct PreparedApplicationDependencies {
         pluginManager: PluginManager,
         repoManager: RepoManager,
         settingsStore: AppSettingsStore,
+        trackerManager: TrackerManager,
+        readProgressManager: ReadProgressManager,
         notificationManager: NotificationManager,
         storageManager: StorageManager,
         discordRPCManager: DiscordRPCManager,
@@ -77,6 +82,11 @@ struct PreparedApplicationDependencies {
                 discordRPCManager: discordRPCManager,
                 logReader: SystemDebugLogReader(),
                 clipboardWriter: SystemClipboardWriter()
+            ),
+            tracking: .production(
+                trackerManager: trackerManager,
+                settingsStore: settingsStore,
+                readProgressManager: readProgressManager
             ),
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
@@ -289,6 +299,7 @@ final class AppScope {
     let repositoryManagementMessagePresenter: any RepositoryManagementMessagePresenting
     let sourceMessagePresenter: any SourceMessagePresenting
     let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
+    let trackingMessagePresenter: any TrackingMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -312,6 +323,8 @@ final class AppScope {
             messageCenter: messageCenter
         )
         self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
+        let trackingMessagePresenter = AppMessageTrackingPresenter(messageCenter: messageCenter)
+        self.trackingMessagePresenter = trackingMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
@@ -327,7 +340,10 @@ final class AppScope {
             sourceDependencies: preparedDependencies.source,
             sourceMessagePresenter: sourceMessagePresenter,
             discoverDetailDependencies: preparedDependencies.discoverDetail,
-            discoverDetailMessagePresenter: discoverDetailMessagePresenter
+            discoverDetailMessagePresenter: discoverDetailMessagePresenter,
+            trackingDependencies: preparedDependencies.tracking,
+            trackingMessagePresenter: trackingMessagePresenter,
+            presentationLogger: preparedDependencies.presentationLogger
         )
     }
 
@@ -335,6 +351,8 @@ final class AppScope {
         pluginManager: PluginManager,
         repoManager: RepoManager,
         settingsStore: AppSettingsStore,
+        trackerManager: TrackerManager,
+        readProgressManager: ReadProgressManager,
         notificationManager: NotificationManager,
         storageManager: StorageManager,
         discordRPCManager: DiscordRPCManager,
@@ -349,6 +367,8 @@ final class AppScope {
                 pluginManager: pluginManager,
                 repoManager: repoManager,
                 settingsStore: settingsStore,
+                trackerManager: trackerManager,
+                readProgressManager: readProgressManager,
                 notificationManager: notificationManager,
                 storageManager: storageManager,
                 discordRPCManager: discordRPCManager,

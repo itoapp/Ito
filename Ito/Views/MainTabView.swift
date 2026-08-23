@@ -9,6 +9,7 @@ struct MainTabView: View {
             router: appScope.router,
             messageCenter: appScope.messageCenter
         )
+        .environment(\.trackingViewFactory, appScope.viewFactory.trackingViewFactory)
     }
 }
 
