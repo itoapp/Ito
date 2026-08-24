@@ -23,6 +23,15 @@
       },
       "versions": [
         {
+          "version": "1.0.0-nightly.20260824.38",
+          "buildVersion": "38",
+          "date": "2026-08-24T10:22:39Z",
+          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260824-38/Ito-1.0.0-nightly.20260824.38-unsigned.ipa",
+          "size": 10058918,
+          "localizedDescription": "Automated unsigned nightly from main at fb8e8e0. This build may be unstable.",
+          "minOSVersion": "15.4"
+        },
+        {
           "version": "1.0.0-nightly.20260823.37",
           "buildVersion": "37",
           "date": "2026-08-23T09:56:04Z",
@@ -138,24 +147,15 @@
           "size": 9795714,
           "localizedDescription": "Automated unsigned nightly from main at 8a8dfd7. This build may be unstable.",
           "minOSVersion": "15.4"
-        },
-        {
-          "version": "1.0.0-nightly.20260810.24",
-          "buildVersion": "24",
-          "date": "2026-08-10T10:52:24Z",
-          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260810-24/Ito-1.0.0-nightly.20260810.24-unsigned.ipa",
-          "size": 9761411,
-          "localizedDescription": "Automated unsigned nightly from main at 6c17793. This build may be unstable.",
-          "minOSVersion": "15.4"
         }
       ],
-      "version": "1.0.0-nightly.20260823.37",
-      "buildVersion": "37",
-      "date": "2026-08-23T09:56:04Z",
-      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260823-37/Ito-1.0.0-nightly.20260823.37-unsigned.ipa",
-      "size": 9915093,
+      "version": "1.0.0-nightly.20260824.38",
+      "buildVersion": "38",
+      "date": "2026-08-24T10:22:39Z",
+      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260824-38/Ito-1.0.0-nightly.20260824.38-unsigned.ipa",
+      "size": 10058918,
       "minOSVersion": "15.4",
-      "versionDescription": "Automated unsigned nightly from main at bab7cc7. This build may be unstable."
+      "versionDescription": "Automated unsigned nightly from main at fb8e8e0. This build may be unstable."
     }
   ],
   "news": []
