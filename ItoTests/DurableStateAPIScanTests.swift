@@ -134,7 +134,7 @@ struct DurableStateAPIScanTests {
             "Ito/Views/Reader/VideoPlayerView.swift",
             "Ito/ViewModels/MediaDetailViewModel.swift",
             "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift",
-            "Ito/Views/Library/LibraryView.swift"
+            "Ito/ViewModels/LibraryViewModel.swift"
         ]
         let scopedCallPatterns = [
             "Ito/ViewModels/ReaderViewModel.swift": ["markAsRead(", "updateProgress(media:"],
@@ -149,10 +149,10 @@ struct DurableStateAPIScanTests {
                 "linkStore.link(media:",
                 "linkStore.unlink(media:"
             ],
-            "Ito/Views/Library/LibraryView.swift": [
+            "Ito/ViewModels/LibraryViewModel.swift": [
                 "MediaIdentity(pluginId:item.pluginId,itemId:item.id)",
-                "badgeCount(for:mediaIdentity)",
-                "clearBadge(for:mediaIdentity)"
+                "updateSnapshot.badgeCount(for:mediaIdentity(for:item))",
+                "updates.clearLibraryBadge(for:media)"
             ]
         ]
         for path in consumers {

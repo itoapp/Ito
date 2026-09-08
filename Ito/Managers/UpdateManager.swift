@@ -9,6 +9,14 @@ import ito_runner
 public class UpdateManager: ObservableObject {
     @Published private var newChapterCounts: [MediaIdentity: Int] = [:]
 
+    internal var libraryBadgeCountsSnapshot: [MediaIdentity: Int] {
+        newChapterCounts
+    }
+
+    internal var libraryBadgeCountsPublisher: AnyPublisher<[MediaIdentity: Int], Never> {
+        $newChapterCounts.eraseToAnyPublisher()
+    }
+
     /// Indicates if a refresh operation is currently actively running
     @Published public private(set) var isRefreshing: Bool = false
 

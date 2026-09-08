@@ -16,10 +16,29 @@ public class PluginManager: ObservableObject {
     // Key: Plugin ID (e.g., moe.itoapp.ito.hianime)
     // Value: The parsed manifest info for that plugin
     @Published public private(set) var installedPlugins: [String: InstalledPlugin] = [:]
+    @Published private(set) var installedPluginsPublicationRevision: UInt64 = 0
+
+    private struct RunnerAuthority: Equatable {
+        let publicationRevision: UInt64
+        let pluginID: String
+        let version: String
+        let pluginType: PluginType
+        let fileIdentity: URL
+    }
+
+    private struct CachedRunner {
+        let authority: RunnerAuthority
+        let runner: ItoRunner
+    }
 
     // Cache for loaded WASM runners
-    private var runnerCache: [String: ItoRunner] = [:]
+    private var runnerCache: [String: CachedRunner] = [:]
     private let pluginsDirectory: URL?
+    private let runnerLoader: @MainActor (
+        _ pluginID: String,
+        _ pluginURL: URL,
+        _ settingsStore: PluginSettingsStore
+    ) async throws -> ItoRunner
     public let pluginSettingsStore: PluginSettingsStore
 
     var configuredInstalledPluginsDirectory: URL? {
@@ -29,6 +48,21 @@ public class PluginManager: ObservableObject {
     public init(pluginSettingsStore: PluginSettingsStore, pluginsDirectory: URL? = nil) {
         self.pluginSettingsStore = pluginSettingsStore
         self.pluginsDirectory = pluginsDirectory
+        runnerLoader = Self.loadRunner
+    }
+
+    init(
+        pluginSettingsStore: PluginSettingsStore,
+        pluginsDirectory: URL? = nil,
+        runnerLoader: @escaping @MainActor (
+            _ pluginID: String,
+            _ pluginURL: URL,
+            _ settingsStore: PluginSettingsStore
+        ) async throws -> ItoRunner
+    ) {
+        self.pluginSettingsStore = pluginSettingsStore
+        self.pluginsDirectory = pluginsDirectory
+        self.runnerLoader = runnerLoader
     }
 
     /// Gets a cached ItoRunner for a plugin ID, or initializes a new one if not cached.
@@ -38,27 +72,44 @@ public class PluginManager: ObservableObject {
             AppLogger.plugin.debug("🔌 [PluginManager] Plugin not found: \(pluginId)")
             throw URLError(.fileDoesNotExist) // Plugin not installed
         }
+        let authority = runnerAuthority(for: plugin)
 
         try pluginSettingsStore.prepare(pluginId: pluginId)
-        if let cached = runnerCache[pluginId] {
+        if let cached = runnerCache[pluginId], cached.authority == authority {
             AppLogger.plugin.debug("🔌 [PluginManager] Returning cached runner for \(pluginId)")
-            return cached
+            return cached.runner
         }
+        runnerCache[pluginId] = nil
 
         AppLogger.plugin.debug("\("🔌 [PluginManager] Creating new runner for \(pluginId)")...")
+        let runner = try await runnerLoader(pluginId, plugin.url, pluginSettingsStore)
+        guard installedPlugins[pluginId].map(runnerAuthority) == authority else {
+            throw PluginRunnerAuthorityError.changedDuringLoad
+        }
+
+        runnerCache[pluginId] = CachedRunner(authority: authority, runner: runner)
+        AppLogger.plugin.debug("🔌 [PluginManager] Runner cached for \(pluginId)")
+        return runner
+    }
+
+    @MainActor
+    private static func loadRunner(
+        pluginID: String,
+        pluginURL: URL,
+        settingsStore: PluginSettingsStore
+    ) async throws -> ItoRunner {
         let runner = ItoRunner()
         await runner.setNetModule(AppNetModule())
         await runner.setStdModule(DefaultStdModule())
-        await runner.setDefaultsModule(AppDefaultsModule(pluginId: pluginId, store: pluginSettingsStore))
+        await runner.setDefaultsModule(
+            AppDefaultsModule(pluginId: pluginID, store: settingsStore)
+        )
         await runner.setHtmlModule(DefaultHtmlModule())
         await runner.setJsModule(DefaultJsModule())
         await runner.setWebviewModule(AppWebviewModule())
 
-        AppLogger.plugin.debug("\("🔌 [PluginManager] Loading bundle for \(pluginId)")...")
-        _ = try await runner.loadBundle(from: plugin.url)
-
-        runnerCache[pluginId] = runner
-        AppLogger.plugin.debug("🔌 [PluginManager] Runner cached for \(pluginId)")
+        AppLogger.plugin.debug("\("🔌 [PluginManager] Loading bundle for \(pluginID)")...")
+        _ = try await runner.loadBundle(from: pluginURL)
         return runner
     }
 
@@ -203,8 +254,23 @@ public class PluginManager: ObservableObject {
         }
         // Also evict ALL runners to pick up updated .ito files
         runnerCache.removeAll()
+        installedPluginsPublicationRevision &+= 1
         AppLogger.plugin.debug(
             "🔌 [PluginManager] Cleared runner cache (\(newCache.count) plugins loaded)"
         )
     }
+
+    private func runnerAuthority(for plugin: InstalledPlugin) -> RunnerAuthority {
+        RunnerAuthority(
+            publicationRevision: installedPluginsPublicationRevision,
+            pluginID: plugin.id,
+            version: plugin.info.version,
+            pluginType: plugin.info.type,
+            fileIdentity: plugin.url.standardizedFileURL
+        )
+    }
+}
+
+private enum PluginRunnerAuthorityError: Error {
+    case changedDuringLoad
 }

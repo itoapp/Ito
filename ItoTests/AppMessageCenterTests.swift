@@ -209,6 +209,24 @@ final class AppMessageCenterTests: XCTestCase {
         )
     }
 
+    func testLibraryPresenterUsesOnlyTypedSanitizedMessages() throws {
+        let center = AppMessageCenter()
+        let presenter = AppMessageLibraryPresenter(messageCenter: center)
+        let expected: [(LibraryMessage, AppMessageKind)] = [
+            (.layoutPersistenceFailed, .libraryLayoutPersistenceFailed),
+            (.itemRemovalFailed, .libraryItemRemovalFailed),
+            (.updateFailed, .libraryUpdateFailed)
+        ]
+
+        for (message, kind) in expected {
+            presenter.present(message)
+            let presented = try XCTUnwrap(center.currentMessage)
+            XCTAssertEqual(presented.kind, kind)
+            XCTAssertFalse(String(describing: presented).contains("/private/"))
+            center.dismiss(messageID: presented.id)
+        }
+    }
+
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(

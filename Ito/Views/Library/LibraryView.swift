@@ -1,94 +1,34 @@
-import OSLog
 import SwiftUI
 import Nuke
 import NukeUI
 import ito_runner
 
-// MARK: - LibraryGroup (avoids tuple inference issues with ForEach)
-
-private struct LibraryGroup: Identifiable {
-    let id: String          // category id
-    let name: String        // category name
-    let isSystem: Bool
-    let items: [LibraryItem]
-}
-
-// MARK: - LibraryView
-
 struct LibraryView: View {
+    @ObservedObject var viewModel: LibraryViewModel
     let viewFactory: AppViewFactory
-    @EnvironmentObject private var libraryManager: LibraryManager
-    @EnvironmentObject private var updateManager: UpdateManager
-    @EnvironmentObject private var settingsStore: AppSettingsStore
-    @EnvironmentObject private var discordRPCManager: DiscordRPCManager
-    @EnvironmentObject private var backupManager: BackupManager
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    @State private var searchText = ""
-    @State private var isEditing = false
-    @State private var selectedCategoryId: String? // nil means "All"
-
-    @State private var itemToCategorize: String?
-
-    // Backup State
-    @State private var isExportingBackup = false
-    @State private var generatedBackup: BackupDocument?
-    @State private var backupError: String?
-    @State private var showBackupError = false
-
-    private var layoutStyle: LibraryLayoutStyle {
-        LibraryLayoutStyle(rawValue: settingsStore.libraryLayoutStyle) ?? .sectioned
-    }
 
     private let columns = [
         GridItem(.adaptive(minimum: 100, maximum: 140), spacing: 12)
     ]
 
-    private var filteredItems: [LibraryItem] {
-        guard !searchText.isEmpty else { return libraryManager.items }
-        return libraryManager.items.filter {
-            $0.title.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
-    private var currentGroupedItems: [LibraryGroup] {
-        let allLinks = libraryManager.links
-
-        return libraryManager.categories.compactMap { cat in
-            let itemIds = allLinks.filter { $0.categoryId == cat.id }.map { $0.itemId }
-            let itemsForCat = filteredItems.filter { itemIds.contains($0.id) }
-
-            // In tabbed mode, if a category is selected and it's not this one, skip
-            if layoutStyle == .tabbed, let selected = selectedCategoryId, selected != cat.id {
-                return nil
-            }
-
-            // In sectioned mode, don't show empty categories unless it's the only one
-            if layoutStyle == .sectioned && itemsForCat.isEmpty && libraryManager.categories.count > 1 {
-                return nil
-            }
-
-            return LibraryGroup(id: cat.id, name: cat.name, isSystem: cat.isSystemCategory, items: itemsForCat)
-        }
-    }
-
     var body: some View {
         NavigationView {
             ZStack(alignment: .top) {
-                if libraryManager.isLoading {
+                switch viewModel.phase {
+                case .loading:
                     loadingSkeletonView
-                } else if libraryManager.items.isEmpty {
+                case .empty:
                     emptyStateView
-                } else {
+                case .content:
                     mainContentView
                 }
 
-                // Determinate Progress Banner
-                if updateManager.isRefreshing {
+                if viewModel.isRefreshing {
                     UpdateProgressBanner(
-                        current: updateManager.itemsCheckedCurrentRun,
-                        total: updateManager.totalItemsToCheck
+                        current: viewModel.updateProgressCurrent,
+                        total: viewModel.updateProgressTotal
                     )
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(2)
@@ -97,52 +37,63 @@ struct LibraryView: View {
             .navigationTitle("Library")
             .toolbar { toolbarContent }
             .searchable(
-                text: $searchText,
+                text: $viewModel.searchText,
                 placement: .navigationBarDrawer(displayMode: .automatic),
                 prompt: "Search library"
             )
             .fileExporter(
-                isPresented: $isExportingBackup,
-                document: generatedBackup,
+                isPresented: exportPresentationBinding,
+                document: viewModel.exportPresentation?.document,
                 contentType: .itoBackup,
-                defaultFilename: generatedBackup?.fileURL?.lastPathComponent ?? "ItoBackup"
+                defaultFilename: viewModel.exportPresentation?.defaultFilename ?? "ItoBackup"
             ) { result in
                 switch result {
-                case .success(let url):
-                    AppLogger.database.debug("Exported to \(url)")
-                case .failure(let error):
-                    backupError = error.localizedDescription
-                    showBackupError = true
+                case .success:
+                    viewModel.exporterDidSucceed()
+                case .failure:
+                    viewModel.exporterDidFail()
                 }
             }
-            .alert(isPresented: $showBackupError) {
-                Alert(title: Text("Backup Error"), message: Text(backupError ?? "Unknown error"), dismissButton: .default(Text("OK")))
+            .alert(isPresented: alertBinding) {
+                Alert(
+                    title: Text(viewModel.alert?.title ?? "Backup Error"),
+                    message: Text(viewModel.alert?.message ?? "The operation failed."),
+                    dismissButton: .default(Text("OK")) {
+                        viewModel.dismissAlert()
+                    }
+                )
             }
         }
         .navigationViewStyle(.stack)
-        .onAppear {
-            updateDiscordStatus()
-        }
-        .onChange(of: selectedCategoryId) { _ in
-            updateDiscordStatus()
-        }
+        .onAppear { viewModel.appear() }
+        .onDisappear { viewModel.disappear() }
     }
 
-    private func updateDiscordStatus() {
-        let categoryName = libraryManager.categories.first(where: { $0.id == selectedCategoryId })?.name
-        discordRPCManager.updateLibraryStatus(categoryName: categoryName)
+    private var exportPresentationBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.exportPresentation != nil },
+            set: { isPresented in
+                if !isPresented { viewModel.dismissExportPresentation() }
+            }
+        )
     }
 
-    // MARK: Content
+    private var alertBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.alert != nil },
+            set: { isPresented in
+                if !isPresented { viewModel.dismissAlert() }
+            }
+        )
+    }
 
     private var mainContentView: some View {
         VStack(spacing: 0) {
-            if layoutStyle == .tabbed {
+            if viewModel.layoutStyle == .tabbed {
                 pillBar
                 Divider()
             }
-
-            if !searchText.isEmpty && currentGroupedItems.allSatisfy({ $0.items.isEmpty }) {
+            if viewModel.showsNoResults {
                 noResultsView
             } else {
                 contentScrollView
@@ -153,37 +104,24 @@ struct LibraryView: View {
     private var contentScrollView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-                if layoutStyle == .tabbed && selectedCategoryId == nil {
-                    // "All" view
+                if viewModel.layoutStyle == .tabbed && viewModel.selectedCategoryID == nil {
                     Section {
-                        LazyVGrid(columns: columns, spacing: 14) {
-                            ForEach(filteredItems) { item in
-                                LibraryItemView(item: item, isEditing: isEditing, viewFactory: viewFactory) {
-                                    itemToCategorize = item.id
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 24)
+                        libraryGrid(items: viewModel.filteredItems)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 24)
                     }
                 } else {
-                    ForEach(currentGroupedItems) { group in
+                    ForEach(viewModel.groups) { group in
                         Section {
                             if group.items.isEmpty {
                                 actionableEmptyState(for: group.name)
                             } else {
-                                LazyVGrid(columns: columns, spacing: 14) {
-                                    ForEach(group.items) { item in
-                                        LibraryItemView(item: item, isEditing: isEditing, viewFactory: viewFactory) {
-                                            itemToCategorize = item.id
-                                        }
-                                    }
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 24)
+                                libraryGrid(items: group.items)
+                                    .padding(.horizontal, 16)
+                                    .padding(.bottom, 24)
                             }
                         } header: {
-                            if layoutStyle == .sectioned {
+                            if viewModel.layoutStyle == .sectioned {
                                 SectionHeaderView(
                                     label: group.name,
                                     icon: group.isSystem ? "tray" : "folder",
@@ -194,29 +132,58 @@ struct LibraryView: View {
                     }
                 }
             }
-            .padding(.top, layoutStyle == .sectioned ? 4 : 16)
+            .padding(.top, viewModel.layoutStyle == .sectioned ? 4 : 16)
             .padding(.bottom, 16)
         }
-        .refreshable {
-            await updateManager.checkForUpdates()
-        }
-        .sheet(item: Binding(
-            get: { itemToCategorize.map { SheetIdentifiable(id: $0) } },
-            set: { itemToCategorize = $0?.id }
-        )) { wrapper in
-            CategoryAssignmentSheet(itemId: wrapper.id)
+        .refreshable { await viewModel.requestUpdate() }
+        .sheet(item: categoryAssignmentBinding) { intent in
+            CategoryAssignmentSheet(itemId: intent.id)
         }
     }
 
-    // MARK: Pill Bar
+    private var categoryAssignmentBinding: Binding<LibraryCategoryAssignmentIntent?> {
+        Binding(
+            get: {
+                viewModel.categoryAssignmentItemID.map {
+                    LibraryCategoryAssignmentIntent(id: $0)
+                }
+            },
+            set: { intent in
+                if let intent {
+                    viewModel.presentCategoryAssignment(for: intent.id)
+                } else {
+                    viewModel.dismissCategoryAssignment()
+                }
+            }
+        )
+    }
+
+    private func libraryGrid(items: [LibraryItem]) -> some View {
+        LazyVGrid(columns: columns, spacing: 14) {
+            ForEach(items) { item in
+                LibraryItemView(
+                    item: item,
+                    badgeCount: viewModel.badgeCount(for: item),
+                    isPluginInstalled: viewModel.isPluginInstalled(for: item),
+                    isEditing: viewModel.isEditing,
+                    destination: viewFactory.makeDeferredPluginView(item: item),
+                    onSelect: { viewModel.itemSelected(item) },
+                    onAssignCategories: {
+                        viewModel.presentCategoryAssignment(for: item.id)
+                    },
+                    onRemove: { viewModel.remove(item) }
+                )
+            }
+        }
+    }
 
     @ViewBuilder
     private var pillBar: some View {
         if dynamicTypeSize >= .accessibility1 {
-            Picker("Category", selection: $selectedCategoryId) {
+            Picker("Category", selection: categorySelectionBinding) {
                 Text("All").tag(String?.none)
-                ForEach(libraryManager.categories) { cat in
-                    Text(cat.name).tag(String?.some(cat.id))
+                ForEach(viewModel.categories) { category in
+                    Text(category.name).tag(String?.some(category.id))
                 }
             }
             .pickerStyle(.menu)
@@ -226,8 +193,8 @@ struct LibraryView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     pillButton(title: "All", id: nil)
-                    ForEach(libraryManager.categories) { cat in
-                        pillButton(title: cat.name, id: cat.id)
+                    ForEach(viewModel.categories) { category in
+                        pillButton(title: category.name, id: category.id)
                     }
                 }
                 .padding(.horizontal, 16)
@@ -236,12 +203,17 @@ struct LibraryView: View {
         }
     }
 
+    private var categorySelectionBinding: Binding<String?> {
+        Binding(
+            get: { viewModel.selectedCategoryID },
+            set: { viewModel.selectCategory($0) }
+        )
+    }
+
     private func pillButton(title: String, id: String?) -> some View {
-        let isSelected = selectedCategoryId == id
+        let isSelected = viewModel.selectedCategoryID == id
         return Button {
-            withAnimation(.snappy) {
-                selectedCategoryId = id
-            }
+            withAnimation(.snappy) { viewModel.selectCategory(id) }
         } label: {
             Text(title)
                 .font(.subheadline.weight(.medium))
@@ -253,8 +225,6 @@ struct LibraryView: View {
         }
     }
 
-    // MARK: Toolbar
-
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
@@ -262,18 +232,14 @@ struct LibraryView: View {
                 NavigationLink(destination: HistoryView()) {
                     Image(systemName: "clock.arrow.circlepath")
                 }
-
-                if !libraryManager.items.isEmpty {
+                if viewModel.hasItems {
                     Button {
-                        Task {
-                            await updateManager.checkForUpdates()
-                        }
+                        Task { await viewModel.requestUpdate() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
-                    .disabled(updateManager.isRefreshing)
+                    .disabled(viewModel.isRefreshing)
                 }
-
                 NavigationLink(destination: CategorySettingsView()) {
                     Image(systemName: "folder.badge.gearshape")
                         .accessibilityLabel("Manage Categories")
@@ -283,49 +249,35 @@ struct LibraryView: View {
         ToolbarItem(placement: .navigationBarTrailing) {
             HStack(spacing: 16) {
                 Button {
-                    withAnimation {
-                        let newValue = layoutStyle == .sectioned
-                            ? LibraryLayoutStyle.tabbed.rawValue
-                            : LibraryLayoutStyle.sectioned.rawValue
-                        Task {
-                            try? await settingsStore.set(
-                                newValue,
-                                for: AppPreferenceCatalog.libraryLayoutStyle
-                            )
-                        }
-                    }
+                    withAnimation { viewModel.toggleLayout() }
                 } label: {
-                    Image(systemName: layoutStyle == .sectioned ? "rectangle.grid.1x2" : "square.grid.2x2")
+                    Image(
+                        systemName: viewModel.layoutStyle == .sectioned
+                            ? "rectangle.grid.1x2"
+                            : "square.grid.2x2"
+                    )
                 }
-                .accessibilityLabel("Switch to \(layoutStyle == .sectioned ? "tabbed" : "sectioned") layout")
-
-                if !libraryManager.items.isEmpty {
+                .accessibilityLabel(
+                    "Switch to \(viewModel.layoutStyle == .sectioned ? "tabbed" : "sectioned") layout"
+                )
+                if viewModel.hasItems {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            isEditing.toggle()
+                            viewModel.toggleEditing()
                         }
                     } label: {
-                        Text(isEditing ? "Done" : "Edit")
+                        Text(viewModel.isEditing ? "Done" : "Edit")
                             .font(.body)
-                            .fontWeight(isEditing ? .semibold : .regular)
+                            .fontWeight(viewModel.isEditing ? .semibold : .regular)
                     }
                 }
-
                 Menu {
                     Button {
-                        Task {
-                            do {
-                                let tempURL = try await backupManager.createBackupFile()
-                                self.generatedBackup = BackupDocument(url: tempURL)
-                                self.isExportingBackup = true
-                            } catch {
-                                self.backupError = error.localizedDescription
-                                self.showBackupError = true
-                            }
-                        }
+                        viewModel.beginExport()
                     } label: {
                         Label("Export Library", systemImage: "square.and.arrow.up")
                     }
+                    .disabled(viewModel.isGeneratingExport)
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -333,14 +285,30 @@ struct LibraryView: View {
         }
     }
 
-    // MARK: Skeleton Loading
-
     private var loadingSkeletonView: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 14) {
-                ForEach(0..<8, id: \.self) { _ in
-                    let fakeItem = LibraryItem(id: UUID().uuidString, title: "Loading Item Title", coverUrl: nil, pluginId: "", isAnime: false, pluginType: .manga, rawPayload: Data(), anilistId: nil)
-                    LibraryItemView(item: fakeItem, isEditing: false, viewFactory: viewFactory)
+                ForEach(0..<8, id: \.self) { index in
+                    let fakeItem = LibraryItem(
+                        id: "loading-\(index)",
+                        title: "Loading Item Title",
+                        coverUrl: nil,
+                        pluginId: "",
+                        isAnime: false,
+                        pluginType: .manga,
+                        rawPayload: Data(),
+                        anilistId: nil
+                    )
+                    LibraryItemView(
+                        item: fakeItem,
+                        badgeCount: 0,
+                        isPluginInstalled: true,
+                        isEditing: false,
+                        destination: viewFactory.makeDeferredPluginView(item: fakeItem),
+                        onSelect: {},
+                        onAssignCategories: {},
+                        onRemove: {}
+                    )
                 }
             }
             .padding(.horizontal, 16)
@@ -350,18 +318,14 @@ struct LibraryView: View {
         .allowsHitTesting(false)
     }
 
-    // MARK: Empty / No Results States
-
     private var emptyStateView: some View {
         VStack(spacing: 14) {
             Image(systemName: "square.stack.3d.up.slash")
                 .font(.system(size: 52, weight: .thin))
                 .foregroundStyle(.tertiary)
-
             Text("Your Library is Empty")
                 .font(.title3)
                 .fontWeight(.semibold)
-
             Text("Manga, anime, and novels you save\nwill appear here.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -376,9 +340,8 @@ struct LibraryView: View {
             Text("No items in \(categoryName).")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-
             Button("Browse Discover") {
-                // Future routing to Discover tab
+                // Future routing to Discover tab.
             }
             .font(.subheadline.weight(.semibold))
         }
@@ -391,12 +354,10 @@ struct LibraryView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 44, weight: .thin))
                 .foregroundStyle(.tertiary)
-
             Text("No Results")
                 .font(.title3)
                 .fontWeight(.semibold)
-
-            Text("Nothing in your library matches\n\"\(searchText)\".")
+            Text("Nothing in your library matches\n\"\(viewModel.searchText)\".")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -406,11 +367,9 @@ struct LibraryView: View {
     }
 }
 
-// MARK: - Section Header
-
 struct SectionHeaderView: View {
     let label: String
-    let icon: String // SF Symbol
+    let icon: String
     let count: Int
 
     var body: some View {
@@ -418,16 +377,13 @@ struct SectionHeaderView: View {
             Image(systemName: icon)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-
             Text(label)
                 .font(.subheadline)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
-
             Text("·  \(count)")
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
-
             Spacer()
         }
         .padding(.horizontal, 16)
@@ -440,66 +396,45 @@ struct SectionHeaderView: View {
     }
 }
 
-// MARK: - LibraryItemView
-
 struct LibraryItemView: View {
     let item: LibraryItem
+    let badgeCount: Int
+    let isPluginInstalled: Bool
     let isEditing: Bool
-    let viewFactory: AppViewFactory
-    var onAssignCategories: (() -> Void)?
+    let destination: DeferredPluginView
+    let onSelect: () -> Void
+    let onAssignCategories: () -> Void
+    let onRemove: () -> Void
 
-    @EnvironmentObject private var pluginManager: PluginManager
-    @EnvironmentObject private var libraryManager: LibraryManager
-    @EnvironmentObject private var updateManager: UpdateManager
-    @EnvironmentObject private var repoManager: RepoManager
-    @State private var wiggleAngle: Double = Double.random(in: -1.2...1.2)
-    @State private var isWiggling: Bool = false
-
-    private var isPluginInstalled: Bool {
-        pluginManager.installedPlugins[item.pluginId] != nil
-    }
-
-    private var badgeCount: Int {
-        updateManager.badgeCount(for: mediaIdentity)
-    }
-
-    private var mediaIdentity: MediaIdentity {
-        MediaIdentity(pluginId: item.pluginId, itemId: item.id)
-    }
+    @Environment(\.displayScale) private var displayScale
+    @State private var wiggleAngle = Double.random(in: -1.2...1.2)
+    @State private var isWiggling = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            NavigationLink(
-                destination: DeferredPluginView(item: item, viewFactory: viewFactory)
-            ) {
-                cardContent
-                    .contentShape(Rectangle())
+            NavigationLink(destination: destination) {
+                cardContent.contentShape(Rectangle())
             }
             .buttonStyle(PressableButtonStyle())
             .disabled(isEditing)
             .simultaneousGesture(
                 TapGesture().onEnded {
-                    clearBadgeOnSelection()
+                    guard !isEditing else { return }
+                    onSelect()
                 }
             )
             .contextMenu {
-                Button {
-                    onAssignCategories?()
-                } label: {
+                Button(action: onAssignCategories) {
                     Label("Add to List...", systemImage: "list.bullet.rectangle")
                 }
-
-                Button(role: .destructive) {
-                    libraryManager.removeItem(withId: item.id)
-                } label: {
+                Button(role: .destructive, action: onRemove) {
                     Label("Remove from Library", systemImage: "trash")
                 }
             }
-
             if isEditing {
                 Button {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        libraryManager.removeItem(withId: item.id)
+                        onRemove()
                     }
                 } label: {
                     Image(systemName: "minus.circle.fill")
@@ -514,65 +449,45 @@ struct LibraryItemView: View {
         }
         .rotationEffect(.degrees(isWiggling ? wiggleAngle : 0))
         .animation(
-            isWiggling ? .easeInOut(duration: 0.12).repeatForever(autoreverses: true) : .easeInOut(duration: 0.15),
+            isWiggling
+                ? .easeInOut(duration: 0.12).repeatForever(autoreverses: true)
+                : .easeInOut(duration: 0.15),
             value: isWiggling
         )
         .onChange(of: isEditing) { editing in
-            withAnimation {
-                isWiggling = editing
-            }
-        }
-    }
-
-    private func clearBadgeOnSelection() {
-        guard badgeCount > 0 else { return }
-        Task {
-            do {
-                try await updateManager.clearBadge(for: mediaIdentity)
-            } catch {
-                AppLogger.database.error(
-                    "Failed to clear update badge for \(item.id): \(error.localizedDescription)"
-                )
-            }
+            withAnimation { isWiggling = editing }
         }
     }
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             coverImageView
-            metadataView
-        }
-    }
-
-    private var metadataView: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(item.title)
-                .font(.footnote)
-                .fontWeight(.medium)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .foregroundColor(isPluginInstalled ? .primary : .secondary)
-
-            if !isPluginInstalled {
-                Label("Plugin missing", systemImage: "exclamationmark.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.footnote)
+                    .fontWeight(.medium)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .foregroundColor(isPluginInstalled ? .primary : .secondary)
+                if !isPluginInstalled {
+                    Label("Plugin missing", systemImage: "exclamationmark.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                }
             }
         }
     }
 
     private var coverImageView: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
+        GeometryReader { geometry in
+            let width = geometry.size.width
             let targetSize = CGSize(
-                width: width * UIScreen.main.scale,
-                height: width * 1.5 * UIScreen.main.scale
+                width: width * displayScale,
+                height: width * 1.5 * displayScale
             )
-
             ZStack(alignment: .topTrailing) {
                 coverContent(width: width, targetSize: targetSize)
-
                 if !isPluginInstalled {
                     Image(systemName: "exclamationmark.circle.fill")
                         .font(.caption.weight(.bold))
@@ -585,7 +500,9 @@ struct LibraryItemView: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(Color.red))
-                        .overlay(Capsule().stroke(Color(UIColor.systemBackground), lineWidth: 1.5))
+                        .overlay(
+                            Capsule().stroke(Color(UIColor.systemBackground), lineWidth: 1.5)
+                        )
                         .padding(4)
                         .transition(.scale.combined(with: .opacity))
                 }
@@ -628,118 +545,62 @@ struct LibraryItemView: View {
     }
 }
 
-// MARK: - DeferredPluginView
-
 struct DeferredPluginView: View {
-    let item: LibraryItem
+    @StateObject private var viewModel: DeferredPluginViewModel
     let viewFactory: AppViewFactory
-    @EnvironmentObject private var pluginManager: PluginManager
-    @EnvironmentObject private var repoManager: RepoManager
 
-    @State private var runner: ItoRunner?
-    @State private var errorMessage: String?
-    @State private var loadTask: Task<Void, Never>?
-
-    @State private var decodedAnime: Anime?
-    @State private var decodedManga: Manga?
-    @State private var decodedNovel: Novel?
-
-    @State private var isMissingPlugin = false
-    @State private var isDownloadingPlugin = false
+    init(item: LibraryItem, viewFactory: AppViewFactory) {
+        _viewModel = StateObject(
+            wrappedValue: viewFactory.makeDeferredPluginViewModel(item: item)
+        )
+        self.viewFactory = viewFactory
+    }
 
     var body: some View {
-        Group {
-            if isMissingPlugin {
-                missingPluginView
-            } else if let error = errorMessage {
-                errorView(error)
-            } else if let runner = runner {
-                resolvedContentView(runner: runner)
-            } else {
-                loadingView
-            }
-        }
-        .onAppear {
-            guard runner == nil, errorMessage == nil else { return }
-            loadTask = Task { await loadRunnerAndItem() }
-        }
-        .onDisappear {
-            loadTask?.cancel()
-            loadTask = nil
-        }
+        content
+            .onAppear { viewModel.appear() }
+            .onDisappear { viewModel.disappear() }
     }
 
     @ViewBuilder
-    private func resolvedContentView(runner: ItoRunner) -> some View {
-        switch item.effectiveType {
-        case .anime:
-            if let anime = decodedAnime {
-                viewFactory.makeAnimeDetailView(
-                    runner: runner,
-                    media: anime,
-                    pluginID: item.pluginId
-                ) {
-                    try await runner.getAnimeUpdate(
-                        anime: $0,
-                        needsDetails: true,
-                        needsEpisodes: true
-                    )
-                }
-            } else {
-                errorView("Failed to decode the saved anime data.")
-            }
-        case .manga:
-            if let manga = decodedManga {
-                viewFactory.makeMangaDetailView(
-                    runner: runner,
-                    media: manga,
-                    pluginID: item.pluginId
-                ) {
-                    try await runner.getMangaUpdate(manga: $0)
-                }
-            } else {
-                errorView("Failed to decode the saved manga data.")
-            }
-        case .novel:
-            if let novel = decodedNovel {
-                viewFactory.makeNovelDetailView(
-                    runner: runner,
-                    media: novel,
-                    pluginID: item.pluginId
-                ) {
-                    try await runner.getNovelUpdate(novel: $0)
-                }
-            } else {
-                errorView("Failed to decode the saved novel data.")
-            }
+    private var content: some View {
+        switch viewModel.phase {
+        case .idle, .decoding, .loadingRunner, .cancelled:
+            loadingView(label: "Loading…")
+        case .checkingPackage:
+            loadingView(label: "Searching repositories…")
+        case .installing:
+            loadingView(label: "Installing extension…")
+        case .pluginMissing:
+            missingPluginView
+        case .packageUnavailable:
+            failureView(
+                title: "Extension Not Found",
+                message: "This extension was not found in your configured repositories.",
+                retryTitle: "Search Again",
+                retry: viewModel.installMissingPlugin
+            )
+        case .incompatible(let minimumVersion):
+            failureView(
+                title: "Extension Incompatible",
+                message: "This extension requires Ito \(minimumVersion) or later.",
+                retryTitle: nil,
+                retry: nil
+            )
+        case .failure(let failure):
+            deferredFailureView(failure)
+        case .ready(let route):
+            viewFactory.makeDeferredPluginDestination(route.destination)
+                .id(route.id)
         }
     }
 
-    private var loadingView: some View {
+    private func loadingView(label: String) -> some View {
         VStack(spacing: 14) {
-            ProgressView()
-                .scaleEffect(1.2)
-            Text("Loading…")
+            ProgressView().scaleEffect(1.2)
+            Text(label)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func errorView(_ message: String) -> some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 42, weight: .thin))
-                .foregroundStyle(.red)
-
-            Text("Couldn't Load Plugin")
-                .font(.headline)
-
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -749,108 +610,97 @@ struct DeferredPluginView: View {
             Image(systemName: "puzzlepiece.extension")
                 .font(.system(size: 52, weight: .thin))
                 .foregroundStyle(.blue)
-
             VStack(spacing: 6) {
                 Text("Extension Required")
                     .font(.title3)
                     .fontWeight(.semibold)
-
-                Text("To read this content, you must install the '\(item.pluginId)' extension.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                Text(
+                    "To read this content, you must install the '\(viewModel.item.pluginId)' extension."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             }
-
-            if isDownloadingPlugin {
-                ProgressView("Searching & Installing...")
-                    .padding(.top, 10)
-            } else {
-                Button {
-                    Task { await installMissingPlugin() }
-                } label: {
-                    Text("Search Repositories & Install")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(Color.blue)
-                        .clipShape(Capsule())
-                }
-                .padding(.top, 10)
+            Button(action: viewModel.installMissingPlugin) {
+                Text("Search Repositories & Install")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .background(Color.blue)
+                    .clipShape(Capsule())
             }
+            .padding(.top, 10)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func installMissingPlugin() async {
-        isDownloadingPlugin = true
-        defer { isDownloadingPlugin = false }
-
-        // ALWAYS refresh repositories first when explicitly installing a missing plugin.
-        // This ensures if the user rebuilt their extensions locally or upstream updated, 
-        // we won't throw Hash Mismatches due to stale stored data.
-        await repoManager.refreshAll()
-
-        var targetPkg: RepoPackage?
-        var foundRepoUrl: String?
-
-        for repo in repoManager.repositories {
-            if let pkg = repo.index?.packages.first(where: { $0.id == item.pluginId }) {
-                targetPkg = pkg
-                foundRepoUrl = repo.url
-                break
-            }
-        }
-
-        guard let pkg = targetPkg, let url = foundRepoUrl else {
-            errorMessage = "Couldn't find this extension in any of your repositories."
-            isMissingPlugin = false
-            return
-        }
-
-        do {
-            try await repoManager.installPackage(pkg, repositoryUrl: url)
-
-            // Retry loading
-            isMissingPlugin = false
-            await loadRunnerAndItem()
-
-        } catch {
-            errorMessage = "Failed to install extension: \(error.localizedDescription)"
-            isMissingPlugin = false
+    @ViewBuilder
+    private func deferredFailureView(_ failure: DeferredPluginFailure) -> some View {
+        switch failure {
+        case .packageLookup:
+            failureView(
+                title: "Repository Search Failed",
+                message: "The configured repositories could not be refreshed. Please try again.",
+                retryTitle: "Search Again",
+                retry: viewModel.installMissingPlugin
+            )
+        case .pluginTypeMismatch:
+            failureView(
+                title: "Extension Type Mismatch",
+                message: "The saved item and extension types do not match.",
+                retryTitle: "Retry",
+                retry: viewModel.retry
+            )
+        case .install:
+            failureView(
+                title: "Installation Failed",
+                message: "The extension could not be installed. Please try again.",
+                retryTitle: "Retry Install",
+                retry: viewModel.installMissingPlugin
+            )
+        case .runnerLoad:
+            failureView(
+                title: "Couldn't Load Plugin",
+                message: "The installed extension could not be loaded.",
+                retryTitle: "Retry",
+                retry: viewModel.retry
+            )
+        case .payloadDecode:
+            failureView(
+                title: "Couldn't Load Saved Item",
+                message: "The saved media data is invalid or incompatible.",
+                retryTitle: "Retry",
+                retry: viewModel.retry
+            )
         }
     }
 
-    private func loadRunnerAndItem() async {
-        do {
-            switch item.effectiveType {
-            case .anime:
-                let val = try JSONDecoder().decode(Anime.self, from: item.rawPayload)
-                await MainActor.run { decodedAnime = val }
-            case .manga:
-                let val = try JSONDecoder().decode(Manga.self, from: item.rawPayload)
-                await MainActor.run { decodedManga = val }
-            case .novel:
-                let val = try JSONDecoder().decode(Novel.self, from: item.rawPayload)
-                await MainActor.run { decodedNovel = val }
+    private func failureView(
+        title: String,
+        message: String,
+        retryTitle: String?,
+        retry: (() -> Void)?
+    ) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 42, weight: .thin))
+                .foregroundStyle(.red)
+            Text(title).font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            if let retryTitle, let retry {
+                Button(retryTitle, action: retry)
+                    .buttonStyle(.borderedProminent)
             }
-
-            try Task.checkCancellation()
-            let pluginRunner = try await pluginManager.getRunner(for: item.pluginId)
-            try Task.checkCancellation()
-            await MainActor.run { runner = pluginRunner }
-
-        } catch is CancellationError {
-        } catch let error as URLError where error.code == .fileDoesNotExist {
-            await MainActor.run { isMissingPlugin = true }
-        } catch {
-            await MainActor.run { errorMessage = error.localizedDescription }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-
-// MARK: - UpdateProgressBanner
 
 struct UpdateProgressBanner: View {
     let current: Int
@@ -877,6 +727,6 @@ struct UpdateProgressBanner: View {
     }
 }
 
-private struct SheetIdentifiable: Identifiable {
+private struct LibraryCategoryAssignmentIntent: Identifiable {
     let id: String
 }

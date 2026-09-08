@@ -7,6 +7,8 @@ public enum PresentationFeature: String, Equatable, Sendable {
     case trackerSearch = "tracker_search"
     case trackerDetails = "tracker_details"
     case mediaDetail = "media_detail"
+    case library
+    case deferredPlugin = "deferred_plugin"
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {
@@ -26,6 +28,10 @@ public enum PresentationEventKind: String, Equatable, Sendable {
     case relinkSearch = "relink_search"
     case relink
     case baseline
+    case backupExport = "backup_export"
+    case pluginInstall = "plugin_install"
+    case runnerLoad = "runner_load"
+    case payloadDecode = "payload_decode"
 }
 
 public enum PresentationEventPhase: String, Equatable, Sendable {
