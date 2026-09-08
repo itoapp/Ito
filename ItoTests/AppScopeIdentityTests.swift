@@ -5,6 +5,53 @@ import ito_runner
 
 @MainActor
 final class AppScopeIdentityTests: XCTestCase {
+    func testRepeatedRootAndTabRecomputationReturnsSameLibraryViewModel() {
+        let scope = makeScope()
+
+        XCTAssertFalse(scope.rootModels.hasLoadedLibraryViewModel)
+        let first = scope.rootModels.libraryViewModel
+        _ = scope.viewFactory.makeLibraryView()
+        let second = scope.viewFactory.rootModels.libraryViewModel
+        _ = scope.viewFactory.makeLibraryView()
+        let third = scope.rootModels.libraryViewModel
+
+        XCTAssertTrue(first === second)
+        XCTAssertTrue(second === third)
+        XCTAssertTrue(scope.rootModels.hasLoadedLibraryViewModel)
+    }
+
+    func testNewPreparedRuntimeEpochReceivesNewLibraryViewModel() {
+        let firstScope = makeScope()
+        let secondScope = makeScope()
+
+        XCTAssertFalse(
+            firstScope.rootModels.libraryViewModel
+                === secondScope.rootModels.libraryViewModel
+        )
+    }
+
+    func testDeferredPluginViewModelIsScreenOwnedAndNotStoredInRootModelStore() throws {
+        let scope = makeScope()
+        let item = Ito.LibraryItem(
+            id: "item",
+            title: "Item",
+            coverUrl: nil,
+            pluginId: "plugin",
+            isAnime: false,
+            pluginType: .manga,
+            rawPayload: Data(),
+            anilistId: nil
+        )
+
+        let first = scope.viewFactory.makeDeferredPluginViewModel(item: item)
+        let second = scope.viewFactory.makeDeferredPluginViewModel(item: item)
+        let source = try sourceFile("Ito/AppScope.swift")
+
+        XCTAssertFalse(first === second)
+        XCTAssertFalse(source.contains("storedDeferredPluginViewModel"))
+        XCTAssertFalse(source.contains("hasLoadedDeferredPluginViewModel"))
+    }
+
     func testRepeatedRootAndTabRecomputationReturnsSameSearchViewModel() {
         let scope = makeScope()
 
@@ -198,9 +245,10 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertNotNil(bootstrap.appScope)
         XCTAssertFalse(try XCTUnwrap(bootstrap.appScope).rootModels.hasLoadedSearchViewModel)
         XCTAssertFalse(try XCTUnwrap(bootstrap.appScope).rootModels.hasLoadedDiscoverViewModel)
+        XCTAssertFalse(try XCTUnwrap(bootstrap.appScope).rootModels.hasLoadedLibraryViewModel)
     }
 
-    func testUnmigratedTabsAndEnvironmentObjectFanOutRemainUnchanged() throws {
+    func testRootFactoriesAndLegacyEnvironmentObjectFanOutRemainAvailable() throws {
         let appSource = try sourceFile("Ito/ItoApp.swift")
         let tabSource = try sourceFile("Ito/Views/MainTabView.swift")
         let environmentObjects = [
@@ -227,7 +275,7 @@ final class AppScopeIdentityTests: XCTestCase {
             )
         }
         for unmigratedTab in [
-            "LibraryView(viewFactory: appScope.viewFactory)",
+            "appScope.viewFactory.makeLibraryView()",
             "appScope.viewFactory.makeSettingsView()"
         ] {
             XCTAssertTrue(tabSource.contains(unmigratedTab))
@@ -314,6 +362,29 @@ final class AppScopeIdentityTests: XCTestCase {
         let readProgressManager = ReadProgressManager(dbPool: database.dbPool)
         let libraryManager = LibraryManager(dbPool: database.dbPool)
         let updateManager = UpdateManager(dbPool: database.dbPool)
+        let noOpRefresh: BackupRestoreRefresher.RefreshOperations.Operation = {}
+        let backupManager = BackupManager(
+            dbPool: database.dbPool,
+            sourceDatabaseURL: database.databaseURL,
+            exportReadiness: {},
+            restoreRefresher: BackupRestoreRefresher(
+                dbPool: database.dbPool,
+                operations: .init(
+                    appSettings: noOpRefresh,
+                    pluginIdentity: noOpRefresh,
+                    pluginSettings: noOpRefresh,
+                    repositories: noOpRefresh,
+                    userImporterAliases: noOpRefresh,
+                    library: noOpRefresh,
+                    history: noOpRefresh,
+                    readProgress: noOpRefresh,
+                    trackerLinks: noOpRefresh,
+                    updateBadges: noOpRefresh,
+                    storage: noOpRefresh,
+                    appearance: noOpRefresh
+                )
+            )
+        )
         let librarySourceRemapper = LibrarySourceRemapper(dbPool: database.dbPool)
         let notificationManager = NotificationManager()
         let storageManager = StorageManager(pluginManager: pluginManager)
@@ -331,6 +402,7 @@ final class AppScopeIdentityTests: XCTestCase {
             readProgressManager: readProgressManager,
             libraryManager: libraryManager,
             updateManager: updateManager,
+            backupManager: backupManager,
             librarySourceRemapper: librarySourceRemapper,
             themeManager: ThemeManager.shared,
             notificationManager: notificationManager,
@@ -373,6 +445,13 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(dependencies.discoverDetail.pluginProvider === pluginManager)
         XCTAssertTrue(dependencies.discoverDetail.detailService === DiscoverManager.shared)
         XCTAssertTrue(dependencies.discoverDetail.themeService === ThemeManager.shared)
+        XCTAssertTrue(dependencies.library.library === libraryManager)
+        XCTAssertTrue(dependencies.library.layout === settingsStore)
+        XCTAssertTrue(dependencies.library.updates === updateManager)
+        XCTAssertTrue(dependencies.library.export === backupManager)
+        XCTAssertTrue(dependencies.library.discord === discordRPCManager)
+        XCTAssertTrue(dependencies.library.plugins === pluginManager)
+        XCTAssertTrue(dependencies.library.installer === repoManager)
         XCTAssertTrue(
             dependencies.discoverDetail.sourceMappingRepository
                 as? GRDBSourceMappingRepository === sourceMappingRepository

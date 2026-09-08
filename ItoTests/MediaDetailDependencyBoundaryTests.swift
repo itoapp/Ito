@@ -71,15 +71,19 @@ final class MediaDetailDependencyBoundaryTests: XCTestCase {
     func testSourceDiscoverAndLibraryPathsUseCanonicalAppViewFactoryComposition() throws {
         let discover = try source("Ito/Views/Discover/DiscoverDetailView.swift")
         let library = try source("Ito/Views/Library/LibraryView.swift")
+        let appFactory = try source("Ito/Views/Search/SearchRouteFactory.swift")
         let tabs = try source("Ito/Views/MainTabView.swift")
 
         XCTAssertTrue(discover.contains("viewFactory.makeMangaDetailView("))
         XCTAssertTrue(discover.contains("viewFactory.makeAnimeDetailView("))
         XCTAssertFalse(discover.contains("MediaDetailView("))
-        XCTAssertTrue(library.contains("viewFactory.makeMangaDetailView("))
-        XCTAssertTrue(library.contains("viewFactory.makeAnimeDetailView("))
-        XCTAssertTrue(library.contains("viewFactory.makeNovelDetailView("))
-        XCTAssertTrue(tabs.contains("LibraryView(viewFactory: appScope.viewFactory)"))
+        XCTAssertTrue(library.contains("viewFactory.makeDeferredPluginView(item: item)"))
+        XCTAssertTrue(library.contains("viewFactory.makeDeferredPluginDestination(route.destination)"))
+        XCTAssertTrue(appFactory.contains("func makeDeferredPluginDestination"))
+        XCTAssertTrue(appFactory.contains("makeMangaDetailView("))
+        XCTAssertTrue(appFactory.contains("makeAnimeDetailView("))
+        XCTAssertTrue(appFactory.contains("makeNovelDetailView("))
+        XCTAssertTrue(tabs.contains("appScope.viewFactory.makeLibraryView()"))
     }
 
     func testMediaDetailIsPreparedInAppScopeButNotStoredInRootModelStore() throws {

@@ -5,6 +5,7 @@ struct PreparedApplicationDependencies {
     let settings: PreparedSettingsDependencies
     let tracking: PreparedTrackingDependencies
     let mediaDetail: PreparedMediaDetailDependencies?
+    let library: PreparedLibraryDependencies
     let searchExecutor: any SearchPluginExecuting
     let recentSearchStore: any RecentSearchPersisting
     let searchDebounceMilliseconds: Int?
@@ -24,6 +25,7 @@ struct PreparedApplicationDependencies {
         settings: PreparedSettingsDependencies,
         tracking: PreparedTrackingDependencies? = nil,
         mediaDetail: PreparedMediaDetailDependencies? = nil,
+        library: PreparedLibraryDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
         recentSearchStore: any RecentSearchPersisting,
         searchDebounceMilliseconds: Int?,
@@ -42,6 +44,7 @@ struct PreparedApplicationDependencies {
         self.settings = settings
         self.tracking = tracking ?? .unavailable()
         self.mediaDetail = mediaDetail
+        self.library = library ?? .unavailable()
         self.searchExecutor = searchExecutor
         self.recentSearchStore = recentSearchStore
         self.searchDebounceMilliseconds = searchDebounceMilliseconds
@@ -66,6 +69,7 @@ struct PreparedApplicationDependencies {
         readProgressManager: ReadProgressManager,
         libraryManager: LibraryManager,
         updateManager: UpdateManager,
+        backupManager: BackupManager,
         librarySourceRemapper: LibrarySourceRemapper,
         themeManager: ThemeManager,
         notificationManager: NotificationManager,
@@ -107,6 +111,15 @@ struct PreparedApplicationDependencies {
                 pluginManager: pluginManager,
                 discordRPCManager: discordRPCManager
             ),
+            library: .production(
+                libraryManager: libraryManager,
+                settingsStore: settingsStore,
+                updateManager: updateManager,
+                backupManager: backupManager,
+                discordRPCManager: discordRPCManager,
+                pluginManager: pluginManager,
+                repoManager: repoManager
+            ),
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
             searchDebounceMilliseconds: SearchViewModel.automaticSearchDebounceMilliseconds,
@@ -138,6 +151,7 @@ struct PreparedApplicationDependencies {
 @MainActor
 final class RootModelStore {
     private let makeSearchViewModel: () -> SearchViewModel
+    private let makeLibraryViewModel: () -> LibraryViewModel
     private let makeBrowseViewModel: () -> BrowseViewModel
     private let makeDiscoverViewModel: () -> DiscoverViewModel
     private let makeAppearanceSettingsViewModel: () -> AppearanceSettingsViewModel
@@ -146,6 +160,7 @@ final class RootModelStore {
     private let makeStorageSettingsViewModel: () -> StorageSettingsViewModel
     private let makeDebugLogViewModel: () -> DebugLogViewModel
     private var storedSearchViewModel: SearchViewModel?
+    private var storedLibraryViewModel: LibraryViewModel?
     private var storedBrowseViewModel: BrowseViewModel?
     private var storedDiscoverViewModel: DiscoverViewModel?
     private var storedAppearanceSettingsViewModel: AppearanceSettingsViewModel?
@@ -158,8 +173,16 @@ final class RootModelStore {
         preparedDependencies: PreparedApplicationDependencies,
         repositoryIntentRouter: any BrowseRepositoryIntentRouting,
         browseMessagePresenter: any BrowseMessagePresenting,
-        debugLogMessagePresenter: any DebugLogMessagePresenting
+        debugLogMessagePresenter: any DebugLogMessagePresenting,
+        libraryMessagePresenter: any LibraryMessagePresenting
     ) {
+        makeLibraryViewModel = {
+            LibraryViewModel(
+                dependencies: preparedDependencies.library,
+                messagePresenter: libraryMessagePresenter,
+                presentationLogger: preparedDependencies.presentationLogger
+            )
+        }
         makeSearchViewModel = {
             SearchViewModel(
                 searchExecutor: preparedDependencies.searchExecutor,
@@ -223,6 +246,17 @@ final class RootModelStore {
         let viewModel = makeSearchViewModel()
         storedSearchViewModel = viewModel
         return viewModel
+    }
+
+    var libraryViewModel: LibraryViewModel {
+        if let storedLibraryViewModel { return storedLibraryViewModel }
+        let viewModel = makeLibraryViewModel()
+        storedLibraryViewModel = viewModel
+        return viewModel
+    }
+
+    var hasLoadedLibraryViewModel: Bool {
+        storedLibraryViewModel != nil
     }
 
     var hasLoadedSearchViewModel: Bool {
@@ -320,6 +354,7 @@ final class AppScope {
     let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
     let trackingMessagePresenter: any TrackingMessagePresenting
     let mediaDetailMessagePresenter: any MediaDetailMessagePresenting
+    let libraryMessagePresenter: any LibraryMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -349,11 +384,14 @@ final class AppScope {
             messageCenter: messageCenter
         )
         self.mediaDetailMessagePresenter = mediaDetailMessagePresenter
+        let libraryMessagePresenter = AppMessageLibraryPresenter(messageCenter: messageCenter)
+        self.libraryMessagePresenter = libraryMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
             browseMessagePresenter: AppMessageBrowseMessagePresenter(messageCenter: messageCenter),
-            debugLogMessagePresenter: debugLogMessagePresenter
+            debugLogMessagePresenter: debugLogMessagePresenter,
+            libraryMessagePresenter: libraryMessagePresenter
         )
         self.rootModels = rootModels
         self.viewFactory = AppViewFactory(
@@ -369,6 +407,7 @@ final class AppScope {
             trackingMessagePresenter: trackingMessagePresenter,
             mediaDetailDependencies: preparedDependencies.mediaDetail,
             mediaDetailMessagePresenter: mediaDetailMessagePresenter,
+            libraryDependencies: preparedDependencies.library,
             presentationLogger: preparedDependencies.presentationLogger
         )
     }
@@ -381,6 +420,7 @@ final class AppScope {
         readProgressManager: ReadProgressManager,
         libraryManager: LibraryManager,
         updateManager: UpdateManager,
+        backupManager: BackupManager,
         librarySourceRemapper: LibrarySourceRemapper,
         themeManager: ThemeManager,
         notificationManager: NotificationManager,
@@ -401,6 +441,7 @@ final class AppScope {
                 readProgressManager: readProgressManager,
                 libraryManager: libraryManager,
                 updateManager: updateManager,
+                backupManager: backupManager,
                 librarySourceRemapper: librarySourceRemapper,
                 themeManager: themeManager,
                 notificationManager: notificationManager,

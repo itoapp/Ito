@@ -30,6 +30,9 @@ enum AppMessageKind: Equatable {
     case mediaDetailUnsaveFailed
     case mediaDetailSaved(actionToken: UUID)
     case mediaDetailTrackerProgressFailed
+    case libraryLayoutPersistenceFailed
+    case libraryItemRemovalFailed
+    case libraryUpdateFailed
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -232,6 +235,24 @@ extension AppMessageKind {
                 style: .error,
                 title: "Local progress not updated",
                 detail: "Tracking succeeded, but local progress could not be saved."
+            )
+        case .libraryLayoutPersistenceFailed:
+            return .init(
+                style: .error,
+                title: "Layout not saved",
+                detail: "The library layout could not be saved. Please try again."
+            )
+        case .libraryItemRemovalFailed:
+            return .init(
+                style: .error,
+                title: "Still in library",
+                detail: "The library item could not be removed. Please try again."
+            )
+        case .libraryUpdateFailed:
+            return .init(
+                style: .error,
+                title: "Update check failed",
+                detail: "The library update check could not finish. Please try again."
             )
         }
     }

@@ -12,6 +12,8 @@ struct AppViewFactory {
     private let sourceMessagePresenter: any SourceMessagePresenting
     private let discoverDetailDependencies: PreparedDiscoverDetailDependencies
     private let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
+    private let libraryDependencies: PreparedLibraryDependencies
+    private let presentationLogger: any PresentationEventLogging
     let trackingViewFactory: TrackingViewFactory
     let mediaDetailViewFactory: MediaDetailViewFactory?
 
@@ -28,6 +30,7 @@ struct AppViewFactory {
         trackingMessagePresenter: any TrackingMessagePresenting,
         mediaDetailDependencies: PreparedMediaDetailDependencies?,
         mediaDetailMessagePresenter: any MediaDetailMessagePresenting,
+        libraryDependencies: PreparedLibraryDependencies,
         presentationLogger: any PresentationEventLogging,
         searchRouteFactory: SearchRouteFactory? = nil
     ) {
@@ -39,6 +42,8 @@ struct AppViewFactory {
         self.sourceMessagePresenter = sourceMessagePresenter
         self.discoverDetailDependencies = discoverDetailDependencies
         self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
+        self.libraryDependencies = libraryDependencies
+        self.presentationLogger = presentationLogger
         let trackingViewFactory = TrackingViewFactory(
             dependencies: trackingDependencies,
             messagePresenter: trackingMessagePresenter,
@@ -64,6 +69,64 @@ struct AppViewFactory {
             viewModel: rootModels.searchViewModel,
             routeFactory: searchRouteFactory
         )
+    }
+
+    func makeLibraryView() -> LibraryView {
+        LibraryView(
+            viewModel: rootModels.libraryViewModel,
+            viewFactory: self
+        )
+    }
+
+    func makeDeferredPluginViewModel(item: LibraryItem) -> DeferredPluginViewModel {
+        DeferredPluginViewModel(
+            item: item,
+            plugins: libraryDependencies.plugins,
+            installer: libraryDependencies.installer,
+            payloadDecoder: libraryDependencies.payloadDecoder,
+            presentationLogger: presentationLogger
+        )
+    }
+
+    func makeDeferredPluginView(item: LibraryItem) -> DeferredPluginView {
+        DeferredPluginView(
+            item: item,
+            viewFactory: self
+        )
+    }
+
+    @ViewBuilder
+    func makeDeferredPluginDestination(_ destination: DeferredPluginDestination) -> some View {
+        switch destination {
+        case .manga(let pluginID, let runner, let media):
+            makeMangaDetailView(
+                runner: runner,
+                media: media,
+                pluginID: pluginID
+            ) {
+                try await runner.getMangaUpdate(manga: $0)
+            }
+        case .anime(let pluginID, let runner, let media):
+            makeAnimeDetailView(
+                runner: runner,
+                media: media,
+                pluginID: pluginID
+            ) {
+                try await runner.getAnimeUpdate(
+                    anime: $0,
+                    needsDetails: true,
+                    needsEpisodes: true
+                )
+            }
+        case .novel(let pluginID, let runner, let media):
+            makeNovelDetailView(
+                runner: runner,
+                media: media,
+                pluginID: pluginID
+            ) {
+                try await runner.getNovelUpdate(novel: $0)
+            }
+        }
     }
 
     func makeBrowseView() -> BrowseView {
