@@ -9,6 +9,9 @@ public enum PresentationFeature: String, Equatable, Sendable {
     case mediaDetail = "media_detail"
     case library
     case deferredPlugin = "deferred_plugin"
+    case categorySettings = "category_settings"
+    case categoryAssignment = "category_assignment"
+    case history
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {
@@ -32,6 +35,14 @@ public enum PresentationEventKind: String, Equatable, Sendable {
     case pluginInstall = "plugin_install"
     case runnerLoad = "runner_load"
     case payloadDecode = "payload_decode"
+    case categoryCreate = "category_create"
+    case categoryRename = "category_rename"
+    case categoryDelete = "category_delete"
+    case categoryReorder = "category_reorder"
+    case categoryAssignment = "category_assignment"
+    case categoryCreateAndAssign = "category_create_and_assign"
+    case historyDelete = "history_delete"
+    case historyClear = "history_clear"
 }
 
 public enum PresentationEventPhase: String, Equatable, Sendable {

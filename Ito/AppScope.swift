@@ -6,6 +6,7 @@ struct PreparedApplicationDependencies {
     let tracking: PreparedTrackingDependencies
     let mediaDetail: PreparedMediaDetailDependencies?
     let library: PreparedLibraryDependencies
+    let categoryHistory: PreparedCategoryHistoryDependencies
     let searchExecutor: any SearchPluginExecuting
     let recentSearchStore: any RecentSearchPersisting
     let searchDebounceMilliseconds: Int?
@@ -26,6 +27,7 @@ struct PreparedApplicationDependencies {
         tracking: PreparedTrackingDependencies? = nil,
         mediaDetail: PreparedMediaDetailDependencies? = nil,
         library: PreparedLibraryDependencies? = nil,
+        categoryHistory: PreparedCategoryHistoryDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
         recentSearchStore: any RecentSearchPersisting,
         searchDebounceMilliseconds: Int?,
@@ -45,6 +47,7 @@ struct PreparedApplicationDependencies {
         self.tracking = tracking ?? .unavailable()
         self.mediaDetail = mediaDetail
         self.library = library ?? .unavailable()
+        self.categoryHistory = categoryHistory ?? .unavailable()
         self.searchExecutor = searchExecutor
         self.recentSearchStore = recentSearchStore
         self.searchDebounceMilliseconds = searchDebounceMilliseconds
@@ -68,6 +71,7 @@ struct PreparedApplicationDependencies {
         trackerManager: TrackerManager,
         readProgressManager: ReadProgressManager,
         libraryManager: LibraryManager,
+        historyManager: HistoryManager,
         updateManager: UpdateManager,
         backupManager: BackupManager,
         librarySourceRemapper: LibrarySourceRemapper,
@@ -119,6 +123,10 @@ struct PreparedApplicationDependencies {
                 discordRPCManager: discordRPCManager,
                 pluginManager: pluginManager,
                 repoManager: repoManager
+            ),
+            categoryHistory: .production(
+                libraryManager: libraryManager,
+                historyManager: historyManager
             ),
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
@@ -355,6 +363,7 @@ final class AppScope {
     let trackingMessagePresenter: any TrackingMessagePresenting
     let mediaDetailMessagePresenter: any MediaDetailMessagePresenting
     let libraryMessagePresenter: any LibraryMessagePresenting
+    let categoryHistoryMessagePresenter: any CategoryHistoryMessagePresenting
 
     init(
         preparedDependencies: PreparedApplicationDependencies,
@@ -386,6 +395,10 @@ final class AppScope {
         self.mediaDetailMessagePresenter = mediaDetailMessagePresenter
         let libraryMessagePresenter = AppMessageLibraryPresenter(messageCenter: messageCenter)
         self.libraryMessagePresenter = libraryMessagePresenter
+        let categoryHistoryMessagePresenter = AppMessageCategoryHistoryPresenter(
+            messageCenter: messageCenter
+        )
+        self.categoryHistoryMessagePresenter = categoryHistoryMessagePresenter
         let rootModels = RootModelStore(
             preparedDependencies: preparedDependencies,
             repositoryIntentRouter: router,
@@ -408,6 +421,8 @@ final class AppScope {
             mediaDetailDependencies: preparedDependencies.mediaDetail,
             mediaDetailMessagePresenter: mediaDetailMessagePresenter,
             libraryDependencies: preparedDependencies.library,
+            categoryHistoryDependencies: preparedDependencies.categoryHistory,
+            categoryHistoryMessagePresenter: categoryHistoryMessagePresenter,
             presentationLogger: preparedDependencies.presentationLogger
         )
     }
@@ -419,6 +434,7 @@ final class AppScope {
         trackerManager: TrackerManager,
         readProgressManager: ReadProgressManager,
         libraryManager: LibraryManager,
+        historyManager: HistoryManager,
         updateManager: UpdateManager,
         backupManager: BackupManager,
         librarySourceRemapper: LibrarySourceRemapper,
@@ -440,6 +456,7 @@ final class AppScope {
                 trackerManager: trackerManager,
                 readProgressManager: readProgressManager,
                 libraryManager: libraryManager,
+                historyManager: historyManager,
                 updateManager: updateManager,
                 backupManager: backupManager,
                 librarySourceRemapper: librarySourceRemapper,

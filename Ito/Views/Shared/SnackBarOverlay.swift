@@ -83,14 +83,19 @@ public class SnackBarManager: ObservableObject {
 
 struct SnackBarOverlay: View {
     @ObservedObject private var messageCenter: AppMessageCenter
+    private let categoryHistoryViewFactory: CategoryHistoryViewFactory
     @StateObject private var manager = SnackBarManager.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var showingSheetForId: String?
     @State private var messageDismissTask: Task<Void, Never>?
 
-    init(messageCenter: AppMessageCenter) {
+    init(
+        messageCenter: AppMessageCenter,
+        categoryHistoryViewFactory: CategoryHistoryViewFactory
+    ) {
         self.messageCenter = messageCenter
+        self.categoryHistoryViewFactory = categoryHistoryViewFactory
     }
 
     var body: some View {
@@ -166,7 +171,7 @@ struct SnackBarOverlay: View {
             get: { showingSheetForId.map { SheetIdentifiable(id: $0) } },
             set: { showingSheetForId = $0?.id }
         )) { wrapper in
-            CategoryAssignmentSheet(itemId: wrapper.id)
+            categoryHistoryViewFactory.makeCategoryAssignmentSheet(itemID: wrapper.id)
         }
     }
 

@@ -30,6 +30,14 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         let links: [ItemCategoryLink]
     }
 
+    private struct OrganizationSnapshot {
+        let categories: [LibraryCategory]
+        let links: [ItemCategoryLink]
+    }
+
+    private var nextOrganizationMutationRevision: UInt64 = 0
+    private var appliedOrganizationMutationRevision: UInt64 = 0
+
     public init(dbPool: DatabasePool) {
         self.dbPool = dbPool
         startObservation()
@@ -308,6 +316,15 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         )
     }
 
+    nonisolated private static func fetchOrganizationSnapshot(
+        _ db: Database
+    ) throws -> OrganizationSnapshot {
+        OrganizationSnapshot(
+            categories: try LibraryCategory.order(Column("sortOrder")).fetchAll(db),
+            links: try ItemCategoryLink.fetchAll(db)
+        )
+    }
+
     private func apply(_ snapshot: DurableSnapshot) {
         categories = snapshot.categories
         items = snapshot.items
@@ -315,105 +332,153 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         isLoading = false
     }
 
+    private func beginOrganizationMutation() -> UInt64 {
+        nextOrganizationMutationRevision &+= 1
+        return nextOrganizationMutationRevision
+    }
+
+    private func apply(
+        _ snapshot: OrganizationSnapshot,
+        mutationRevision: UInt64
+    ) {
+        guard mutationRevision > appliedOrganizationMutationRevision else { return }
+        appliedOrganizationMutationRevision = mutationRevision
+        categories = snapshot.categories
+        links = snapshot.links
+        isLoading = false
+    }
+
     // MARK: - Category CRUD
 
     public func createCategory(name: String) async throws -> String {
-        return try await dbPool.write { db in
+        let mutationRevision = beginOrganizationMutation()
+        let result = try await dbPool.write { db in
             let maxOrder = try Int.fetchOne(db, sql: "SELECT MAX(sortOrder) FROM libraryCategory") ?? 0
             let newCat = LibraryCategory(name: name, sortOrder: maxOrder + 1)
             try newCat.insert(db)
-            return newCat.id
+            return (newCat.id, try Self.fetchOrganizationSnapshot(db))
         }
+        apply(result.1, mutationRevision: mutationRevision)
+        return result.0
     }
 
     public func renameCategory(id: String, to name: String) async throws {
-        try await dbPool.write { db in
+        let mutationRevision = beginOrganizationMutation()
+        let snapshot = try await dbPool.write { db in
             guard var category = try LibraryCategory.fetchOne(db, key: id) else {
                 throw LibraryCategory.recordNotFound(key: ["id": id])
             }
             category.name = name
             try category.update(db)
+            return try Self.fetchOrganizationSnapshot(db)
         }
+        apply(snapshot, mutationRevision: mutationRevision)
     }
 
-    public func deleteCategory(id: String) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    guard let cat = try LibraryCategory.fetchOne(db, key: id), !cat.isSystemCategory else { return }
-                    try cat.delete(db) // Cascade deletes links
-
-                    // Self Healing Query: reassign orphaned items to Uncategorized
-                    let uncategorized = try LibraryCategory.filter(Column("isSystemCategory") == true).fetchOne(db)
-                    if let systemId = uncategorized?.id {
-                        let orphanedItems = try LibraryItem.fetchAll(db, sql: """
-                            SELECT libraryItem.* FROM libraryItem
-                            LEFT JOIN itemCategoryLink ON libraryItem.id = itemCategoryLink.itemId
-                            WHERE itemCategoryLink.categoryId IS NULL
-                        """)
-
-                        for item in orphanedItems {
-                            let link = ItemCategoryLink(itemId: item.id, categoryId: systemId)
-                            try link.insert(db)
-                        }
-                    }
-                }
-            } catch {
-                AppLogger.database.error("Failed to delete category: \(error)")
+    func deleteCategoryDurably(id: String) async throws {
+        let mutationRevision = beginOrganizationMutation()
+        let snapshot = try await dbPool.write { db in
+            guard let category = try LibraryCategory.fetchOne(db, key: id),
+                  !category.isSystemCategory else {
+                return try Self.fetchOrganizationSnapshot(db)
             }
+            try category.delete(db)
+
+            if let systemID = try LibraryCategory
+                .filter(Column("isSystemCategory") == true)
+                .fetchOne(db)?.id {
+                let orphanedItems = try LibraryItem.fetchAll(db, sql: """
+                    SELECT libraryItem.* FROM libraryItem
+                    LEFT JOIN itemCategoryLink ON libraryItem.id = itemCategoryLink.itemId
+                    WHERE itemCategoryLink.categoryId IS NULL
+                    """)
+                for item in orphanedItems {
+                    try ItemCategoryLink(itemId: item.id, categoryId: systemID).insert(db)
+                }
+            }
+            return try Self.fetchOrganizationSnapshot(db)
         }
+        apply(snapshot, mutationRevision: mutationRevision)
     }
 
-    public func toggleCategory(forItemId itemId: String, categoryId: String) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    // Find the system "Uncategorized" category
-                    let systemCat = try LibraryCategory.filter(Column("isSystemCategory") == true).fetchOne(db)
-
-                    if let existing = try ItemCategoryLink.fetchOne(db, key: ["itemId": itemId, "categoryId": categoryId]) {
-                        // REMOVING from this category
-                        try existing.delete(db)
-
-                        // If the item now has zero links, push back to Uncategorized
-                        let remaining = try ItemCategoryLink.filter(Column("itemId") == itemId).fetchCount(db)
-                        if remaining == 0, let sysId = systemCat?.id {
-                            let link = ItemCategoryLink(itemId: itemId, categoryId: sysId)
-                            try link.insert(db)
-                        }
-                    } else {
-                        // ADDING to this category
-                        let link = ItemCategoryLink(itemId: itemId, categoryId: categoryId)
-                        try link.insert(db)
-
-                        // If we just added a custom category, remove the Uncategorized link
-                        if let sysId = systemCat?.id, categoryId != sysId {
-                            if let uncatLink = try ItemCategoryLink.fetchOne(db, key: ["itemId": itemId, "categoryId": sysId]) {
-                                try uncatLink.delete(db)
-                            }
-                        }
-                    }
+    func toggleCategoryDurably(forItemID itemID: String, categoryID: String) async throws {
+        let mutationRevision = beginOrganizationMutation()
+        let snapshot = try await dbPool.write { db in
+            let systemCategory = try LibraryCategory
+                .filter(Column("isSystemCategory") == true)
+                .fetchOne(db)
+            if let existing = try ItemCategoryLink.fetchOne(
+                db,
+                key: ["itemId": itemID, "categoryId": categoryID]
+            ) {
+                try existing.delete(db)
+                let remaining = try ItemCategoryLink
+                    .filter(Column("itemId") == itemID)
+                    .fetchCount(db)
+                if remaining == 0, let systemID = systemCategory?.id {
+                    try ItemCategoryLink(itemId: itemID, categoryId: systemID).insert(db)
                 }
-            } catch {
-                AppLogger.database.error("Failed to toggle link: \(error)")
+            } else {
+                try ItemCategoryLink(itemId: itemID, categoryId: categoryID).insert(db)
+                if let systemID = systemCategory?.id, categoryID != systemID,
+                   let uncategorizedLink = try ItemCategoryLink.fetchOne(
+                       db,
+                       key: ["itemId": itemID, "categoryId": systemID]
+                   ) {
+                    try uncategorizedLink.delete(db)
+                }
             }
+            return try Self.fetchOrganizationSnapshot(db)
         }
+        apply(snapshot, mutationRevision: mutationRevision)
     }
 
-    public func reorderCategories(newOrder: [LibraryCategory]) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    for (index, cat) in newOrder.enumerated() {
-                        var updatedCat = cat
-                        updatedCat.sortOrder = index
-                        try updatedCat.update(db)
-                    }
-                }
-            } catch {
-                AppLogger.database.error("Failed to reorder: \(error)")
+    func reorderCategoriesDurably(userCategoryIDs: [String]) async throws {
+        let mutationRevision = beginOrganizationMutation()
+        let snapshot = try await dbPool.write { db in
+            let current = try LibraryCategory.order(Column("sortOrder")).fetchAll(db)
+            let systemCategories = current.filter(\.isSystemCategory)
+            let userCategories = current.filter { !$0.isSystemCategory }
+            let currentIDs = Set(userCategories.map(\.id))
+            guard currentIDs.count == userCategoryIDs.count,
+                  currentIDs == Set(userCategoryIDs) else {
+                throw DurableMutationError.identifierCollision
             }
+            let categoriesByID = Dictionary(uniqueKeysWithValues: userCategories.map { ($0.id, $0) })
+            let ordered = systemCategories + userCategoryIDs.compactMap { categoriesByID[$0] }
+            for (index, category) in ordered.enumerated() {
+                var updated = category
+                updated.sortOrder = index
+                try updated.update(db)
+            }
+            return try Self.fetchOrganizationSnapshot(db)
         }
+        apply(snapshot, mutationRevision: mutationRevision)
+    }
+
+    func createCategoryAndAssignDurably(name: String, itemID: String) async throws -> String {
+        let mutationRevision = beginOrganizationMutation()
+        let result = try await dbPool.write { db in
+            let maxOrder = try Int.fetchOne(
+                db,
+                sql: "SELECT MAX(sortOrder) FROM libraryCategory"
+            ) ?? 0
+            let category = LibraryCategory(name: name, sortOrder: maxOrder + 1)
+            try category.insert(db)
+            try ItemCategoryLink(itemId: itemID, categoryId: category.id).insert(db)
+            if let systemID = try LibraryCategory
+                .filter(Column("isSystemCategory") == true)
+                .fetchOne(db)?.id,
+               let uncategorizedLink = try ItemCategoryLink.fetchOne(
+                   db,
+                   key: ["itemId": itemID, "categoryId": systemID]
+               ) {
+                try uncategorizedLink.delete(db)
+            }
+            return (category.id, try Self.fetchOrganizationSnapshot(db))
+        }
+        apply(result.1, mutationRevision: mutationRevision)
+        return result.0
     }
 
 }

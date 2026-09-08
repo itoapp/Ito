@@ -34,6 +34,8 @@ public class HistoryManager: ObservableObject {
     private let libraryManager: LibraryManager
     private var observationCancellable: DatabaseCancellable?
     private var settingsStore: AppSettingsStore?
+    private var nextDurableMutationRevision: UInt64 = 0
+    private var appliedDurableMutationRevision: UInt64 = 0
 
     public init(dbPool: DatabasePool, libraryManager: LibraryManager) {
         self.dbPool = dbPool
@@ -46,13 +48,8 @@ public class HistoryManager: ObservableObject {
     }
 
     public func reload() async throws {
-        let records = try await dbPool.read { db in
-            try ReadingHistoryRecord
-                .order(ReadingHistoryRecord.Columns.readAt.desc)
-                .limit(200)
-                .fetchAll(db)
-        }
-        history = records.map { HistoryEntry(record: $0) }
+        let records = try await dbPool.read { try Self.fetchHistory($0) }
+        apply(records)
     }
 
     // MARK: - Observation
@@ -145,28 +142,45 @@ public class HistoryManager: ObservableObject {
 
     // MARK: - Delete
 
-    public func removeEntry(id: String) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    _ = try ReadingHistoryRecord.deleteOne(db, key: id)
-                }
-            } catch {
-                AppLogger.general.error("[HistoryManager] Failed to remove entry: \(error)")
-            }
+    func removeEntryDurably(id: String) async throws {
+        let mutationRevision = beginDurableMutation()
+        let records = try await dbPool.write { db in
+            _ = try ReadingHistoryRecord.deleteOne(db, key: id)
+            return try Self.fetchHistory(db)
         }
+        apply(records, mutationRevision: mutationRevision)
     }
 
-    public func clearHistory() {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    _ = try ReadingHistoryRecord.deleteAll(db)
-                }
-            } catch {
-                AppLogger.general.error("[HistoryManager] Failed to clear history: \(error)")
-            }
+    func clearHistoryDurably() async throws {
+        let mutationRevision = beginDurableMutation()
+        let records = try await dbPool.write { db in
+            _ = try ReadingHistoryRecord.deleteAll(db)
+            return try Self.fetchHistory(db)
         }
+        apply(records, mutationRevision: mutationRevision)
+    }
+
+    nonisolated private static func fetchHistory(_ db: Database) throws -> [ReadingHistoryRecord] {
+        try ReadingHistoryRecord
+            .order(ReadingHistoryRecord.Columns.readAt.desc)
+            .limit(200)
+            .fetchAll(db)
+    }
+
+    private func beginDurableMutation() -> UInt64 {
+        nextDurableMutationRevision &+= 1
+        return nextDurableMutationRevision
+    }
+
+    private func apply(
+        _ records: [ReadingHistoryRecord],
+        mutationRevision: UInt64? = nil
+    ) {
+        if let mutationRevision {
+            guard mutationRevision > appliedDurableMutationRevision else { return }
+            appliedDurableMutationRevision = mutationRevision
+        }
+        history = records.map { HistoryEntry(record: $0) }
     }
 
 }

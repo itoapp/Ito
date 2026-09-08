@@ -453,6 +453,7 @@ public final class DurableStateBootstrap: ObservableObject {
             trackerManager: runtime.trackerManager,
             readProgressManager: runtime.readProgressManager,
             libraryManager: runtime.libraryManager,
+            historyManager: runtime.historyManager,
             updateManager: runtime.updateManager,
             backupManager: runtime.backupManager,
             librarySourceRemapper: runtime.librarySourceRemapper,

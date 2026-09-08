@@ -137,7 +137,7 @@ struct LibraryView: View {
         }
         .refreshable { await viewModel.requestUpdate() }
         .sheet(item: categoryAssignmentBinding) { intent in
-            CategoryAssignmentSheet(itemId: intent.id)
+            viewFactory.makeCategoryAssignmentSheet(itemID: intent.id)
         }
     }
 
@@ -229,7 +229,7 @@ struct LibraryView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigationBarLeading) {
             HStack(spacing: 16) {
-                NavigationLink(destination: HistoryView()) {
+                NavigationLink(destination: viewFactory.makeHistoryView()) {
                     Image(systemName: "clock.arrow.circlepath")
                 }
                 if viewModel.hasItems {
@@ -240,7 +240,7 @@ struct LibraryView: View {
                     }
                     .disabled(viewModel.isRefreshing)
                 }
-                NavigationLink(destination: CategorySettingsView()) {
+                NavigationLink(destination: viewFactory.makeCategorySettingsView()) {
                     Image(systemName: "folder.badge.gearshape")
                         .accessibilityLabel("Manage Categories")
                 }

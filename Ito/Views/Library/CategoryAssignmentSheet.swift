@@ -1,30 +1,18 @@
 import SwiftUI
 
 struct CategoryAssignmentSheet: View {
-    let itemId: String
-
-    @EnvironmentObject private var libraryManager: LibraryManager
+    @StateObject private var viewModel: CategoryAssignmentViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showingAddSheet = false
-    @State private var newCategoryName = ""
-    @State private var newlyCreatedCategoryId: String?
-
-    /// The set of category IDs this item currently belongs to.
-    private var activeLinks: Set<String> {
-        Set(libraryManager.links.filter { $0.itemId == itemId }.map { $0.categoryId })
-    }
-
-    /// User-created categories only — we never show the system "Uncategorized" bucket.
-    private var userCategories: [LibraryCategory] {
-        libraryManager.categories.filter { !$0.isSystemCategory }
+    init(viewModel: CategoryAssignmentViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     var body: some View {
         NavigationView {
             ScrollViewReader { proxy in
                 List {
-                    if userCategories.isEmpty {
+                    if viewModel.userCategories.isEmpty {
                         Section {
                             VStack(spacing: 12) {
                                 Image(systemName: "folder.badge.plus")
@@ -43,9 +31,9 @@ struct CategoryAssignmentSheet: View {
                         }
                     } else {
                         Section {
-                            ForEach(userCategories) { cat in
-                                categoryRow(for: cat)
-                                    .id(cat.id)
+                            ForEach(viewModel.userCategories) { category in
+                                categoryRow(for: category)
+                                    .id(category.id)
                             }
                         } header: {
                             Text("Your Lists")
@@ -56,11 +44,12 @@ struct CategoryAssignmentSheet: View {
 
                     Section {
                         Button {
-                            showingAddSheet.toggle()
+                            viewModel.presentAddCategory()
                         } label: {
                             Label("New List", systemImage: "plus")
                                 .font(.body.weight(.medium))
                         }
+                        .disabled(viewModel.isCreatingAndAssigning)
                     }
                 }
                 .navigationTitle("Add to List")
@@ -68,71 +57,114 @@ struct CategoryAssignmentSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .navigationBarTrailing) {
                         Button("Done") {
+                            viewModel.dismissPresentation()
                             dismiss()
                         }
                         .font(.body.weight(.semibold))
                     }
                 }
-                .onChange(of: newlyCreatedCategoryId) { newId in
-                    if let id = newId {
-                        withAnimation {
-                            proxy.scrollTo(id, anchor: .bottom)
-                        }
+                .onChange(of: viewModel.newlyCreatedCategoryID) { categoryID in
+                    guard let categoryID else { return }
+                    withAnimation {
+                        proxy.scrollTo(categoryID, anchor: .bottom)
                     }
+                    viewModel.consumeNewlyCreatedCategoryID(categoryID)
                 }
             }
         }
-        .sheet(isPresented: $showingAddSheet) {
-            NavigationView {
-                Form {
-                    Section {
-                        TextField("List Name", text: $newCategoryName)
-                            .font(.body)
-                    } footer: {
-                        Text("Enter a name for your new list.")
-                    }
-                }
-                .navigationTitle("New List")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            showingAddSheet = false
-                            newCategoryName = ""
-                        }
-                    }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Create") {
-                            let name = newCategoryName
-                            Task {
-                                guard !name.isEmpty else { return }
-                                if let newId = try? await libraryManager.createCategory(name: name) {
-                                    newlyCreatedCategoryId = newId
-                                    // Auto-assign the item to the newly created list
-                                    libraryManager.toggleCategory(forItemId: itemId, categoryId: newId)
-                                }
-                                newCategoryName = ""
-                                showingAddSheet = false
-                            }
-                        }
-                        .disabled(newCategoryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
+        .sheet(isPresented: addCategoryBinding) {
+            addCategorySheet
+        }
+        .alert(
+            viewModel.failure?.alertTitle ?? "List Change Failed",
+            isPresented: assignmentFailureBinding
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.dismissFailure()
             }
+        } message: {
+            Text(viewModel.failure?.alertMessage ?? "Please try again.")
+        }
+        .onDisappear {
+            viewModel.dismissPresentation()
         }
     }
 
+    private var addCategoryBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isAddCategoryPresented },
+            set: { isPresented in
+                if !isPresented { viewModel.cancelAddCategory() }
+            }
+        )
+    }
+
+    private var assignmentFailureBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.failure == .categoryAssignmentFailed },
+            set: { if !$0 { viewModel.dismissFailure() } }
+        )
+    }
+
+    private var addCategorySheet: some View {
+        NavigationView {
+            Form {
+                Section {
+                    TextField("List Name", text: $viewModel.newCategoryName)
+                        .font(.body)
+                } footer: {
+                    Text("Enter a name for your new list.")
+                }
+            }
+            .navigationTitle("New List")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        viewModel.cancelAddCategory()
+                    }
+                    .disabled(viewModel.isCreatingAndAssigning)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Create") {
+                        Task { await viewModel.createAndAssignCategory() }
+                    }
+                    .disabled(!viewModel.canCreateAndAssign)
+                }
+            }
+        }
+        .interactiveDismissDisabled(viewModel.isCreatingAndAssigning)
+        .alert(
+            viewModel.failure?.alertTitle ?? "List Not Created",
+            isPresented: createAndAssignFailureBinding
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.dismissFailure()
+            }
+        } message: {
+            Text(viewModel.failure?.alertMessage ?? "Please try again.")
+        }
+    }
+
+    private var createAndAssignFailureBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.failure == .categoryCreateAndAssignFailed },
+            set: { if !$0 { viewModel.dismissFailure() } }
+        )
+    }
+
     @ViewBuilder
-    private func categoryRow(for cat: LibraryCategory) -> some View {
-        let isLinked = activeLinks.contains(cat.id)
+    private func categoryRow(for category: LibraryCategory) -> some View {
+        let isLinked = viewModel.isAssigned(to: category.id)
+        let isAssigning = viewModel.assigningCategoryIDs.contains(category.id)
 
         Button {
             triggerHaptic()
-            libraryManager.toggleCategory(forItemId: itemId, categoryId: cat.id)
+            Task { await viewModel.toggleCategory(categoryID: category.id) }
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(cat.name)
+                    Text(category.name)
                         .foregroundColor(.primary)
 
                     if isLinked {
@@ -141,12 +173,18 @@ struct CategoryAssignmentSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .accessibilityLabel(cat.name)
-                .accessibilityHint(isLinked ? "Double tap to remove from this list" : "Double tap to add to this list")
+                .accessibilityLabel(category.name)
+                .accessibilityHint(
+                    isLinked
+                        ? "Double tap to remove from this list"
+                        : "Double tap to add to this list"
+                )
 
                 Spacer()
 
-                if isLinked {
+                if isAssigning {
+                    ProgressView()
+                } else if isLinked {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.title3)
                         .foregroundColor(.accentColor)
@@ -162,6 +200,7 @@ struct CategoryAssignmentSheet: View {
             .contentShape(Rectangle())
             .animation(.easeInOut(duration: 0.15), value: isLinked)
         }
+        .disabled(isAssigning)
     }
 
     private func triggerHaptic() {

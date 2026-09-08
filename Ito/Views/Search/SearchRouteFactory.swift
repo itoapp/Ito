@@ -14,6 +14,7 @@ struct AppViewFactory {
     private let discoverDetailMessagePresenter: any DiscoverDetailMessagePresenting
     private let libraryDependencies: PreparedLibraryDependencies
     private let presentationLogger: any PresentationEventLogging
+    let categoryHistoryViewFactory: CategoryHistoryViewFactory
     let trackingViewFactory: TrackingViewFactory
     let mediaDetailViewFactory: MediaDetailViewFactory?
 
@@ -31,6 +32,8 @@ struct AppViewFactory {
         mediaDetailDependencies: PreparedMediaDetailDependencies?,
         mediaDetailMessagePresenter: any MediaDetailMessagePresenting,
         libraryDependencies: PreparedLibraryDependencies,
+        categoryHistoryDependencies: PreparedCategoryHistoryDependencies,
+        categoryHistoryMessagePresenter: any CategoryHistoryMessagePresenting,
         presentationLogger: any PresentationEventLogging,
         searchRouteFactory: SearchRouteFactory? = nil
     ) {
@@ -44,6 +47,12 @@ struct AppViewFactory {
         self.discoverDetailMessagePresenter = discoverDetailMessagePresenter
         self.libraryDependencies = libraryDependencies
         self.presentationLogger = presentationLogger
+        let categoryHistoryViewFactory = CategoryHistoryViewFactory(
+            dependencies: categoryHistoryDependencies,
+            messagePresenter: categoryHistoryMessagePresenter,
+            presentationLogger: presentationLogger
+        )
+        self.categoryHistoryViewFactory = categoryHistoryViewFactory
         let trackingViewFactory = TrackingViewFactory(
             dependencies: trackingDependencies,
             messagePresenter: trackingMessagePresenter,
@@ -55,7 +64,8 @@ struct AppViewFactory {
                 dependencies: $0,
                 messagePresenter: mediaDetailMessagePresenter,
                 presentationLogger: presentationLogger,
-                trackingViewFactory: trackingViewFactory
+                trackingViewFactory: trackingViewFactory,
+                categoryHistoryViewFactory: categoryHistoryViewFactory
             )
         }
         self.mediaDetailViewFactory = mediaDetailViewFactory
@@ -76,6 +86,18 @@ struct AppViewFactory {
             viewModel: rootModels.libraryViewModel,
             viewFactory: self
         )
+    }
+
+    func makeCategoryAssignmentSheet(itemID: String) -> CategoryAssignmentSheet {
+        categoryHistoryViewFactory.makeCategoryAssignmentSheet(itemID: itemID)
+    }
+
+    func makeCategorySettingsView() -> CategorySettingsView {
+        categoryHistoryViewFactory.makeCategorySettingsView()
+    }
+
+    func makeHistoryView() -> HistoryView {
+        categoryHistoryViewFactory.makeHistoryView()
     }
 
     func makeDeferredPluginViewModel(item: LibraryItem) -> DeferredPluginViewModel {

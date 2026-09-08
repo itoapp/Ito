@@ -54,7 +54,10 @@ private struct MainTabContentView: View {
 
             VStack {
                 Spacer()
-                SnackBarOverlay(messageCenter: messageCenter)
+                SnackBarOverlay(
+                    messageCenter: messageCenter,
+                    categoryHistoryViewFactory: appScope.viewFactory.categoryHistoryViewFactory
+                )
             }
 
             #if DEBUG
