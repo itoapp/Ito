@@ -342,7 +342,10 @@ extension NovelReaderView {
         do {
             let pageResult = try await runner.getChapterContent(novel: novel, chapter: currentChapter)
             await MainActor.run {
-                self.loadedChapters = [LoadedChapter(chapter: currentChapter, pages: pageResult.sorted(by: { $0.index < $1.index }))]
+                self.loadedChapters = [LoadedChapter(
+                    chapter: currentChapter,
+                    pages: ReaderPageOrdering.ascending(pageResult)
+                )]
                 self.isLoaded = true
                 self.updateTracking(for: currentChapter)
             }
@@ -369,7 +372,10 @@ extension NovelReaderView {
             let pageResult = try await runner.getChapterContent(novel: novel, chapter: next)
             await MainActor.run {
                 AppLogger.ui.debug("[NovelReaderView] loadNextChapter: success, appending \(pageResult.count) pages.")
-                let newChapter = LoadedChapter(chapter: next, pages: pageResult.sorted(by: { $0.index < $1.index }))
+                let newChapter = LoadedChapter(
+                    chapter: next,
+                    pages: ReaderPageOrdering.ascending(pageResult)
+                )
                 self.loadedChapters.append(newChapter)
 
                 self.isLoadingNext = false
@@ -384,28 +390,38 @@ extension NovelReaderView {
 
     private func updateTracking(for chap: Novel.Chapter) {
         let chapterTitleStr = chap.title ?? chap.key
-        historyManager.addNovel(
-            novel,
-            chapterKey: chap.key,
-            chapterTitle: chapterTitleStr,
-            pluginId: pluginId
+        let plan = ReaderSessionEffectPlan.chapterRead(
+            chapterNumber: chap.chapter,
+            titleOrKey: chapterTitleStr,
+            alreadyMarked: false
         )
+
+        for effect in plan.synchronousEffects {
+            if case .recordHistory = effect {
+                historyManager.addNovel(
+                    novel,
+                    chapterKey: chap.key,
+                    chapterTitle: chapterTitleStr,
+                    pluginId: pluginId
+                )
+            }
+        }
         Task {
-            try await progressManager.markAsRead(
-                media: mediaIdentity,
-                chapterId: chap.key,
-                chapterNum: chap.chapter
-            )
-            if let chapterFloat = chap.chapter {
-                await trackerManager.updateProgress(media: mediaIdentity, progress: Int(chapterFloat))
-            } else {
-                let titleOrFallback = chap.title ?? chap.key
-                let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
-                if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                    let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                    if let chapNum = Int(numbersOnly) {
-                        await trackerManager.updateProgress(media: mediaIdentity, progress: chapNum)
-                    }
+            for effect in plan.asynchronousEffects {
+                switch effect {
+                case .recordHistory:
+                    break
+                case .markLocalProgress:
+                    try await progressManager.markAsRead(
+                        media: mediaIdentity,
+                        chapterId: chap.key,
+                        chapterNum: chap.chapter
+                    )
+                case .updateTracker(let progress):
+                    await trackerManager.updateProgress(
+                        media: mediaIdentity,
+                        progress: progress
+                    )
                 }
             }
         }
@@ -429,55 +445,11 @@ extension NovelReaderView {
     }
 
     func getNextChapter(after chap: Novel.Chapter) -> Novel.Chapter? {
-        guard let chapters = novel.chapters else { return nil }
-
-        if let currentNum = chap.chapter {
-            // Find the closest chapter with a higher number
-            let candidates = chapters.filter { ($0.chapter ?? -10000) > currentNum + 0.0001 }
-            if let next = candidates.min(by: { ($0.chapter ?? -10000) < ($1.chapter ?? -10000) }) {
-                return next
-            }
-        }
-
-        // Fallback: array index
-        guard let currentIndex = chapters.firstIndex(where: { $0.key == chap.key }) else { return nil }
-
-        // Try looking at previous index (descending order assumption)
-        if currentIndex - 1 >= 0 {
-            return chapters[currentIndex - 1]
-        }
-        // Try looking at next index (ascending order assumption)
-        if currentIndex + 1 < chapters.count {
-            return chapters[currentIndex + 1]
-        }
-
-        return nil
+        ReaderChapterOrdering.novelChapter(after: chap, in: novel.chapters)
     }
 
     func getPreviousChapter(before chap: Novel.Chapter) -> Novel.Chapter? {
-        guard let chapters = novel.chapters else { return nil }
-
-        if let currentNum = chap.chapter {
-            // Find the closest chapter with a lower number
-            let candidates = chapters.filter { ($0.chapter ?? -10000) < currentNum - 0.0001 }
-            if let prev = candidates.max(by: { ($0.chapter ?? -10000) < ($1.chapter ?? -10000) }) {
-                return prev
-            }
-        }
-
-        // Fallback: array index
-        guard let currentIndex = chapters.firstIndex(where: { $0.key == chap.key }) else { return nil }
-
-        // Try looking at next index (descending order assumption)
-        if currentIndex + 1 < chapters.count {
-            return chapters[currentIndex + 1]
-        }
-        // Try looking at previous index (ascending order assumption)
-        if currentIndex - 1 >= 0 {
-            return chapters[currentIndex - 1]
-        }
-
-        return nil
+        ReaderChapterOrdering.novelChapter(before: chap, in: novel.chapters)
     }
 
     var safeAreaTop: CGFloat {

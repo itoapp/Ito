@@ -435,7 +435,7 @@ extension ReaderView {
         guard !isLoaded else { return }
         do {
             let pageResult = try await runner.getPageList(manga: manga, chapter: currentChapter)
-            let sorted = pageResult.sorted(by: { $0.index < $1.index })
+            let sorted = ReaderPageOrdering.ascending(pageResult)
             await MainActor.run {
                 if isPaged {
                     pagedPages = sorted
@@ -463,7 +463,7 @@ extension ReaderView {
         if let next = chapterAfter(currentChapter), prefetchedChapters[next.key] == nil {
             do {
                 let pages = try await runner.getPageList(manga: manga, chapter: next)
-                let sorted = pages.sorted(by: { $0.index < $1.index })
+                let sorted = ReaderPageOrdering.ascending(pages)
                 await MainActor.run { prefetchedChapters[next.key] = sorted }
             } catch {
                 AppLogger.ui.error("[Reader] Failed to pre-fetch next chapter: \(error)")
@@ -472,7 +472,7 @@ extension ReaderView {
         if let prev = chapterBefore(currentChapter), prefetchedChapters[prev.key] == nil {
             do {
                 let pages = try await runner.getPageList(manga: manga, chapter: prev)
-                let sorted = pages.sorted(by: { $0.index < $1.index })
+                let sorted = ReaderPageOrdering.ascending(pages)
                 await MainActor.run { prefetchedChapters[prev.key] = sorted }
             } catch {
                 AppLogger.ui.error("[Reader] Failed to pre-fetch previous chapter: \(error)")
@@ -487,7 +487,7 @@ extension ReaderView {
         do {
             let pageResult = try await runner.getPageList(manga: manga, chapter: chapter)
             await MainActor.run {
-                let sorted = pageResult.sorted(by: { $0.index < $1.index })
+                let sorted = ReaderPageOrdering.ascending(pageResult)
                 segments.append(ChapterSegment(chapter: chapter, pages: sorted))
                 loadingNextChapter = false
             }
@@ -504,7 +504,7 @@ extension ReaderView {
         do {
             let pageResult = try await runner.getPageList(manga: manga, chapter: chapter)
             await MainActor.run {
-                let sorted = pageResult.sorted(by: { $0.index < $1.index })
+                let sorted = ReaderPageOrdering.ascending(pageResult)
                 segments.insert(ChapterSegment(chapter: chapter, pages: sorted), at: 0)
                 continuousPageIndex += sorted.count
                 loadingPrevChapter = false
@@ -517,33 +517,41 @@ extension ReaderView {
 
     func markChapterRead(_ chapter: Manga.Chapter) {
         let chapterTitleStr = chapter.title ?? chapter.key
-        historyManager.addManga(
-            manga,
-            chapterKey: chapter.key,
-            chapterTitle: chapterTitleStr,
-            pluginId: pluginId
+        let plan = ReaderSessionEffectPlan.chapterRead(
+            chapterNumber: chapter.chapter,
+            titleOrKey: chapterTitleStr,
+            alreadyMarked: markedChapterKeys.contains(chapter.key)
         )
 
-        guard !markedChapterKeys.contains(chapter.key) else { return }
+        for effect in plan.synchronousEffects {
+            if case .recordHistory = effect {
+                historyManager.addManga(
+                    manga,
+                    chapterKey: chapter.key,
+                    chapterTitle: chapterTitleStr,
+                    pluginId: pluginId
+                )
+            }
+        }
+
+        guard !plan.asynchronousEffects.isEmpty else { return }
         markedChapterKeys.insert(chapter.key)
         Task {
-            try await progressManager.markAsRead(
-                media: mediaIdentity,
-                chapterId: chapter.key,
-                chapterNum: chapter.chapter
-            )
-            if let chapterFloat = chapter.chapter {
-                await trackerManager.updateProgress(media: mediaIdentity, progress: Int(chapterFloat))
-            } else {
-                let titleOrFallback = chapter.title ?? chapter.key
-                let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
-
-                // Parse first valid number isolated by spaces
-                if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                    let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                    if let chapNum = Int(numbersOnly) {
-                        await trackerManager.updateProgress(media: mediaIdentity, progress: chapNum)
-                    }
+            for effect in plan.asynchronousEffects {
+                switch effect {
+                case .recordHistory:
+                    break
+                case .markLocalProgress:
+                    try await progressManager.markAsRead(
+                        media: mediaIdentity,
+                        chapterId: chapter.key,
+                        chapterNum: chapter.chapter
+                    )
+                case .updateTracker(let progress):
+                    await trackerManager.updateProgress(
+                        media: mediaIdentity,
+                        progress: progress
+                    )
                 }
             }
         }
@@ -678,40 +686,19 @@ extension ReaderView {
     }
 
     func chapterAfter(_ chapter: Manga.Chapter) -> Manga.Chapter? {
-        guard let chapters = manga.chapters else { return nil }
-
-        let currentNum = chapter.chapter ?? -10000
-
-        // 1. Find all chapters with a strictly higher number
-        let validNextChapters = chapters.filter { ($0.chapter ?? -10000) > currentNum + 0.0001 }
-
-        // 2. Find the lowest chapter number among those future chapters
-        guard let nextNum = validNextChapters.map({ $0.chapter ?? -10000 }).min() else { return nil }
-
-        // 3. Match it with your existing preferred scanlator logic
-        return bestSource(for: nextNum, in: chapters)
+        ReaderChapterOrdering.mangaChapter(
+            after: chapter,
+            in: manga.chapters,
+            preferredScanlator: currentChapter.scanlator
+        )
     }
 
     func chapterBefore(_ chapter: Manga.Chapter) -> Manga.Chapter? {
-        guard let chapters = manga.chapters else { return nil }
-
-        let currentNum = chapter.chapter ?? -10000
-
-        // 1. Find all chapters with a strictly lower number
-        let validPrevChapters = chapters.filter { ($0.chapter ?? -10000) < currentNum - 0.0001 }
-
-        // 2. Find the highest chapter number among those past chapters
-        guard let prevNum = validPrevChapters.map({ $0.chapter ?? -10000 }).max() else { return nil }
-
-        return bestSource(for: prevNum, in: chapters)
-    }
-
-    func bestSource(for chapterNum: Float32, in chapters: [Manga.Chapter]) -> Manga.Chapter? {
-        let sources = chapters.filter { abs(($0.chapter ?? -10000) - chapterNum) < 0.0001 }
-        if let match = sources.first(where: { $0.scanlator == currentChapter.scanlator }) {
-            return match
-        }
-        return sources.first
+        ReaderChapterOrdering.mangaChapter(
+            before: chapter,
+            in: manga.chapters,
+            preferredScanlator: currentChapter.scanlator
+        )
     }
 
     var safeAreaTop: CGFloat {
