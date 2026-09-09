@@ -69,6 +69,105 @@ final class HistoryDurabilityIntegrationTests: XCTestCase {
         XCTAssertTrue(managers.history.history.isEmpty)
     }
 
+    func testStalePreClearObservationCannotOverwriteCommittedEmptyPublication() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        try await seed(makeRecords(), in: database)
+        let scheduler = ManualHistoryObservationScheduler()
+        let managers = try await makeManagers(database, observationScheduler: scheduler)
+
+        try await database.dbPool.write { db in
+            try pr11bHistoryRecord(id: "stale", readAt: 4).insert(db)
+        }
+        let stalePublication = await scheduler.nextPublication()
+
+        try await managers.history.clearHistoryDurably()
+        XCTAssertTrue(managers.history.history.isEmpty)
+
+        stalePublication.run()
+        XCTAssertTrue(managers.history.history.isEmpty)
+    }
+
+    func testStalePreDeleteObservationCannotRestoreDeletedEntry() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let records = makeRecords()
+        try await seed(records, in: database)
+        let scheduler = ManualHistoryObservationScheduler()
+        let managers = try await makeManagers(database, observationScheduler: scheduler)
+
+        try await database.dbPool.write { db in
+            try db.execute(
+                sql: "UPDATE readingHistory SET chapterTitle = ? WHERE id = ?",
+                arguments: ["Updated", records[2].id]
+            )
+        }
+        let stalePublication = await scheduler.nextPublication()
+
+        try await managers.history.removeEntryDurably(id: records[0].id)
+        XCTAssertEqual(managers.history.history.map(\.id), [records[1].id, records[2].id])
+
+        stalePublication.run()
+        XCTAssertEqual(managers.history.history.map(\.id), [records[1].id, records[2].id])
+    }
+
+    func testLaterExternalCommitStillPublishesAfterDurableClear() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        try await seed(makeRecords(), in: database)
+        let scheduler = ManualHistoryObservationScheduler()
+        let managers = try await makeManagers(database, observationScheduler: scheduler)
+
+        try await managers.history.clearHistoryDurably()
+        XCTAssertTrue(managers.history.history.isEmpty)
+        let clearPublication = await scheduler.nextPublication()
+        clearPublication.run()
+
+        let laterRecord = pr11bHistoryRecord(id: "later", readAt: 4)
+        try await database.dbPool.write { db in
+            try laterRecord.insert(db)
+        }
+        let laterPublication = await scheduler.nextPublication()
+        laterPublication.run()
+
+        XCTAssertEqual(managers.history.history.map(\.record), [laterRecord])
+    }
+
+    func testLaterExternalCommitStillPublishesAfterDurableDelete() async throws {
+        let database = try TestDatabase()
+        defer { database.cleanup() }
+        let records = makeRecords()
+        try await seed(records, in: database)
+        let scheduler = ManualHistoryObservationScheduler()
+        let managers = try await makeManagers(database, observationScheduler: scheduler)
+
+        try await managers.history.removeEntryDurably(id: records[0].id)
+        XCTAssertEqual(managers.history.history.map(\.id), [records[1].id, records[2].id])
+        let deletePublication = await scheduler.nextPublication()
+        deletePublication.run()
+
+        let laterRecord = pr11bHistoryRecord(id: "later", readAt: 4)
+        try await database.dbPool.write { db in
+            try laterRecord.insert(db)
+        }
+        let laterPublication = await scheduler.nextPublication()
+        laterPublication.run()
+
+        XCTAssertEqual(
+            managers.history.history.map(\.record),
+            [laterRecord, records[1], records[2]]
+        )
+    }
+
+    func testPublicationOrderRejectsOlderDurableCompletionAndAcceptsLaterExternalCommit() {
+        var publicationOrder = HistoryPublicationOrder()
+
+        XCTAssertTrue(publicationOrder.accepts(2), "Newer clear commit publishes")
+        XCTAssertFalse(publicationOrder.accepts(1), "Older delete completion cannot overwrite clear")
+        XCTAssertTrue(publicationOrder.accepts(3), "Later external commit remains observable")
+        XCTAssertFalse(publicationOrder.accepts(2), "Older clear cleanup cannot overwrite external state")
+    }
+
     func testClearFailureRollsBackAllDeletesAndViewModelDoesNotReportSuccess() async throws {
         let database = try TestDatabase()
         defer { database.cleanup() }
@@ -190,6 +289,20 @@ final class HistoryDurabilityIntegrationTests: XCTestCase {
         try await history.reload()
         return (library, history)
     }
+
+    private func makeManagers<Scheduler: ValueObservationMainActorScheduler>(
+        _ database: TestDatabase,
+        observationScheduler: Scheduler
+    ) async throws -> (library: LibraryManager, history: HistoryManager) {
+        let library = LibraryManager(dbPool: database.dbPool)
+        let history = HistoryManager(
+            dbPool: database.dbPool,
+            libraryManager: library,
+            observationScheduler: observationScheduler
+        )
+        try await history.reload()
+        return (library, history)
+    }
 }
 
 private func pr11bHistoryRecord(id: String, readAt: TimeInterval) -> ReadingHistoryRecord {
@@ -226,5 +339,50 @@ private final class HistoryDatabaseWriteGate: @unchecked Sendable {
 
     func release() {
         resume.signal()
+    }
+}
+
+nonisolated private final class ManualHistoryObservationScheduler: ValueObservationMainActorScheduler,
+    @unchecked Sendable {
+    nonisolated struct ScheduledPublication: @unchecked Sendable {
+        let action: @MainActor () -> Void
+
+        @MainActor
+        func run() {
+            action()
+        }
+    }
+
+    private let lock = NSLock()
+    private var publications: [ScheduledPublication] = []
+    private var continuations: [CheckedContinuation<ScheduledPublication, Never>] = []
+
+    func immediateInitialValue() -> Bool { true }
+
+    func scheduleOnMainActor(_ action: @escaping @MainActor () -> Void) {
+        let publication = ScheduledPublication(action: action)
+        lock.lock()
+        if continuations.isEmpty {
+            publications.append(publication)
+            lock.unlock()
+        } else {
+            let continuation = continuations.removeFirst()
+            lock.unlock()
+            continuation.resume(returning: publication)
+        }
+    }
+
+    func nextPublication() async -> ScheduledPublication {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if publications.isEmpty {
+                continuations.append(continuation)
+                lock.unlock()
+            } else {
+                let publication = publications.removeFirst()
+                lock.unlock()
+                continuation.resume(returning: publication)
+            }
+        }
     }
 }
