@@ -129,118 +129,28 @@ struct NovelPagingReaderView: View {
 
         let usableSize = CGSize(width: size.width - 32, height: size.height - 80)
         AppLogger.ui.debug("[NovelPagingReaderView] Usable text container size: \(String(describing: usableSize))")
-
-        // Setup Fonts
-        let titleFont: UIFont
-        let bodyFont: UIFont
-
-        switch currentFontFamily {
-        case .serif:
-            titleFont = UIFont(name: "TimesNewRomanPS-BoldMT", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "TimesNewRomanPSMT", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .monospaced:
-            titleFont = UIFont(name: "Menlo-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Menlo", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .lora:
-            titleFont = UIFont(name: "Lora-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Lora-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .karla:
-            titleFont = UIFont(name: "Karla-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Karla-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .rubik:
-            titleFont = UIFont(name: "Rubik-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Rubik-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .cardo:
-            titleFont = UIFont(name: "Cardo-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Cardo-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .nunito:
-            titleFont = UIFont(name: "Nunito-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Nunito-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        case .merriweather:
-            titleFont = UIFont(name: "Merriweather-Bold", size: CGFloat(currentFontSize) + 6) ?? .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = UIFont(name: "Merriweather-Regular", size: CGFloat(currentFontSize)) ?? .systemFont(ofSize: CGFloat(currentFontSize))
-        default:
-            titleFont = .boldSystemFont(ofSize: CGFloat(currentFontSize) + 6)
-            bodyFont = .systemFont(ofSize: CGFloat(currentFontSize))
-        }
-
-        let titleAttrs: [NSAttributedString.Key: Any] = [
-            .font: titleFont,
-            .foregroundColor: UIColor(currentTheme.textColor)
-        ]
-
-        let paragraphStyle = NSMutableParagraphStyle()
-        paragraphStyle.lineSpacing = CGFloat(currentLineSpacing)
-
-        let bodyAttrs: [NSAttributedString.Key: Any] = [
-            .font: bodyFont,
-            .foregroundColor: UIColor(currentTheme.textColor),
-            .paragraphStyle: paragraphStyle
-        ]
+        let configuration = NovelPaginationConfiguration(
+            containerSize: size,
+            fontSize: currentFontSize,
+            fontFamily: currentFontFamily,
+            lineSpacing: currentLineSpacing,
+            textColor: UIColor(currentTheme.textColor)
+        )
 
         for loadedChapter in loadedChapters {
-            if paginatedCache[loadedChapter.id] != nil {
-                continue // Already paginated
-            }
-
+            guard paginatedCache[loadedChapter.id] == nil else { continue }
             AppLogger.ui.debug("[NovelPagingReaderView] Paginating new chapter: \(loadedChapter.chapter.title ?? loadedChapter.chapter.key)")
-
-            let fullString = NSMutableAttributedString()
-
-            // Format title
-            let chapterTitleText = {
-                if let num = loadedChapter.chapter.chapter {
-                    if let title = loadedChapter.chapter.title, !title.isEmpty {
-                        return "Chapter \(num.formatted()) - \(title)"
-                    }
-                    return "Chapter \(num.formatted())"
-                }
-                return loadedChapter.chapter.title ?? "Unknown Chapter"
-            }()
-
-            fullString.append(NSAttributedString(string: chapterTitleText + "\n\n", attributes: titleAttrs))
-
-            for page in loadedChapter.pages {
-                if case .text(let text) = page.content {
-                    fullString.append(NSAttributedString(string: text + "\n\n", attributes: bodyAttrs))
-                }
+            guard let pages = NovelPaginationEngine.paginate(
+                chapters: [NovelPaginationChapter(
+                    id: loadedChapter.id,
+                    chapter: loadedChapter.chapter,
+                    pages: loadedChapter.pages
+                )],
+                configuration: configuration
+            ) else {
+                return
             }
-
-            // Use TextKit to compute page breaks
-            let storage = NSTextStorage(attributedString: fullString)
-            let manager = NSLayoutManager()
-            storage.addLayoutManager(manager)
-
-            var containers: [NSTextContainer] = []
-            var glyphRange = NSRange(location: 0, length: 0)
-
-            repeat {
-                let container = NSTextContainer(size: usableSize)
-                container.lineFragmentPadding = 0
-                manager.addTextContainer(container)
-                containers.append(container)
-
-                glyphRange = manager.glyphRange(for: container)
-
-                if containers.count > 1000 {
-                    AppLogger.ui.debug("[NovelPagingReaderView] SAFETY BREAK: Exceeded 1000 containers!")
-                    break
-                }
-                if glyphRange.length == 0 {
-                    break
-                }
-            } while NSMaxRange(glyphRange) < manager.numberOfGlyphs
-
-            var extractedPages: [NSAttributedString] = []
-            for container in containers {
-                let gRange = manager.glyphRange(for: container)
-                let charRange = manager.characterRange(forGlyphRange: gRange, actualGlyphRange: nil)
-                if charRange.length > 0 {
-                    extractedPages.append(storage.attributedSubstring(from: charRange))
-                }
-            }
-
-            paginatedCache[loadedChapter.id] = extractedPages
+            paginatedCache[loadedChapter.id] = pages.map(\.string)
         }
 
         // Rebuild flattened array preserving order of loadedChapters

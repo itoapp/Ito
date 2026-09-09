@@ -36,7 +36,7 @@ struct VideoPlayerView: View {
     @State private var showCustomControls = true
 
     // Custom Subtitle State
-    @State private var parsedSubtitles: [(start: Double, end: Double, text: String)] = []
+    @State private var parsedSubtitles: [VTTCue] = []
     @State private var currentSubtitleText: String?
 
     @Environment(\.dismiss) var dismiss
@@ -368,7 +368,7 @@ struct VideoPlayerView: View {
             }
             if let vttString = String(data: data, encoding: .utf8) {
                 AppLogger.ui.debug("🎬 [DEBUG-SUB] VTT downloaded, first 200 chars: \(String(vttString.prefix(200)))")
-                let parsed = Self.parseVTT(vttString)
+                let parsed = VTTParser.parse(vttString)
                 await MainActor.run {
                     self.parsedSubtitles = parsed
                     AppLogger.ui.debug("\("🎬 [DEBUG-SUB] Successfully parsed \(parsed.count)") subtitle blocks.")
@@ -426,95 +426,5 @@ struct VideoPlayerView: View {
                 self.currentSubtitleText = nil
             }
         }
-    }
-}
-
-extension VideoPlayerView {
-    static func parseVTT(_ vtt: String) -> [(start: Double, end: Double, text: String)] {
-        var results: [(start: Double, end: Double, text: String)] = []
-        // Clean out all \r characters before splitting by \n
-        let cleanVtt = vtt.replacingOccurrences(of: "\r", with: "")
-        let lines = cleanVtt.components(separatedBy: "\n")
-
-        var currentStart: Double = 0
-        var currentEnd: Double = 0
-        var currentText = ""
-        var isReadingText = false
-
-        for (index, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            // "WEBVTT" header or other metadata can be safely ignored until we find a timestamp
-            if trimmed.contains("-->") {
-                // If we were already reading text and hit another timestamp without a blank line,
-                // save the previous one.
-                if isReadingText {
-                    let cleanedText = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !cleanedText.isEmpty {
-                        results.append((start: currentStart, end: currentEnd, text: cleanedText))
-                    }
-                    currentText = ""
-                }
-
-                let parts = trimmed.components(separatedBy: "-->")
-                if parts.count == 2 {
-                    // Extract just the time string, ignoring extra VTT positioning metadata (like 'line:20%')
-                    let startStr = parts[0].trimmingCharacters(in: .whitespaces).components(separatedBy: .whitespaces).first ?? ""
-                    let endStr = parts[1].trimmingCharacters(in: .whitespaces).components(separatedBy: .whitespaces).first ?? ""
-
-                    currentStart = Self.parseVTTTime(startStr)
-                    currentEnd = Self.parseVTTTime(endStr)
-                    isReadingText = true
-
-                    if results.count < 3 {
-                        AppLogger.ui.debug("\("🎬 [DEBUG-SUB] Parsed timestamp line \(index)"): start='\(startStr)' (\(currentStart)s), end='\(endStr)' (\(currentEnd)s)")
-                    }
-                }
-            } else if trimmed.isEmpty {
-                // A blank line signifies the end of a subtitle block
-                if isReadingText {
-                    let cleanedText = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !cleanedText.isEmpty {
-                        results.append((start: currentStart, end: currentEnd, text: cleanedText))
-                    }
-                    currentText = ""
-                    isReadingText = false
-                }
-            } else if isReadingText {
-                // Strip simple HTML tags like <i>, <b>
-                let stripped = trimmed.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression, range: nil)
-                if !currentText.isEmpty {
-                    currentText += "\n" + stripped
-                } else {
-                    currentText = stripped
-                }
-            }
-        }
-
-        // Append last block if EOF reached without newline
-        if isReadingText {
-            let cleanedText = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleanedText.isEmpty {
-                results.append((start: currentStart, end: currentEnd, text: cleanedText))
-            }
-        }
-
-        return results
-    }
-
-    static func parseVTTTime(_ timeStr: String) -> Double {
-        // Formats: "00:01:23.450" or "01:23.450" or "00:01:23,450"
-        let parts = timeStr.components(separatedBy: ":")
-        var seconds: Double = 0
-
-        if parts.count == 3 {
-            seconds += (Double(parts[0]) ?? 0) * 3600
-            seconds += (Double(parts[1]) ?? 0) * 60
-            seconds += Double(parts[2].replacingOccurrences(of: ",", with: ".")) ?? 0
-        } else if parts.count == 2 {
-            seconds += (Double(parts[0]) ?? 0) * 60
-            seconds += Double(parts[1].replacingOccurrences(of: ",", with: ".")) ?? 0
-        }
-        return seconds
     }
 }
