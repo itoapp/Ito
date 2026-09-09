@@ -271,19 +271,113 @@ final class NovelPaginationTests: XCTestCase {
     }
 
     func testPaginationDoesNotMutateSourceChapterOrPageFixtures() throws {
-        let chapter = Novel.Chapter(key: "immutable", title: "Title", chapter: 7)
+        let chapter = Novel.Chapter(
+            key: "immutable",
+            title: "Title",
+            volume: 2,
+            chapter: 7,
+            dateUpdated: 1_234_567,
+            scanlator: "Source",
+            url: "https://example.com/chapter",
+            lang: "en",
+            paywalled: true
+        )
         let pages = [
-            Page(index: 2, content: .text("Second")),
-            Page(index: 1, content: .text("First"))
+            Page(
+                index: 2,
+                content: .text("Second"),
+                hasDescription: true,
+                description: "Second description",
+                headers: ["Z-Header": "z", "A-Header": "a"]
+            ),
+            Page(
+                index: 1,
+                content: .url("https://example.com/image"),
+                headers: ["Authorization": "token"]
+            )
         ]
-        let chapterBefore = try JSONEncoder().encode(chapter)
-        let pagesBefore = try JSONEncoder().encode(pages)
+        let chapterBefore = NovelChapterFixtureSnapshot(chapter)
+        let pagesBefore = pages.map(PageFixtureSnapshot.init)
         let loaded = NovelReaderView.LoadedChapter(chapter: chapter, pages: pages)
 
         _ = enginePaginate([loaded], size: CGSize(width: 320, height: 480))
 
-        XCTAssertEqual(try JSONEncoder().encode(chapter), chapterBefore)
-        XCTAssertEqual(try JSONEncoder().encode(pages), pagesBefore)
+        XCTAssertEqual(NovelChapterFixtureSnapshot(chapter), chapterBefore)
+        XCTAssertEqual(pages.map(PageFixtureSnapshot.init), pagesBefore)
+
+        var changedChapter = chapter
+        changedChapter.title = "Changed"
+        XCTAssertNotEqual(NovelChapterFixtureSnapshot(changedChapter), chapterBefore)
+
+        var changedPages = pages
+        changedPages[0].content = .text("Changed")
+        XCTAssertNotEqual(changedPages.map(PageFixtureSnapshot.init), pagesBefore)
+        XCTAssertNotEqual(pages.reversed().map(PageFixtureSnapshot.init), pagesBefore)
+    }
+
+    private struct NovelChapterFixtureSnapshot: Equatable {
+        let key: String
+        let title: String?
+        let volume: Float32?
+        let chapter: Float32?
+        let dateUpdated: Double?
+        let scanlator: String?
+        let url: String?
+        let lang: String?
+        let paywalled: Bool?
+
+        init(_ chapter: Novel.Chapter) {
+            key = chapter.key
+            title = chapter.title
+            volume = chapter.volume
+            self.chapter = chapter.chapter
+            dateUpdated = chapter.dateUpdated
+            scanlator = chapter.scanlator
+            url = chapter.url
+            lang = chapter.lang
+            paywalled = chapter.paywalled
+        }
+    }
+
+    private struct PageFixtureSnapshot: Equatable {
+        let index: Int32
+        let content: PageContentFixtureSnapshot
+        let hasDescription: Bool
+        let description: String?
+        let headers: [HeaderFixtureSnapshot]?
+
+        init(_ page: Page) {
+            index = page.index
+            switch page.content {
+            case .text(let text):
+                content = .text(text)
+            case .url(let url):
+                content = .url(url)
+            }
+            hasDescription = page.hasDescription
+            description = page.description
+            headers = page.headers?.map(HeaderFixtureSnapshot.init).sorted {
+                if $0.name == $1.name {
+                    return $0.value < $1.value
+                }
+                return $0.name < $1.name
+            }
+        }
+    }
+
+    private enum PageContentFixtureSnapshot: Equatable {
+        case text(String)
+        case url(String)
+    }
+
+    private struct HeaderFixtureSnapshot: Equatable {
+        let name: String
+        let value: String
+
+        init(_ entry: Dictionary<String, String>.Element) {
+            name = entry.key
+            value = entry.value
+        }
     }
 
     private struct LegacyPagedItem {
