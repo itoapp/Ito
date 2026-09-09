@@ -36,6 +36,7 @@ struct MediaDetailViewFactory {
     private let dependencies: PreparedMediaDetailDependencies
     private let messagePresenter: any MediaDetailMessagePresenting
     private let presentationLogger: any PresentationEventLogging
+    private let categoryHistoryViewFactory: CategoryHistoryViewFactory
     let trackingViewFactory: TrackingViewFactory
     let readerViewFactory = MediaDetailReaderViewFactory()
 
@@ -43,12 +44,14 @@ struct MediaDetailViewFactory {
         dependencies: PreparedMediaDetailDependencies,
         messagePresenter: any MediaDetailMessagePresenting,
         presentationLogger: any PresentationEventLogging,
-        trackingViewFactory: TrackingViewFactory
+        trackingViewFactory: TrackingViewFactory,
+        categoryHistoryViewFactory: CategoryHistoryViewFactory
     ) {
         self.dependencies = dependencies
         self.messagePresenter = messagePresenter
         self.presentationLogger = presentationLogger
         self.trackingViewFactory = trackingViewFactory
+        self.categoryHistoryViewFactory = categoryHistoryViewFactory
     }
 
     func makeMangaView(
@@ -150,7 +153,8 @@ struct MediaDetailViewFactory {
                 presentationLogger: presentationLogger
             ),
             trackingViewFactory: trackingViewFactory,
-            readerViewFactory: readerViewFactory
+            readerViewFactory: readerViewFactory,
+            categoryHistoryViewFactory: categoryHistoryViewFactory
         )
     }
 }

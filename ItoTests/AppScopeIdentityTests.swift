@@ -30,6 +30,31 @@ final class AppScopeIdentityTests: XCTestCase {
         )
     }
 
+    func testCategoryAndHistoryViewModelsAreFreshPerPresentationAndNotRootStored() throws {
+        let scope = makeScope()
+        let factory = scope.viewFactory.categoryHistoryViewFactory
+
+        let firstAssignment = factory.makeCategoryAssignmentViewModel(itemID: "first")
+        let secondAssignment = factory.makeCategoryAssignmentViewModel(itemID: "second")
+        let firstSettings = factory.makeCategorySettingsViewModel()
+        let secondSettings = factory.makeCategorySettingsViewModel()
+        let firstHistory = factory.makeHistoryViewModel()
+        let secondHistory = factory.makeHistoryViewModel()
+        let source = try sourceFile("Ito/AppScope.swift")
+        let rootStart = try XCTUnwrap(source.range(of: "final class RootModelStore"))
+        let scopeStart = try XCTUnwrap(source.range(of: "final class AppScope"))
+        let rootModelStore = String(source[rootStart.lowerBound..<scopeStart.lowerBound])
+
+        XCTAssertEqual(firstAssignment.itemID, "first")
+        XCTAssertEqual(secondAssignment.itemID, "second")
+        XCTAssertFalse(firstAssignment === secondAssignment)
+        XCTAssertFalse(firstSettings === secondSettings)
+        XCTAssertFalse(firstHistory === secondHistory)
+        XCTAssertFalse(rootModelStore.contains("CategoryAssignmentViewModel"))
+        XCTAssertFalse(rootModelStore.contains("CategorySettingsViewModel"))
+        XCTAssertFalse(rootModelStore.contains("HistoryViewModel"))
+    }
+
     func testDeferredPluginViewModelIsScreenOwnedAndNotStoredInRootModelStore() throws {
         let scope = makeScope()
         let item = Ito.LibraryItem(
@@ -361,6 +386,10 @@ final class AppScopeIdentityTests: XCTestCase {
         )
         let readProgressManager = ReadProgressManager(dbPool: database.dbPool)
         let libraryManager = LibraryManager(dbPool: database.dbPool)
+        let historyManager = HistoryManager(
+            dbPool: database.dbPool,
+            libraryManager: libraryManager
+        )
         let updateManager = UpdateManager(dbPool: database.dbPool)
         let noOpRefresh: BackupRestoreRefresher.RefreshOperations.Operation = {}
         let backupManager = BackupManager(
@@ -401,6 +430,7 @@ final class AppScopeIdentityTests: XCTestCase {
             trackerManager: trackerManager,
             readProgressManager: readProgressManager,
             libraryManager: libraryManager,
+            historyManager: historyManager,
             updateManager: updateManager,
             backupManager: backupManager,
             librarySourceRemapper: librarySourceRemapper,
@@ -452,6 +482,8 @@ final class AppScopeIdentityTests: XCTestCase {
         XCTAssertTrue(dependencies.library.discord === discordRPCManager)
         XCTAssertTrue(dependencies.library.plugins === pluginManager)
         XCTAssertTrue(dependencies.library.installer === repoManager)
+        XCTAssertTrue(dependencies.categoryHistory.organization === libraryManager)
+        XCTAssertTrue(dependencies.categoryHistory.history === historyManager)
         XCTAssertTrue(
             dependencies.discoverDetail.sourceMappingRepository
                 as? GRDBSourceMappingRepository === sourceMappingRepository

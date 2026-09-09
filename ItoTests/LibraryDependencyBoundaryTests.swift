@@ -139,7 +139,7 @@ final class LibraryDependencyBoundaryTests: XCTestCase {
         XCTAssertEqual(loader.requests, [first.id, replacement.id])
     }
 
-    func testPR11BAndLaterViewModelsWereNotIntroduced() throws {
+    func testPR12AndLaterViewModelsWereNotIntroduced() throws {
         let viewModelsURL = repositoryRoot.appendingPathComponent("Ito/ViewModels")
         let names = try FileManager.default.contentsOfDirectory(
             at: viewModelsURL,
@@ -147,9 +147,6 @@ final class LibraryDependencyBoundaryTests: XCTestCase {
         ).map(\.lastPathComponent)
 
         for excluded in [
-            "CategoryAssignmentViewModel.swift",
-            "CategorySettingsViewModel.swift",
-            "HistoryViewModel.swift",
             "MangaReaderViewModel.swift",
             "NovelReaderViewModel.swift",
             "VideoPlayerViewModel.swift",

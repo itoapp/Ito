@@ -19,6 +19,44 @@ public struct HistoryEntry: Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated private struct HistoryPublication: Sendable {
+    let revision: UInt64
+    let records: [ReadingHistoryRecord]
+}
+
+nonisolated private final class HistoryPublicationClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+
+    func currentRevision() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return revision
+    }
+
+    func advance() {
+        lock.lock()
+        revision &+= 1
+        lock.unlock()
+    }
+
+    func revisionAfterCommit(changedHistory: Bool) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return changedHistory ? revision &+ 1 : revision
+    }
+}
+
+nonisolated struct HistoryPublicationOrder: Sendable {
+    private(set) var appliedRevision: UInt64 = 0
+
+    mutating func accepts(_ revision: UInt64) -> Bool {
+        guard revision >= appliedRevision else { return false }
+        appliedRevision = revision
+        return true
+    }
+}
+
 // MARK: - History Manager
 
 @MainActor
@@ -32,13 +70,27 @@ public class HistoryManager: ObservableObject {
 
     private let dbPool: DatabasePool
     private let libraryManager: LibraryManager
+    private let publicationClock = HistoryPublicationClock()
     private var observationCancellable: DatabaseCancellable?
     private var settingsStore: AppSettingsStore?
+    private var publicationOrder = HistoryPublicationOrder()
 
-    public init(dbPool: DatabasePool, libraryManager: LibraryManager) {
+    public convenience init(dbPool: DatabasePool, libraryManager: LibraryManager) {
+        self.init(
+            dbPool: dbPool,
+            libraryManager: libraryManager,
+            observationScheduler: ImmediateValueObservationScheduler()
+        )
+    }
+
+    init<Scheduler: ValueObservationMainActorScheduler>(
+        dbPool: DatabasePool,
+        libraryManager: LibraryManager,
+        observationScheduler: Scheduler
+    ) {
         self.dbPool = dbPool
         self.libraryManager = libraryManager
-        startObservation()
+        startObservation(scheduling: observationScheduler)
     }
 
     func configure(settingsStore: AppSettingsStore) {
@@ -46,34 +98,34 @@ public class HistoryManager: ObservableObject {
     }
 
     public func reload() async throws {
-        let records = try await dbPool.read { db in
-            try ReadingHistoryRecord
-                .order(ReadingHistoryRecord.Columns.readAt.desc)
-                .limit(200)
-                .fetchAll(db)
-        }
-        history = records.map { HistoryEntry(record: $0) }
+        let revision = publicationClock.currentRevision()
+        let records = try await dbPool.read { try Self.fetchHistory($0) }
+        apply(HistoryPublication(revision: revision, records: records))
     }
 
     // MARK: - Observation
 
-    private func startObservation() {
-        let observation = ValueObservation.tracking { db -> [ReadingHistoryRecord] in
-            try ReadingHistoryRecord
-                .order(ReadingHistoryRecord.Columns.readAt.desc)
-                .limit(200)
-                .fetchAll(db)
+    private func startObservation<Scheduler: ValueObservationMainActorScheduler>(
+        scheduling scheduler: Scheduler
+    ) {
+        let publicationClock = publicationClock
+        let observation = ValueObservation.tracking { db -> HistoryPublication in
+            let revision = publicationClock.currentRevision()
+            return HistoryPublication(
+                revision: revision,
+                records: try Self.fetchHistory(db)
+            )
         }
+        .handleEvents(databaseDidChange: publicationClock.advance)
 
         observationCancellable = observation.start(
             in: dbPool,
+            scheduling: scheduler,
             onError: { error in
                 AppLogger.general.error("[HistoryManager] Observation error: \(error)")
             },
-            onChange: { [weak self] records in
-                Task { @MainActor in
-                    self?.history = records.map { HistoryEntry(record: $0) }
-                }
+            onChange: { [weak self] publication in
+                self?.apply(publication)
             }
         )
     }
@@ -145,28 +197,40 @@ public class HistoryManager: ObservableObject {
 
     // MARK: - Delete
 
-    public func removeEntry(id: String) {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    _ = try ReadingHistoryRecord.deleteOne(db, key: id)
-                }
-            } catch {
-                AppLogger.general.error("[HistoryManager] Failed to remove entry: \(error)")
-            }
+    func removeEntryDurably(id: String) async throws {
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
+            let deleted = try ReadingHistoryRecord.deleteOne(db, key: id)
+            return HistoryPublication(
+                revision: publicationClock.revisionAfterCommit(changedHistory: deleted),
+                records: try Self.fetchHistory(db)
+            )
         }
+        apply(publication)
     }
 
-    public func clearHistory() {
-        Task {
-            do {
-                try await dbPool.write { db in
-                    _ = try ReadingHistoryRecord.deleteAll(db)
-                }
-            } catch {
-                AppLogger.general.error("[HistoryManager] Failed to clear history: \(error)")
-            }
+    func clearHistoryDurably() async throws {
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
+            let deletedCount = try ReadingHistoryRecord.deleteAll(db)
+            return HistoryPublication(
+                revision: publicationClock.revisionAfterCommit(changedHistory: deletedCount > 0),
+                records: try Self.fetchHistory(db)
+            )
         }
+        apply(publication)
+    }
+
+    nonisolated private static func fetchHistory(_ db: Database) throws -> [ReadingHistoryRecord] {
+        try ReadingHistoryRecord
+            .order(ReadingHistoryRecord.Columns.readAt.desc)
+            .limit(200)
+            .fetchAll(db)
+    }
+
+    private func apply(_ publication: HistoryPublication) {
+        guard publicationOrder.accepts(publication.revision) else { return }
+        history = publication.records.map { HistoryEntry(record: $0) }
     }
 
 }

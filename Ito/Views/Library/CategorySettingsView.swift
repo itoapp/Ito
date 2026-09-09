@@ -1,48 +1,39 @@
-import OSLog
 import SwiftUI
 
 struct CategorySettingsView: View {
-    @EnvironmentObject private var libraryManager: LibraryManager
-    @State private var showingAddCategory = false
-    @State private var newCategoryName = ""
+    @StateObject private var viewModel: CategorySettingsViewModel
 
-    @State private var categoryToDelete: LibraryCategory?
+    init(viewModel: CategorySettingsViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         List {
             Section {
-                // Pin the system "Uncategorized" category at the top
-                if let sysCat = libraryManager.categories.first(where: { $0.isSystemCategory }) {
-                    Text(sysCat.name)
+                if let systemCategory = viewModel.systemCategory {
+                    Text(systemCategory.name)
                         .foregroundColor(.secondary)
                         .deleteDisabled(true)
                         .moveDisabled(true)
                 }
 
-                let userCategories = libraryManager.categories.filter { !$0.isSystemCategory }
-
-                ForEach(userCategories) { cat in
-                    NavigationLink(destination: EditCategoryView(category: cat)) {
-                        Text(cat.name)
+                ForEach(viewModel.userCategories) { category in
+                    NavigationLink(
+                        destination: EditCategoryView(
+                            viewModel: viewModel,
+                            categoryID: category.id
+                        )
+                    ) {
+                        Text(category.name)
                     }
                 }
                 .onDelete { indexSet in
-                    // Present confirmation before deleting
-                    if let index = indexSet.first {
-                        let cat = userCategories[index]
-                        triggerWarningHaptic()
-                        categoryToDelete = cat
-                    }
+                    guard let index = indexSet.first,
+                          viewModel.userCategories.indices.contains(index) else { return }
+                    triggerWarningHaptic()
+                    viewModel.requestDelete(categoryID: viewModel.userCategories[index].id)
                 }
-                .onMove { indices, newOffset in
-                    var mutableUserCategories = userCategories
-                    mutableUserCategories.move(fromOffsets: indices, toOffset: newOffset)
-
-                    // Reorder in DB. System category stays 0.
-                    let sysCategories = libraryManager.categories.filter { $0.isSystemCategory }
-                    let newOrder = sysCategories + mutableUserCategories
-                    libraryManager.reorderCategories(newOrder: newOrder)
-                }
+                .onMove(perform: viewModel.moveUserCategories)
             } header: {
                 Text("Your Lists")
             }
@@ -55,62 +46,116 @@ struct CategorySettingsView: View {
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    showingAddCategory.toggle()
+                    viewModel.presentAddCategory()
                 } label: {
                     Image(systemName: "plus")
                 }
+                .disabled(viewModel.isCreating)
             }
         }
         .confirmationDialog(
-            "Delete \(categoryToDelete?.name ?? "List")?",
-            isPresented: Binding(
-                get: { categoryToDelete != nil },
-                set: { if !$0 { categoryToDelete = nil } }
-            ),
+            "Delete \(viewModel.categoryPendingDeletion?.name ?? "List")?",
+            isPresented: deleteConfirmationBinding,
             titleVisibility: .visible
         ) {
             Button("Delete List", role: .destructive) {
-                if let id = categoryToDelete?.id {
-                    libraryManager.deleteCategory(id: id)
-                }
+                viewModel.confirmDelete()
             }
-            Button("Cancel", role: .cancel) {}
+            .disabled(viewModel.isDeleting)
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelDelete()
+            }
         } message: {
             Text("Items in this list will be safely moved to Uncategorized.")
         }
-        .sheet(isPresented: $showingAddCategory) {
-            NavigationView {
-                Form {
-                    Section {
-                        TextField("List Name", text: $newCategoryName)
-                            .font(.body)
-                    } footer: {
-                        Text("Enter a name for your new category.")
-                    }
+        .sheet(isPresented: addCategoryBinding) {
+            addCategorySheet
+        }
+        .alert(
+            viewModel.failure?.alertTitle ?? "List Change Failed",
+            isPresented: settingsFailureBinding
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.dismissFailure()
+            }
+        } message: {
+            Text(viewModel.failure?.alertMessage ?? "Please try again.")
+        }
+    }
+
+    private var deleteConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.categoryPendingDeletionID != nil },
+            set: { isPresented in
+                if !isPresented { viewModel.cancelDelete() }
+            }
+        )
+    }
+
+    private var addCategoryBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isAddCategoryPresented },
+            set: { isPresented in
+                if !isPresented { viewModel.cancelAddCategory() }
+            }
+        )
+    }
+
+    private var settingsFailureBinding: Binding<Bool> {
+        Binding(
+            get: {
+                viewModel.failure == .categoryDeleteFailed
+                    || viewModel.failure == .categoryReorderFailed
+            },
+            set: { if !$0 { viewModel.dismissFailure() } }
+        )
+    }
+
+    private var addCategorySheet: some View {
+        NavigationView {
+            Form {
+                Section {
+                    TextField("List Name", text: $viewModel.newCategoryName)
+                        .font(.body)
+                } footer: {
+                    Text("Enter a name for your new category.")
                 }
-                .navigationTitle("New List")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            showingAddCategory = false
-                            newCategoryName = ""
-                        }
+            }
+            .navigationTitle("New List")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        viewModel.cancelAddCategory()
                     }
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Create") {
-                            Task {
-                                guard !newCategoryName.isEmpty else { return }
-                                _ = try? await libraryManager.createCategory(name: newCategoryName)
-                                newCategoryName = ""
-                                showingAddCategory = false
-                            }
-                        }
-                        .disabled(newCategoryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(viewModel.isCreating)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Create") {
+                        Task { await viewModel.createCategory() }
                     }
+                    .disabled(!viewModel.canCreateCategory)
                 }
             }
         }
+        .interactiveDismissDisabled(viewModel.isCreating)
+        .alert(
+            viewModel.failure?.alertTitle ?? "List Not Created",
+            isPresented: createFailureBinding
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.dismissFailure()
+            }
+        } message: {
+            Text(viewModel.failure?.alertMessage ?? "Please try again.")
+        }
+    }
+
+    private var createFailureBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.failure == .categoryCreateFailed },
+            set: { if !$0 { viewModel.dismissFailure() } }
+        )
     }
 
     private func triggerWarningHaptic() {
@@ -120,17 +165,15 @@ struct CategorySettingsView: View {
 }
 
 struct EditCategoryView: View {
-    let category: LibraryCategory
-    @State private var name: String = ""
-    @State private var isSaving = false
-    @State private var showingRenameError = false
-    @EnvironmentObject private var libraryManager: LibraryManager
+    @ObservedObject var viewModel: CategorySettingsViewModel
+    let categoryID: String
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Form {
             Section {
-                TextField("List Name", text: $name)
+                TextField("List Name", text: $viewModel.editedCategoryName)
                     .font(.body)
             } footer: {
                 Text("Rename your category. Tap outside to dismiss.")
@@ -139,33 +182,44 @@ struct EditCategoryView: View {
         .navigationTitle("Edit List")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            name = category.name
+            viewModel.beginRename(categoryID: categoryID)
         }
-        .alert("List Not Renamed", isPresented: $showingRenameError) {
-            Button("OK", role: .cancel) { }
+        .onDisappear {
+            viewModel.endRename(categoryID: categoryID)
+        }
+        .onChange(of: viewModel.renameDismissalID) { dismissalID in
+            guard dismissalID == categoryID else { return }
+            viewModel.consumeRenameDismissal(categoryID: categoryID)
+            dismiss()
+        }
+        .onChange(of: viewModel.editingCategoryID) { editingCategoryID in
+            guard editingCategoryID == nil else { return }
+            dismiss()
+        }
+        .alert(
+            viewModel.failure?.alertTitle ?? "List Not Renamed",
+            isPresented: renameFailureBinding
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.dismissFailure()
+            }
         } message: {
-            Text("Your list couldn't be renamed. Please try again.")
+            Text(viewModel.failure?.alertMessage ?? "Please try again.")
         }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("Done") {
-                    let newName = name
-                    Task { @MainActor in
-                        isSaving = true
-                        defer { isSaving = false }
-                        do {
-                            try await libraryManager.renameCategory(id: category.id, to: newName)
-                            dismiss()
-                        } catch {
-                            AppLogger.database.error("Error renaming: \(error)")
-                            showingRenameError = true
-                        }
-                    }
+                    Task { await viewModel.saveRename() }
                 }
-                .disabled(
-                    isSaving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
+                .disabled(!viewModel.canSaveRename)
             }
         }
+    }
+
+    private var renameFailureBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.failure == .categoryRenameFailed },
+            set: { if !$0 { viewModel.dismissFailure() } }
+        )
     }
 }

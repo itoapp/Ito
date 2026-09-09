@@ -227,6 +227,33 @@ final class AppMessageCenterTests: XCTestCase {
         }
     }
 
+    func testCategoryHistoryPresenterUsesOnlyClosedSanitizedMessages() throws {
+        let center = AppMessageCenter()
+        let presenter = AppMessageCategoryHistoryPresenter(messageCenter: center)
+        let expected: [(CategoryHistoryMessage, AppMessageKind)] = [
+            (.categoryCreateFailed, .categoryCreateFailed),
+            (.categoryRenameFailed, .categoryRenameFailed),
+            (.categoryDeleteFailed, .categoryDeleteFailed),
+            (.categoryReorderFailed, .categoryReorderFailed),
+            (.categoryAssignmentFailed, .categoryAssignmentFailed),
+            (.categoryCreateAndAssignFailed, .categoryCreateAndAssignFailed),
+            (.historyDeleteFailed, .historyDeleteFailed),
+            (.historyClearFailed, .historyClearFailed)
+        ]
+
+        for (message, kind) in expected {
+            presenter.present(message)
+            let presented = try XCTUnwrap(center.currentMessage)
+            XCTAssertEqual(presented.kind, kind)
+            let rendered = String(describing: presented)
+                + (presented.kind.presentation.detail ?? "")
+            XCTAssertFalse(rendered.contains("/private/"))
+            XCTAssertFalse(rendered.contains("SQLite"))
+            XCTAssertFalse(rendered.contains("token="))
+            center.dismiss(messageID: presented.id)
+        }
+    }
+
     private func makeScope() -> AppScope {
         AppScope(
             preparedDependencies: PreparedApplicationDependencies(

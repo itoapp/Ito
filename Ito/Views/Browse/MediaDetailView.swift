@@ -13,17 +13,20 @@ struct MediaDetailView<M: MediaDisplayable>: View {
     @StateObject private var viewModel: MediaDetailViewModel<M>
     private let trackingViewFactory: TrackingViewFactory
     private let readerViewFactory: MediaDetailReaderViewFactory
+    private let categoryHistoryViewFactory: CategoryHistoryViewFactory
 
     @State private var showNavTitle = false
 
     init(
         viewModel: MediaDetailViewModel<M>,
         trackingViewFactory: TrackingViewFactory,
-        readerViewFactory: MediaDetailReaderViewFactory
+        readerViewFactory: MediaDetailReaderViewFactory,
+        categoryHistoryViewFactory: CategoryHistoryViewFactory
     ) {
         self._viewModel = StateObject(wrappedValue: viewModel)
         self.trackingViewFactory = trackingViewFactory
         self.readerViewFactory = readerViewFactory
+        self.categoryHistoryViewFactory = categoryHistoryViewFactory
     }
 
     var body: some View {
@@ -55,9 +58,7 @@ struct MediaDetailView<M: MediaDisplayable>: View {
                 readerViewFactory.destination(for: destination)
             }
             .sheet(item: categoryAssignmentBinding) { intent in
-                NavigationView {
-                    CategoryAssignmentSheet(itemId: intent.itemID)
-                }
+                categoryHistoryViewFactory.makeCategoryAssignmentSheet(itemID: intent.itemID)
             }
             .sheet(item: relinkPresentationBinding) { _ in
                 relinkSearchSheet

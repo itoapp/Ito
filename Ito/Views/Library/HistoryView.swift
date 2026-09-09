@@ -2,11 +2,16 @@ import SwiftUI
 import NukeUI
 
 struct HistoryView: View {
-    @EnvironmentObject private var historyManager: HistoryManager
+    @StateObject private var viewModel: HistoryViewModel
+
+    init(viewModel: HistoryViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         Group {
-            if historyManager.history.isEmpty {
+            switch viewModel.phase {
+            case .empty:
                 VStack(spacing: 14) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 52, weight: .thin))
@@ -23,17 +28,18 @@ struct HistoryView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.bottom, 60)
-            } else {
+            case .content:
                 List {
-                    ForEach(historyManager.history) { entry in
+                    ForEach(viewModel.history) { entry in
                         HistoryItemRow(entry: entry)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button(role: .destructive) {
-                                historyManager.removeEntry(id: entry.id)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    Task { await viewModel.deleteEntry(id: entry.id) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                .disabled(viewModel.deletingEntryIDs.contains(entry.id))
                             }
-                        }
                     }
                 }
                 .listStyle(.plain)
@@ -43,15 +49,33 @@ struct HistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                if !historyManager.history.isEmpty {
+                if viewModel.isClearVisible {
                     Button(role: .destructive) {
-                        historyManager.clearHistory()
+                        Task { await viewModel.clearHistory() }
                     } label: {
                         Text("Clear")
                     }
+                    .disabled(viewModel.isClearing)
                 }
             }
         }
+        .alert(
+            viewModel.failure?.alertTitle ?? "History Change Failed",
+            isPresented: failureBinding
+        ) {
+            Button("OK", role: .cancel) {
+                viewModel.dismissFailure()
+            }
+        } message: {
+            Text(viewModel.failure?.alertMessage ?? "Please try again.")
+        }
+    }
+
+    private var failureBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.failure != nil },
+            set: { if !$0 { viewModel.dismissFailure() } }
+        )
     }
 }
 
@@ -111,13 +135,5 @@ struct HistoryItemRow: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
-    }
-}
-
-struct HistoryView_Previews: PreviewProvider {
-    static var previews: some View {
-        NavigationView {
-            HistoryView()
-        }
     }
 }

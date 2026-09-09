@@ -33,6 +33,14 @@ enum AppMessageKind: Equatable {
     case libraryLayoutPersistenceFailed
     case libraryItemRemovalFailed
     case libraryUpdateFailed
+    case categoryCreateFailed
+    case categoryRenameFailed
+    case categoryDeleteFailed
+    case categoryReorderFailed
+    case categoryAssignmentFailed
+    case categoryCreateAndAssignFailed
+    case historyDeleteFailed
+    case historyClearFailed
 }
 
 struct AppMessage: Identifiable, Equatable {
@@ -253,6 +261,54 @@ extension AppMessageKind {
                 style: .error,
                 title: "Update check failed",
                 detail: "The library update check could not finish. Please try again."
+            )
+        case .categoryCreateFailed:
+            return .init(
+                style: .error,
+                title: "List not created",
+                detail: "Your list couldn't be created. Please try again."
+            )
+        case .categoryRenameFailed:
+            return .init(
+                style: .error,
+                title: "List not renamed",
+                detail: "Your list couldn't be renamed. Please try again."
+            )
+        case .categoryDeleteFailed:
+            return .init(
+                style: .error,
+                title: "List not deleted",
+                detail: "Your list couldn't be deleted. Please try again."
+            )
+        case .categoryReorderFailed:
+            return .init(
+                style: .error,
+                title: "Lists not reordered",
+                detail: "Your list order couldn't be saved. Please try again."
+            )
+        case .categoryAssignmentFailed:
+            return .init(
+                style: .error,
+                title: "List assignment not saved",
+                detail: "The list assignment couldn't be saved. Please try again."
+            )
+        case .categoryCreateAndAssignFailed:
+            return .init(
+                style: .error,
+                title: "List not created",
+                detail: "The new list and assignment couldn't be saved. Please try again."
+            )
+        case .historyDeleteFailed:
+            return .init(
+                style: .error,
+                title: "History item not deleted",
+                detail: "The history item couldn't be deleted. Please try again."
+            )
+        case .historyClearFailed:
+            return .init(
+                style: .error,
+                title: "History not cleared",
+                detail: "Your history couldn't be cleared. Please try again."
             )
         }
     }
