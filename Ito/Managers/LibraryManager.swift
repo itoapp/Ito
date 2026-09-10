@@ -5,6 +5,86 @@ import GRDB
 import SwiftUI
 import ito_runner
 
+nonisolated private struct LibrarySnapshot: Sendable {
+    let categories: [LibraryCategory]
+    let items: [LibraryItem]
+    let links: [ItemCategoryLink]
+}
+
+nonisolated private struct LibraryPublication: Sendable {
+    let revision: UInt64
+    let snapshot: LibrarySnapshot
+}
+
+nonisolated private final class LibraryPublicationClock: TransactionObserver, @unchecked Sendable {
+    private let lock = NSLock()
+    private var revision: UInt64 = 0
+    private var transactionChangedLibrary = false
+
+    func currentRevision() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return revision
+    }
+
+    func revisionAfterCommit(changedLibrary: Bool) -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return changedLibrary ? revision &+ 1 : revision
+    }
+
+    func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
+        switch eventKind.tableName {
+        case "libraryCategory", "libraryItem", "itemCategoryLink":
+            return true
+        default:
+            return false
+        }
+    }
+
+    func databaseDidChange() {
+        markLibraryChanged()
+    }
+
+    func databaseDidChange(with event: DatabaseEvent) {
+        markLibraryChanged()
+    }
+
+    func databaseDidCommit(_ db: Database) {
+        _ = db
+        lock.lock()
+        if transactionChangedLibrary {
+            revision &+= 1
+            transactionChangedLibrary = false
+        }
+        lock.unlock()
+    }
+
+    func databaseDidRollback(_ db: Database) {
+        _ = db
+        lock.lock()
+        transactionChangedLibrary = false
+        lock.unlock()
+    }
+
+    private func markLibraryChanged() {
+        lock.lock()
+        transactionChangedLibrary = true
+        lock.unlock()
+        stopObservingDatabaseChangesUntilNextTransaction()
+    }
+}
+
+nonisolated private struct LibraryPublicationOrder: Sendable {
+    private(set) var appliedRevision: UInt64 = 0
+
+    mutating func accepts(_ revision: UInt64) -> Bool {
+        guard revision >= appliedRevision else { return false }
+        appliedRevision = revision
+        return true
+    }
+}
+
 @MainActor
 public class LibraryManager: ObservableObject, LibraryManaging {
     enum DurableMutationError: Error {
@@ -19,93 +99,60 @@ public class LibraryManager: ObservableObject, LibraryManaging {
 
     @Published public var isLoading: Bool = true
 
-    private var categoryObserver: DatabaseCancellable?
-    private var itemObserver: DatabaseCancellable?
-    private var linkObserver: DatabaseCancellable?
+    private var libraryObserver: DatabaseCancellable?
     private let dbPool: DatabasePool
+    private let publicationClock = LibraryPublicationClock()
+    private var publicationOrder = LibraryPublicationOrder()
 
-    private struct DurableSnapshot {
-        let categories: [LibraryCategory]
-        let items: [LibraryItem]
-        let links: [ItemCategoryLink]
+    public convenience init(dbPool: DatabasePool) {
+        self.init(
+            dbPool: dbPool,
+            observationScheduler: DelayedMainActorValueObservationScheduler.mainActor
+        )
     }
 
-    private struct OrganizationSnapshot {
-        let categories: [LibraryCategory]
-        let links: [ItemCategoryLink]
-    }
-
-    private var nextOrganizationMutationRevision: UInt64 = 0
-    private var appliedOrganizationMutationRevision: UInt64 = 0
-
-    public init(dbPool: DatabasePool) {
+    init<Scheduler: ValueObservationMainActorScheduler>(
+        dbPool: DatabasePool,
+        observationScheduler: Scheduler
+    ) {
         self.dbPool = dbPool
-        startObservation()
+        dbPool.writeWithoutTransaction { db in
+            db.add(transactionObserver: publicationClock, extent: .observerLifetime)
+        }
+        startObservation(scheduling: observationScheduler)
     }
 
     public func reload() async throws {
+        let revision = publicationClock.currentRevision()
         let snapshot = try await dbPool.read { db in
-            (
-                try LibraryCategory.order(Column("sortOrder")).fetchAll(db),
-                try LibraryItem.order(Column("title")).fetchAll(db),
-                try ItemCategoryLink.fetchAll(db)
-            )
+            try Self.fetchLibrarySnapshot(db)
         }
-        categories = snapshot.0
-        items = snapshot.1
-        links = snapshot.2
-        isLoading = false
+        apply(LibraryPublication(revision: revision, snapshot: snapshot))
     }
 
     // MARK: - Phase 3: Reactive State Observation
-    private func startObservation() {
-        // Observe Categories
-        let catObservation = ValueObservation.tracking { db in
-            try LibraryCategory.order(Column("sortOrder")).fetchAll(db)
+    private func startObservation<Scheduler: ValueObservationMainActorScheduler>(
+        scheduling scheduler: Scheduler
+    ) {
+        let publicationClock = publicationClock
+        var observation = ValueObservation.tracking { db -> LibraryPublication in
+            LibraryPublication(
+                revision: publicationClock.currentRevision(),
+                snapshot: try Self.fetchLibrarySnapshot(db)
+            )
         }
-        categoryObserver = catObservation.start(in: dbPool, onError: { error in
-            AppLogger.database.error("Category observation error: \(error)")
-        }, onChange: { [weak self] categories in
-            Task { @MainActor in
-                self?.categories = categories
-                self?.checkLoadingState()
-            }
-        })
+        observation.requiresWriteAccess = true
 
-        // Observe Items
-        let itemObs = ValueObservation.tracking { db in
-            try LibraryItem.order(Column("title")).fetchAll(db)
-        }
-        itemObserver = itemObs.start(in: dbPool, onError: { error in
-            AppLogger.database.error("Item observation error: \(error)")
-        }, onChange: { [weak self] items in
-            Task { @MainActor in
-                self?.items = items
-                self?.checkLoadingState()
+        libraryObserver = observation.start(
+            in: dbPool,
+            scheduling: scheduler,
+            onError: { error in
+                AppLogger.database.error("Library observation error: \(error)")
+            },
+            onChange: { [weak self] publication in
+                self?.apply(publication)
             }
-        })
-
-        // Observe Links
-        let linkObs = ValueObservation.tracking { db in
-            try ItemCategoryLink.fetchAll(db)
-        }
-        linkObserver = linkObs.start(in: dbPool, onError: { error in
-            AppLogger.database.error("Link observation error: \(error)")
-        }, onChange: { [weak self] links in
-            Task { @MainActor in
-                self?.links = links
-                self?.checkLoadingState()
-            }
-        })
-    }
-
-    private var observationEmissionsReady = 0
-    private func checkLoadingState() {
-        // We wait for all 3 observations to emit at least once
-        observationEmissionsReady += 1
-        if observationEmissionsReady >= 3 && isLoading {
-            isLoading = false
-        }
+        )
     }
 
     // MARK: - Legacy Plugin Toggles Compatibility
@@ -237,15 +284,22 @@ public class LibraryManager: ObservableObject, LibraryManaging {
 
     func removeItemDurably(id: String, pluginId: String) async throws {
         let possibleIDs = [id, "\(pluginId)_\(id)"]
-        let snapshot = try await dbPool.write { db in
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
+            var removedItem = false
             for possibleID in possibleIDs {
                 guard let existing = try LibraryItem.fetchOne(db, key: possibleID),
                       existing.pluginId == pluginId else { continue }
                 try existing.delete(db)
+                removedItem = true
             }
-            return try Self.fetchDurableSnapshot(db)
+            return try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: removedItem
+            )
         }
-        apply(snapshot)
+        apply(publication)
     }
 
     private func saveItemDurably(
@@ -253,6 +307,7 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         item: LibraryItem
     ) async throws -> String {
         let legacyID = "\(item.pluginId)_\(sourceItemID)"
+        let publicationClock = publicationClock
         let mutation = try await dbPool.write { db in
             let sourceItem = try LibraryItem.fetchOne(db, key: sourceItemID)
             let legacyItem = try LibraryItem.fetchOne(db, key: legacyID)
@@ -280,7 +335,12 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     ).insert(db)
                 }
             }
-            return (try Self.fetchDurableSnapshot(db), storedItem.id)
+            let publication = try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: ownedItem == nil
+            )
+            return (publication, storedItem.id)
         }
         apply(mutation.0)
         return mutation.1
@@ -306,81 +366,81 @@ public class LibraryManager: ObservableObject, LibraryManaging {
         )
     }
 
-    nonisolated private static func fetchDurableSnapshot(
+    nonisolated private static func fetchLibrarySnapshot(
         _ db: Database
-    ) throws -> DurableSnapshot {
-        DurableSnapshot(
+    ) throws -> LibrarySnapshot {
+        LibrarySnapshot(
             categories: try LibraryCategory.order(Column("sortOrder")).fetchAll(db),
             items: try LibraryItem.order(Column("title")).fetchAll(db),
             links: try ItemCategoryLink.fetchAll(db)
         )
     }
 
-    nonisolated private static func fetchOrganizationSnapshot(
-        _ db: Database
-    ) throws -> OrganizationSnapshot {
-        OrganizationSnapshot(
-            categories: try LibraryCategory.order(Column("sortOrder")).fetchAll(db),
-            links: try ItemCategoryLink.fetchAll(db)
+    nonisolated private static func makePublication(
+        _ db: Database,
+        clock: LibraryPublicationClock,
+        changedLibrary: Bool
+    ) throws -> LibraryPublication {
+        LibraryPublication(
+            revision: clock.revisionAfterCommit(changedLibrary: changedLibrary),
+            snapshot: try fetchLibrarySnapshot(db)
         )
     }
 
-    private func apply(_ snapshot: DurableSnapshot) {
-        categories = snapshot.categories
-        items = snapshot.items
-        links = snapshot.links
-        isLoading = false
-    }
-
-    private func beginOrganizationMutation() -> UInt64 {
-        nextOrganizationMutationRevision &+= 1
-        return nextOrganizationMutationRevision
-    }
-
-    private func apply(
-        _ snapshot: OrganizationSnapshot,
-        mutationRevision: UInt64
-    ) {
-        guard mutationRevision > appliedOrganizationMutationRevision else { return }
-        appliedOrganizationMutationRevision = mutationRevision
-        categories = snapshot.categories
-        links = snapshot.links
+    private func apply(_ publication: LibraryPublication) {
+        guard publicationOrder.accepts(publication.revision) else { return }
+        categories = publication.snapshot.categories
+        items = publication.snapshot.items
+        links = publication.snapshot.links
         isLoading = false
     }
 
     // MARK: - Category CRUD
 
     public func createCategory(name: String) async throws -> String {
-        let mutationRevision = beginOrganizationMutation()
+        let publicationClock = publicationClock
         let result = try await dbPool.write { db in
             let maxOrder = try Int.fetchOne(db, sql: "SELECT MAX(sortOrder) FROM libraryCategory") ?? 0
             let newCat = LibraryCategory(name: name, sortOrder: maxOrder + 1)
             try newCat.insert(db)
-            return (newCat.id, try Self.fetchOrganizationSnapshot(db))
+            let publication = try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: true
+            )
+            return (newCat.id, publication)
         }
-        apply(result.1, mutationRevision: mutationRevision)
+        apply(result.1)
         return result.0
     }
 
     public func renameCategory(id: String, to name: String) async throws {
-        let mutationRevision = beginOrganizationMutation()
-        let snapshot = try await dbPool.write { db in
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
             guard var category = try LibraryCategory.fetchOne(db, key: id) else {
                 throw LibraryCategory.recordNotFound(key: ["id": id])
             }
             category.name = name
             try category.update(db)
-            return try Self.fetchOrganizationSnapshot(db)
+            return try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: true
+            )
         }
-        apply(snapshot, mutationRevision: mutationRevision)
+        apply(publication)
     }
 
     func deleteCategoryDurably(id: String) async throws {
-        let mutationRevision = beginOrganizationMutation()
-        let snapshot = try await dbPool.write { db in
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
             guard let category = try LibraryCategory.fetchOne(db, key: id),
                   !category.isSystemCategory else {
-                return try Self.fetchOrganizationSnapshot(db)
+                return try Self.makePublication(
+                    db,
+                    clock: publicationClock,
+                    changedLibrary: false
+                )
             }
             try category.delete(db)
 
@@ -396,14 +456,18 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     try ItemCategoryLink(itemId: item.id, categoryId: systemID).insert(db)
                 }
             }
-            return try Self.fetchOrganizationSnapshot(db)
+            return try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: true
+            )
         }
-        apply(snapshot, mutationRevision: mutationRevision)
+        apply(publication)
     }
 
     func toggleCategoryDurably(forItemID itemID: String, categoryID: String) async throws {
-        let mutationRevision = beginOrganizationMutation()
-        let snapshot = try await dbPool.write { db in
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
             let systemCategory = try LibraryCategory
                 .filter(Column("isSystemCategory") == true)
                 .fetchOne(db)
@@ -428,14 +492,18 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                     try uncategorizedLink.delete(db)
                 }
             }
-            return try Self.fetchOrganizationSnapshot(db)
+            return try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: true
+            )
         }
-        apply(snapshot, mutationRevision: mutationRevision)
+        apply(publication)
     }
 
     func reorderCategoriesDurably(userCategoryIDs: [String]) async throws {
-        let mutationRevision = beginOrganizationMutation()
-        let snapshot = try await dbPool.write { db in
+        let publicationClock = publicationClock
+        let publication = try await dbPool.write { db in
             let current = try LibraryCategory.order(Column("sortOrder")).fetchAll(db)
             let systemCategories = current.filter(\.isSystemCategory)
             let userCategories = current.filter { !$0.isSystemCategory }
@@ -451,13 +519,17 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                 updated.sortOrder = index
                 try updated.update(db)
             }
-            return try Self.fetchOrganizationSnapshot(db)
+            return try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: !ordered.isEmpty
+            )
         }
-        apply(snapshot, mutationRevision: mutationRevision)
+        apply(publication)
     }
 
     func createCategoryAndAssignDurably(name: String, itemID: String) async throws -> String {
-        let mutationRevision = beginOrganizationMutation()
+        let publicationClock = publicationClock
         let result = try await dbPool.write { db in
             let maxOrder = try Int.fetchOne(
                 db,
@@ -475,9 +547,14 @@ public class LibraryManager: ObservableObject, LibraryManaging {
                ) {
                 try uncategorizedLink.delete(db)
             }
-            return (category.id, try Self.fetchOrganizationSnapshot(db))
+            let publication = try Self.makePublication(
+                db,
+                clock: publicationClock,
+                changedLibrary: true
+            )
+            return (category.id, publication)
         }
-        apply(result.1, mutationRevision: mutationRevision)
+        apply(result.1)
         return result.0
     }
 
