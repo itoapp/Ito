@@ -7,7 +7,42 @@ import ito_runner
 final class MediaDetailLibraryBoundaryTests: XCTestCase {
     func testDurableSaveCommitsBeforeReturningSuccessAndPublishesSnapshot() async throws {
         let database = try TestDatabase()
-        let manager = LibraryManager(dbPool: database.dbPool)
+        defer { database.cleanup() }
+        let uncategorized = LibraryCategory(
+            id: "uncategorized",
+            name: "Uncategorized",
+            sortOrder: 0,
+            isSystemCategory: true,
+            createdAt: Date(timeIntervalSince1970: 0)
+        )
+        let preSaveItem = LibraryItem(
+            id: "pre-save",
+            title: "Pre-save",
+            coverUrl: nil,
+            pluginId: "plugin.test",
+            isAnime: false,
+            pluginType: .manga,
+            rawPayload: Data(),
+            anilistId: nil
+        )
+        try await database.dbPool.write { db in
+            try uncategorized.insert(db)
+            try preSaveItem.insert(db)
+        }
+        let scheduler = ManualLibraryObservationScheduler()
+        let manager = LibraryManager(
+            dbPool: database.dbPool,
+            observationScheduler: scheduler
+        )
+        XCTAssertEqual(manager.categories, [uncategorized])
+        XCTAssertEqual(manager.items, [preSaveItem])
+        XCTAssertTrue(manager.links.isEmpty)
+        try await database.dbPool.write { db in
+            try preSaveItem.delete(db)
+        }
+        let stalePreSavePublication = await scheduler.nextPublication()
+        let preSaveCount = try await database.dbPool.read(LibraryItem.fetchCount)
+        XCTAssertEqual(preSaveCount, 0)
         let media = Manga(key: "m1", title: "Manga")
 
         let durableItemID = try await manager.saveMangaDurably(
@@ -21,6 +56,13 @@ final class MediaDetailLibraryBoundaryTests: XCTestCase {
         }
         XCTAssertEqual(stored?.pluginId, "plugin.test")
         XCTAssertTrue(manager.items.contains { $0.id == "m1" && $0.pluginId == "plugin.test" })
+        XCTAssertEqual(manager.links.map(\.itemId), ["m1"])
+        XCTAssertEqual(manager.links.map(\.categoryId), [uncategorized.id])
+        stalePreSavePublication.run()
+        XCTAssertTrue(manager.items.contains { $0.id == "m1" && $0.pluginId == "plugin.test" })
+        XCTAssertEqual(manager.categories, [uncategorized])
+        XCTAssertEqual(manager.links.map(\.itemId), ["m1"])
+        XCTAssertEqual(manager.links.map(\.categoryId), [uncategorized.id])
         XCTAssertTrue(
             manager.state.isSaved(
                 media: MediaIdentity(pluginId: "plugin.test", itemId: "m1"),
