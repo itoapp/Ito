@@ -30,6 +30,7 @@ struct AppViewFactory {
         trackingDependencies: PreparedTrackingDependencies,
         trackingMessagePresenter: any TrackingMessagePresenting,
         mediaDetailDependencies: PreparedMediaDetailDependencies?,
+        mangaReaderDependencies: PreparedMangaReaderDependencies,
         mediaDetailMessagePresenter: any MediaDetailMessagePresenting,
         libraryDependencies: PreparedLibraryDependencies,
         categoryHistoryDependencies: PreparedCategoryHistoryDependencies,
@@ -62,6 +63,7 @@ struct AppViewFactory {
         let mediaDetailViewFactory = mediaDetailDependencies.map {
             MediaDetailViewFactory(
                 dependencies: $0,
+                mangaReaderDependencies: mangaReaderDependencies,
                 messagePresenter: mediaDetailMessagePresenter,
                 presentationLogger: presentationLogger,
                 trackingViewFactory: trackingViewFactory,

@@ -3,15 +3,23 @@ import ito_runner
 
 @MainActor
 struct MediaDetailReaderViewFactory {
+    private let mangaReaderDependencies: PreparedMangaReaderDependencies
+
+    init(mangaReaderDependencies: PreparedMangaReaderDependencies) {
+        self.mangaReaderDependencies = mangaReaderDependencies
+    }
+
     @ViewBuilder
     func destination(for destination: MediaDetailReaderDestination) -> some View {
         switch destination {
         case .manga(_, let runner, let pluginID, let media, let chapter):
             ReaderView(
-                runner: runner,
-                pluginId: pluginID,
-                manga: media,
-                currentChapter: chapter
+                viewModel: makeMangaViewModel(
+                    runner: runner,
+                    pluginID: pluginID,
+                    manga: media,
+                    chapter: chapter
+                )
             )
         case .anime(_, let runner, let pluginID, let media, let episode):
             VideoPlayerView(
@@ -29,6 +37,21 @@ struct MediaDetailReaderViewFactory {
             )
         }
     }
+
+    func makeMangaViewModel(
+        runner: ItoRunner,
+        pluginID: String,
+        manga: Manga,
+        chapter: Manga.Chapter
+    ) -> MangaReaderViewModel {
+        MangaReaderViewModel(
+            pageLoader: ItoRunnerMangaPageLoader(runner: runner),
+            pluginID: pluginID,
+            manga: manga,
+            initialChapter: chapter,
+            dependencies: mangaReaderDependencies
+        )
+    }
 }
 
 @MainActor
@@ -38,10 +61,11 @@ struct MediaDetailViewFactory {
     private let presentationLogger: any PresentationEventLogging
     private let categoryHistoryViewFactory: CategoryHistoryViewFactory
     let trackingViewFactory: TrackingViewFactory
-    let readerViewFactory = MediaDetailReaderViewFactory()
+    let readerViewFactory: MediaDetailReaderViewFactory
 
     init(
         dependencies: PreparedMediaDetailDependencies,
+        mangaReaderDependencies: PreparedMangaReaderDependencies,
         messagePresenter: any MediaDetailMessagePresenting,
         presentationLogger: any PresentationEventLogging,
         trackingViewFactory: TrackingViewFactory,
@@ -52,6 +76,9 @@ struct MediaDetailViewFactory {
         self.presentationLogger = presentationLogger
         self.trackingViewFactory = trackingViewFactory
         self.categoryHistoryViewFactory = categoryHistoryViewFactory
+        readerViewFactory = MediaDetailReaderViewFactory(
+            mangaReaderDependencies: mangaReaderDependencies
+        )
     }
 
     func makeMangaView(

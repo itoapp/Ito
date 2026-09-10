@@ -1,107 +1,65 @@
-import OSLog
 import SwiftUI
 import NukeUI
 import Nuke
 import ito_runner
 
-// MARK: - Models
-
-struct ChapterSegment: Identifiable, Equatable {
-    let id = UUID()
-    let chapter: Manga.Chapter
-    let pages: [Page]
-
-    static func == (lhs: ChapterSegment, rhs: ChapterSegment) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
-struct FlatPage: Identifiable {
-    let id: String
-    let segmentIndex: Int
-    let chapter: Manga.Chapter
-    let page: Page
-    let globalIndex: Int
-}
-
 // MARK: - ReaderView
 
 struct ReaderView: View {
-    let runner: ItoRunner
-    let pluginId: String
-    let manga: Manga
-    @State var currentChapter: Manga.Chapter
-
-    @EnvironmentObject var progressManager: ReadProgressManager
-    @EnvironmentObject var trackerManager: TrackerManager
-    @EnvironmentObject var settingsStore: AppSettingsStore
-    @EnvironmentObject var discordRPCManager: DiscordRPCManager
-    @EnvironmentObject var historyManager: HistoryManager
-    @EnvironmentObject var pluginManager: PluginManager
-
-    private var mediaIdentity: MediaIdentity {
-        MediaIdentity(pluginId: pluginId, itemId: manga.key)
-    }
-
-    // Shared state
-    @State private var isLoaded = false
-    @State private var errorMessage: String?
-    @State private var markedChapterKeys: Set<String> = []
+    @StateObject private var viewModel: MangaReaderViewModel
     @State private var showSettings = false
-    @State private var overrideViewer: Manga.Viewer = .Default
     @State private var showUI = true
-    private var preloadImageCount: Int {
-        settingsStore.preloadImageCount.rawValue
+
+    @Environment(\.dismiss) private var dismiss
+
+    init(viewModel: MangaReaderViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
-
-    // --- Paged mode state (RTL/LTR) ---
-    @State private var pagedPages: [Page] = []
-    @State private var pagedIndex: Int = 0
-    @State private var prefetchedChapters: [String: [Page]] = [:]
-
-    // --- Continuous mode state (Vertical/Webtoon) ---
-    @State private var segments: [ChapterSegment] = []
-    @State private var continuousPageIndex: Int = 0
-    @State private var scrollTarget: Int?
-    @State private var loadingNextChapter = false
-    @State private var loadingPrevChapter = false
-
-    // Prefetcher
-    @State private var imagePrefetcher = ImagePrefetcher(
-        pipeline: ImagePipeline.shared,
-        destination: .diskCache,
-        maxConcurrentRequestCount: 2
-    )
-
-    @Environment(\.dismiss) var dismiss
-
-    private var isPaged: Bool {
-        switch activeViewer {
-        case .Ltr, .Rtl, .Default: return true
-        case .Vertical, .Webtoon: return false
-        }
-    }
-
-    private var activeViewer: Manga.Viewer {
-        if overrideViewer != .Default { return overrideViewer }
-        if manga.viewer != .Default { return manga.viewer }
-        return .Rtl
-    }
-
-    // MARK: Body
 
     var body: some View {
+        GeometryReader { geometry in
+            readerBody(
+                safeAreaTop: geometry.safeAreaInsets.top > 0
+                    ? geometry.safeAreaInsets.top
+                    : 44,
+                safeAreaBottom: geometry.safeAreaInsets.bottom > 0
+                    ? geometry.safeAreaInsets.bottom
+                    : 34
+            )
+        }
+        .navigationBarHidden(true)
+        .statusBarHidden(!showUI)
+        .sheet(isPresented: $showSettings) {
+            ReaderSettingsView(
+                viewer: Binding(
+                    get: { viewModel.overrideViewer },
+                    set: { viewModel.setViewerOverride($0) }
+                ),
+                defaultViewer: viewModel.manga.viewer,
+                preloadCount: Binding(
+                    get: { viewModel.preloadImageCount },
+                    set: { viewModel.setPreloadImageCount($0) }
+                )
+            )
+        }
+        .task { viewModel.start() }
+        .onAppear { viewModel.appear() }
+        .onDisappear { viewModel.disappear() }
+    }
+
+    private func readerBody(safeAreaTop: CGFloat, safeAreaBottom: CGFloat) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if !isLoaded && errorMessage == nil {
+            switch viewModel.loadPhase {
+            case .idle, .loading:
                 ProgressView("Loading Chapter...")
                     .foregroundColor(.white)
-            } else if let error = errorMessage {
+            case .failure(let error):
                 Text("Error: \(error)")
                     .foregroundColor(.red)
                     .padding()
-            } else {
+            case .content:
                 readComponent
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -114,8 +72,9 @@ struct ReaderView: View {
             if showUI {
                 VStack {
                     ReaderHeaderView(
-                        title: manga.title,
-                        chapterTitle: currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)",
+                        title: viewModel.manga.title,
+                        chapterTitle: viewModel.currentChapter.title
+                            ?? "Chapter \(viewModel.currentChapter.chapter ?? 0)",
                         safeAreaTop: safeAreaTop,
                         onDismiss: { dismiss() }
                     )
@@ -123,16 +82,23 @@ struct ReaderView: View {
                     Spacer()
 
                     ReaderFooterView(
-                        displayIndex: isPaged ? pagedIndex : continuousPageIndex,
-                        displayTotal: isPaged ? pagedPages.count : flatPages.count,
-                        hasPrev: chapterBefore(currentChapter) != nil,
-                        hasNext: chapterAfter(currentChapter) != nil,
-                        overrideViewer: $overrideViewer,
+                        displayIndex: viewModel.isPaged
+                            ? viewModel.pagedIndex
+                            : viewModel.continuousPageIndex,
+                        displayTotal: viewModel.isPaged
+                            ? viewModel.pagedPages.count
+                            : viewModel.flatPages.count,
+                        hasPrev: viewModel.chapterBefore(viewModel.currentChapter) != nil,
+                        hasNext: viewModel.chapterAfter(viewModel.currentChapter) != nil,
+                        overrideViewer: Binding(
+                            get: { viewModel.overrideViewer },
+                            set: { viewModel.setViewerOverride($0) }
+                        ),
                         safeAreaBottom: safeAreaBottom,
-                        onPrevChapter: { goToPreviousChapter() },
-                        onNextChapter: { goToNextChapter() },
-                        onPrevPage: { prevPage() },
-                        onNextPage: { nextPage() },
+                        onPrevChapter: { viewModel.goToPreviousChapter() },
+                        onNextChapter: { viewModel.goToNextChapter() },
+                        onPrevPage: { viewModel.previousPage() },
+                        onNextPage: { viewModel.nextPage() },
                         onSettings: { showSettings.toggle() }
                     )
                 }
@@ -140,104 +106,13 @@ struct ReaderView: View {
                 .ignoresSafeArea(edges: .bottom)
             }
         }
-        .navigationBarHidden(true)
-        .statusBarHidden(!showUI)
-        .sheet(isPresented: $showSettings) {
-            ReaderSettingsView(
-                viewer: $overrideViewer,
-                defaultViewer: manga.viewer,
-                preloadCount: Binding(
-                    get: { settingsStore.preloadImageCount.rawValue },
-                    set: { value in
-                        guard let preference = ImagePreloadCountPreference(rawValue: value) else { return }
-                        Task {
-                            try? await settingsStore.set(
-                                preference,
-                                for: AppPreferenceCatalog.preloadImageCount
-                            )
-                        }
-                    }
-                )
-            )
-        }
-        .task { await loadInitialChapter() }
-        .onAppear {
-            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
-            let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
-            let scanlator = currentChapter.scanlator ?? "Official"
-
-            discordRPCManager.setActivity(
-                details: manga.title,
-                state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapterNumber ?? 0)")",
-                activityType: 3,
-                detailsUrl: url,
-                largeImageText: "Reading from \(scanlator) at \(pluginName)",
-                imageUrl: manga.cover,
-                resetTimer: true
-            )
-        }
-        .onChange(of: currentChapter.key) { _ in
-            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
-            let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
-            let scanlator = currentChapter.scanlator ?? "Official"
-
-            discordRPCManager.setActivity(
-                details: manga.title,
-                state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapterNumber ?? 0)")",
-                activityType: 3,
-                detailsUrl: url,
-                largeImageText: "Reading from \(scanlator) at \(pluginName)",
-                imageUrl: manga.cover,
-                resetTimer: false
-            )
-        }
-        .onDisappear {
-            discordRPCManager.clearActivity()
-        }
-        .onDisappear { imagePrefetcher.stopPrefetching() }
-        .onChange(of: isPaged) { newIsPaged in
-            if newIsPaged {
-                if let seg = segments.first(where: { $0.chapter.key == currentChapter.key }) {
-                    pagedPages = seg.pages
-                    let allPages = flatPages
-                    if continuousPageIndex < allPages.count {
-                        let fp = allPages[continuousPageIndex]
-                        if fp.chapter.key == currentChapter.key {
-                            pagedIndex = Int(fp.page.index)
-                        } else {
-                            pagedIndex = Int(pagedPages.first?.index ?? 0)
-                        }
-                    } else {
-                        pagedIndex = Int(pagedPages.first?.index ?? 0)
-                    }
-                } else {
-                    isLoaded = false
-                    Task { await loadInitialChapter() }
-                }
-            } else {
-                if !pagedPages.isEmpty {
-                    segments = [ChapterSegment(chapter: currentChapter, pages: pagedPages)]
-                    if let arrIndex = pagedPages.firstIndex(where: { Int($0.index) == pagedIndex }) {
-                        continuousPageIndex = arrIndex
-                        scrollTarget = arrIndex
-                    } else {
-                        continuousPageIndex = 0
-                        scrollTarget = 0
-                    }
-                } else {
-                    isLoaded = false
-                    Task { await loadInitialChapter() }
-                }
-            }
-        }
     }
-    // MARK: - Reader Components
+
+    // MARK: - Reader components
 
     @ViewBuilder
     private var readComponent: some View {
-        if isPaged {
+        if viewModel.isPaged {
             pagedReader
         } else {
             continuousReader
@@ -247,72 +122,54 @@ struct ReaderView: View {
     // MARK: - Paged Reader (RTL/LTR)
 
     private var pagedReader: some View {
-        TabView(selection: $pagedIndex) {
-            if let prev = chapterBefore(currentChapter) {
-                loadingChapterView(chapter: prev, isNext: false, isButton: true)
+        TabView(
+            selection: Binding(
+                get: { viewModel.pagedIndex },
+                set: { viewModel.setPagedIndex($0) }
+            )
+        ) {
+            if let previous = viewModel.chapterBefore(viewModel.currentChapter) {
+                loadingChapterView(chapter: previous, isNext: false, isButton: true)
                     .tag(-1)
             }
 
-            ForEach(pagedPages, id: \.index) { page in
+            ForEach(viewModel.pagedPages, id: \.index) { page in
                 pageImage(for: page)
                     .tag(Int(page.index))
             }
 
-            if let next = chapterAfter(currentChapter) {
+            if let next = viewModel.chapterAfter(viewModel.currentChapter) {
                 loadingChapterView(chapter: next, isNext: true, isButton: true)
-                    .tag(pagedPages.count)
+                    .tag(viewModel.pagedPages.count)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .id(currentChapter.key) // <--- ADD THIS LINE HERE
+        .id(viewModel.currentChapter.key)
         .environment(
             \.layoutDirection,
-            (activeViewer == .Rtl || activeViewer == .Default) ? .rightToLeft : .leftToRight
+            (viewModel.activeViewer == .Rtl || viewModel.activeViewer == .Default)
+                ? .rightToLeft
+                : .leftToRight
         )
-        .onChange(of: pagedIndex) { newIndex in
-            if newIndex == pagedPages.count, let next = chapterAfter(currentChapter) {
-                pagedGoToChapter(next)
-            } else if newIndex == -1, let prev = chapterBefore(currentChapter) {
-                pagedGoToChapter(prev)
-            }
-
-            prefetchPagedImages(around: newIndex)
-        }
     }
 
     // MARK: - Continuous Reader (Vertical/Webtoon)
 
-    private var flatPages: [FlatPage] {
-        var result: [FlatPage] = []
-        var globalIdx = 0
-        for (segIdx, segment) in segments.enumerated() {
-            for page in segment.pages {
-                result.append(FlatPage(
-                    id: "\(segment.chapter.key)_\(page.index)",
-                    segmentIndex: segIdx,
-                    chapter: segment.chapter,
-                    page: page,
-                    globalIndex: globalIdx
-                ))
-                globalIdx += 1
-            }
-        }
-        return result
-    }
-
     private var continuousReader: some View {
-        let allPages = flatPages
+        let allPages = viewModel.flatPages
 
         return ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                LazyVStack(spacing: activeViewer == .Webtoon ? 0 : 8) {
-                    if let prev = previousChapterForFirstSegment {
-                        Button(action: {
-                            Task { await prependPreviousChapter(prev) }
-                        }) {
-                            loadingChapterView(chapter: prev, isNext: false, isButton: !loadingPrevChapter)
+                LazyVStack(spacing: viewModel.activeViewer == .Webtoon ? 0 : 8) {
+                    if let previous = viewModel.previousChapterForFirstSegment {
+                        Button(action: { viewModel.prependPreviousChapter() }) {
+                            loadingChapterView(
+                                chapter: previous,
+                                isNext: false,
+                                isButton: !viewModel.loadingPrevChapter
+                            )
                         }
-                        .disabled(loadingPrevChapter)
+                        .disabled(viewModel.loadingPrevChapter)
                     }
 
                     ForEach(allPages) { flatPage in
@@ -324,41 +181,31 @@ struct ReaderView: View {
                             pageImage(for: flatPage.page)
                                 .id(flatPage.globalIndex)
                                 .onAppear {
-                                    continuousPageIndex = flatPage.globalIndex
-
-                                    if flatPage.chapter.key != currentChapter.key {
-                                        currentChapter = flatPage.chapter
-                                        markChapterRead(flatPage.chapter)
-                                    }
-
-                                    prefetchContinuousImages(around: flatPage.globalIndex, allPages: allPages)
+                                    viewModel.continuousPageAppeared(flatPage)
                                 }
                         }
                     }
 
-                    if loadingNextChapter {
+                    if viewModel.loadingNextChapter {
                         ProgressView()
                             .tint(.white)
                             .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if let next = nextChapterForLastSegment {
+                    } else if viewModel.nextChapterForLastSegment != nil {
                         Color.clear
                             .frame(height: 1)
-                            .onAppear {
-                                Task { await appendNextChapter(next) }
-                            }
+                            .onAppear { viewModel.appendNextChapter() }
                     }
                 }
             }
-            .onChange(of: scrollTarget) { target in
-                if let target = target {
-                    withAnimation { proxy.scrollTo(target, anchor: .top) }
-                    scrollTarget = nil
-                }
+            .onChange(of: viewModel.scrollTarget) { target in
+                guard let target else { return }
+                withAnimation { proxy.scrollTo(target, anchor: .top) }
+                viewModel.consumeScrollTarget(target)
             }
         }
     }
 
-    // MARK: - Shared Views
+    // MARK: - Shared views
 
     private func chapterDivider(for chapter: Manga.Chapter) -> some View {
         VStack(spacing: 14) {
@@ -388,8 +235,11 @@ struct ReaderView: View {
     }
 
     @ViewBuilder
-    private func loadingChapterView(chapter: Manga.Chapter, isNext: Bool, isButton: Bool)
-        -> some View {
+    private func loadingChapterView(
+        chapter: Manga.Chapter,
+        isNext: Bool,
+        isButton: Bool
+    ) -> some View {
         VStack(spacing: 16) {
             if !isButton {
                 ProgressView().tint(.white)
@@ -416,8 +266,8 @@ struct ReaderView: View {
     @ViewBuilder
     private func pageImage(for page: Page) -> some View {
         switch page.content {
-        case .url(let urlStr):
-            MangaImage(urlStr: urlStr, headers: page.headers)
+        case .url(let urlString):
+            MangaImage(urlStr: urlString, headers: page.headers)
         case .text(let text):
             Text(text)
                 .foregroundColor(.white)
@@ -426,292 +276,6 @@ struct ReaderView: View {
         }
     }
 }
-
-// MARK: - Data Loading
-
-extension ReaderView {
-
-    func loadInitialChapter() async {
-        guard !isLoaded else { return }
-        do {
-            let pageResult = try await runner.getPageList(manga: manga, chapter: currentChapter)
-            let sorted = ReaderPageOrdering.ascending(pageResult)
-            await MainActor.run {
-                if isPaged {
-                    pagedPages = sorted
-                    pagedIndex = 0
-                } else {
-                    segments = [ChapterSegment(chapter: currentChapter, pages: sorted)]
-                    continuousPageIndex = 0
-                }
-                isLoaded = true
-                markChapterRead(currentChapter)
-            }
-
-            if isPaged {
-                await prefetchAdjacentChapters()
-            }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-                self.isLoaded = true
-            }
-        }
-    }
-
-    func prefetchAdjacentChapters() async {
-        if let next = chapterAfter(currentChapter), prefetchedChapters[next.key] == nil {
-            do {
-                let pages = try await runner.getPageList(manga: manga, chapter: next)
-                let sorted = ReaderPageOrdering.ascending(pages)
-                await MainActor.run { prefetchedChapters[next.key] = sorted }
-            } catch {
-                AppLogger.ui.error("[Reader] Failed to pre-fetch next chapter: \(error)")
-            }
-        }
-        if let prev = chapterBefore(currentChapter), prefetchedChapters[prev.key] == nil {
-            do {
-                let pages = try await runner.getPageList(manga: manga, chapter: prev)
-                let sorted = ReaderPageOrdering.ascending(pages)
-                await MainActor.run { prefetchedChapters[prev.key] = sorted }
-            } catch {
-                AppLogger.ui.error("[Reader] Failed to pre-fetch previous chapter: \(error)")
-            }
-        }
-    }
-
-    func appendNextChapter(_ chapter: Manga.Chapter) async {
-        guard !loadingNextChapter else { return }
-        await MainActor.run { loadingNextChapter = true }
-
-        do {
-            let pageResult = try await runner.getPageList(manga: manga, chapter: chapter)
-            await MainActor.run {
-                let sorted = ReaderPageOrdering.ascending(pageResult)
-                segments.append(ChapterSegment(chapter: chapter, pages: sorted))
-                loadingNextChapter = false
-            }
-        } catch {
-            await MainActor.run { loadingNextChapter = false }
-            AppLogger.ui.error("[Reader] Failed to load next chapter: \(error)")
-        }
-    }
-
-    func prependPreviousChapter(_ chapter: Manga.Chapter) async {
-        guard !loadingPrevChapter else { return }
-        await MainActor.run { loadingPrevChapter = true }
-
-        do {
-            let pageResult = try await runner.getPageList(manga: manga, chapter: chapter)
-            await MainActor.run {
-                let sorted = ReaderPageOrdering.ascending(pageResult)
-                segments.insert(ChapterSegment(chapter: chapter, pages: sorted), at: 0)
-                continuousPageIndex += sorted.count
-                loadingPrevChapter = false
-            }
-        } catch {
-            await MainActor.run { loadingPrevChapter = false }
-            AppLogger.ui.error("[Reader] Failed to load previous chapter: \(error)")
-        }
-    }
-
-    func markChapterRead(_ chapter: Manga.Chapter) {
-        let chapterTitleStr = chapter.title ?? chapter.key
-        let plan = ReaderSessionEffectPlan.chapterRead(
-            chapterNumber: chapter.chapter,
-            titleOrKey: chapterTitleStr,
-            alreadyMarked: markedChapterKeys.contains(chapter.key)
-        )
-
-        for effect in plan.synchronousEffects {
-            if case .recordHistory = effect {
-                historyManager.addManga(
-                    manga,
-                    chapterKey: chapter.key,
-                    chapterTitle: chapterTitleStr,
-                    pluginId: pluginId
-                )
-            }
-        }
-
-        guard !plan.asynchronousEffects.isEmpty else { return }
-        markedChapterKeys.insert(chapter.key)
-        Task {
-            for effect in plan.asynchronousEffects {
-                switch effect {
-                case .recordHistory:
-                    break
-                case .markLocalProgress:
-                    try await progressManager.markAsRead(
-                        media: mediaIdentity,
-                        chapterId: chapter.key,
-                        chapterNum: chapter.chapter
-                    )
-                case .updateTracker(let progress):
-                    await trackerManager.updateProgress(
-                        media: mediaIdentity,
-                        progress: progress
-                    )
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Navigation
-
-extension ReaderView {
-
-    func prevPage() {
-        if isPaged {
-            guard pagedIndex > 0 else { return }
-            pagedIndex -= 1
-        } else {
-            guard continuousPageIndex > 0 else { return }
-            continuousPageIndex -= 1
-            scrollTarget = continuousPageIndex
-        }
-    }
-
-    func nextPage() {
-        if isPaged {
-            guard pagedIndex < pagedPages.count - 1 else { return }
-            pagedIndex += 1
-        } else {
-            let total = flatPages.count
-            guard continuousPageIndex < total - 1 else { return }
-            continuousPageIndex += 1
-            scrollTarget = continuousPageIndex
-        }
-    }
-
-    func goToNextChapter() {
-        guard let next = chapterAfter(currentChapter) else { return }
-        if isPaged {
-            pagedGoToChapter(next)
-        } else {
-            continuousGoToChapter(next)
-        }
-    }
-
-    func goToPreviousChapter() {
-        guard let prev = chapterBefore(currentChapter) else { return }
-        if isPaged {
-            pagedGoToChapter(prev)
-        } else {
-            continuousGoToChapter(prev)
-        }
-    }
-
-    func continuousGoToChapter(_ chapter: Manga.Chapter) {
-        currentChapter = chapter
-        segments = []
-        continuousPageIndex = 0
-        scrollTarget = nil
-        isLoaded = false
-        Task { await loadInitialChapter() }
-    }
-
-    func pagedGoToChapter(_ chapter: Manga.Chapter) {
-        if let cached = prefetchedChapters[chapter.key] {
-            currentChapter = chapter
-            pagedPages = cached
-            pagedIndex = 0
-            markChapterRead(chapter)
-            Task { await prefetchAdjacentChapters() }
-        } else {
-            currentChapter = chapter
-            pagedPages = []
-            pagedIndex = 0
-            isLoaded = false
-            Task { await loadInitialChapter() }
-        }
-    }
-
-    // MARK: Image Preloading
-
-    func prefetchPagedImages(around index: Int) {
-        guard preloadImageCount > 0, !pagedPages.isEmpty else { return }
-        let start = index + 1
-        let end = min(index + preloadImageCount, pagedPages.count - 1)
-        guard start <= end else { return }
-        prefetchPages(Array(pagedPages[start...end]))
-    }
-
-    func prefetchContinuousImages(around globalIndex: Int, allPages: [FlatPage]) {
-        guard preloadImageCount > 0, !allPages.isEmpty else { return }
-        let start = globalIndex + 1
-        let end = min(globalIndex + preloadImageCount, allPages.count - 1)
-        guard start <= end else { return }
-        prefetchPages(allPages[start...end].map { $0.page })
-    }
-
-    private func prefetchPages(_ pages: [Page]) {
-        var requests: [ImageRequest] = []
-        for page in pages {
-            if case .url(let urlStr) = page.content, let url = URL(string: urlStr) {
-                var urlRequest = URLRequest(url: url)
-                if let headers = page.headers, !headers.isEmpty {
-                    for (key, value) in headers {
-                        urlRequest.setValue(value, forHTTPHeaderField: key)
-                    }
-                } else {
-                    urlRequest.setValue(
-                        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-                        forHTTPHeaderField: "User-Agent"
-                    )
-                    urlRequest.setValue(urlStr, forHTTPHeaderField: "Referer")
-                }
-                requests.append(ImageRequest(urlRequest: urlRequest))
-            }
-        }
-        if !requests.isEmpty {
-            imagePrefetcher.startPrefetching(with: requests)
-        }
-    }
-}
-
-// MARK: - Chapter Navigation Helpers
-
-extension ReaderView {
-
-    var nextChapterForLastSegment: Manga.Chapter? {
-        guard let last = segments.last else { return nil }
-        return chapterAfter(last.chapter)
-    }
-
-    var previousChapterForFirstSegment: Manga.Chapter? {
-        guard let first = segments.first else { return nil }
-        return chapterBefore(first.chapter)
-    }
-
-    func chapterAfter(_ chapter: Manga.Chapter) -> Manga.Chapter? {
-        ReaderChapterOrdering.mangaChapter(
-            after: chapter,
-            in: manga.chapters,
-            preferredScanlator: currentChapter.scanlator
-        )
-    }
-
-    func chapterBefore(_ chapter: Manga.Chapter) -> Manga.Chapter? {
-        ReaderChapterOrdering.mangaChapter(
-            before: chapter,
-            in: manga.chapters,
-            preferredScanlator: currentChapter.scanlator
-        )
-    }
-
-    var safeAreaTop: CGFloat {
-        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        return windowScene?.windows.first?.safeAreaInsets.top ?? 44
-    }
-
-    var safeAreaBottom: CGFloat {
-        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        return windowScene?.windows.first?.safeAreaInsets.bottom ?? 34
-    }
-}
-
 // MARK: - Reader Settings
 
 struct ReaderSettingsView: View {

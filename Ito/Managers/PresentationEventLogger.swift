@@ -12,6 +12,7 @@ public enum PresentationFeature: String, Equatable, Sendable {
     case categorySettings = "category_settings"
     case categoryAssignment = "category_assignment"
     case history
+    case mangaReader = "manga_reader"
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {
@@ -43,6 +44,10 @@ public enum PresentationEventKind: String, Equatable, Sendable {
     case categoryCreateAndAssign = "category_create_and_assign"
     case historyDelete = "history_delete"
     case historyClear = "history_clear"
+    case chapterPrefetch = "chapter_prefetch"
+    case chapterAppend = "chapter_append"
+    case chapterPrepend = "chapter_prepend"
+    case chapterEffects = "chapter_effects"
 }
 
 public enum PresentationEventPhase: String, Equatable, Sendable {

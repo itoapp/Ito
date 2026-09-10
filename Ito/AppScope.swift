@@ -5,6 +5,7 @@ struct PreparedApplicationDependencies {
     let settings: PreparedSettingsDependencies
     let tracking: PreparedTrackingDependencies
     let mediaDetail: PreparedMediaDetailDependencies?
+    let mangaReader: PreparedMangaReaderDependencies
     let library: PreparedLibraryDependencies
     let categoryHistory: PreparedCategoryHistoryDependencies
     let searchExecutor: any SearchPluginExecuting
@@ -26,6 +27,7 @@ struct PreparedApplicationDependencies {
         settings: PreparedSettingsDependencies,
         tracking: PreparedTrackingDependencies? = nil,
         mediaDetail: PreparedMediaDetailDependencies? = nil,
+        mangaReader: PreparedMangaReaderDependencies? = nil,
         library: PreparedLibraryDependencies? = nil,
         categoryHistory: PreparedCategoryHistoryDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
@@ -46,6 +48,7 @@ struct PreparedApplicationDependencies {
         self.settings = settings
         self.tracking = tracking ?? .unavailable()
         self.mediaDetail = mediaDetail
+        self.mangaReader = mangaReader ?? .unavailable()
         self.library = library ?? .unavailable()
         self.categoryHistory = categoryHistory ?? .unavailable()
         self.searchExecutor = searchExecutor
@@ -93,6 +96,7 @@ struct PreparedApplicationDependencies {
             settingsStore: settingsStore,
             readProgressManager: readProgressManager
         )
+        let presentationLogger = OSLogPresentationEventLogger()
         return Self(
             settings: PreparedSettingsDependencies(
                 settingsStore: settingsStore,
@@ -115,6 +119,15 @@ struct PreparedApplicationDependencies {
                 pluginManager: pluginManager,
                 discordRPCManager: discordRPCManager
             ),
+            mangaReader: .production(
+                readProgressManager: readProgressManager,
+                historyManager: historyManager,
+                trackerManager: trackerManager,
+                settingsStore: settingsStore,
+                discordRPCManager: discordRPCManager,
+                pluginManager: pluginManager,
+                presentationLogger: presentationLogger
+            ),
             library: .production(
                 libraryManager: libraryManager,
                 settingsStore: settingsStore,
@@ -131,7 +144,7 @@ struct PreparedApplicationDependencies {
             searchExecutor: PluginManagerSearchExecutor(pluginManager: pluginManager),
             recentSearchStore: UserDefaultsRecentSearchStore(defaults: recentSearchDefaults),
             searchDebounceMilliseconds: SearchViewModel.automaticSearchDebounceMilliseconds,
-            presentationLogger: OSLogPresentationEventLogger(),
+            presentationLogger: presentationLogger,
             browseRepositoryManager: repoManager,
             repositoryManagement: PreparedRepositoryManagementDependencies(
                 repositoryListManager: repoManager,
@@ -419,6 +432,7 @@ final class AppScope {
             trackingDependencies: preparedDependencies.tracking,
             trackingMessagePresenter: trackingMessagePresenter,
             mediaDetailDependencies: preparedDependencies.mediaDetail,
+            mangaReaderDependencies: preparedDependencies.mangaReader,
             mediaDetailMessagePresenter: mediaDetailMessagePresenter,
             libraryDependencies: preparedDependencies.library,
             categoryHistoryDependencies: preparedDependencies.categoryHistory,

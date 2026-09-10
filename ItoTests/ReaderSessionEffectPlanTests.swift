@@ -3,46 +3,59 @@ import XCTest
 
 final class ReaderSessionEffectPlanTests: XCTestCase {
     func testMangaReadInvocationOrderAndRepeatedChapterSuppressionBoundary() throws {
-        let source = try sourceFile("Ito/Views/Reader/ReaderView.swift")
-        let function = try XCTUnwrap(source.slice(from: "func markChapterRead", to: "\n    }\n}"))
+        let source = try sourceFile("Ito/ViewModels/MangaReaderViewModel.swift")
+        let function = try XCTUnwrap(
+            source.slice(from: "func markChapterRead", to: "// MARK: - Image prefetch")
+        )
 
         assertOrdered(
             [
-                "historyManager.addManga(",
+                "dependencies.history.recordManga(",
                 "guard !plan.asynchronousEffects.isEmpty else { return }",
                 "markedChapterKeys.insert(chapter.key)",
-                "Task {",
-                "progressManager.markAsRead(",
-                "trackerManager.updateProgress("
+                "let task = Task {",
+                "progress.markChapterRead(",
+                "tracker.updateMangaProgress("
             ],
             in: function
         )
     }
 
     func testMangaInitialLoadMarksAfterPublishingPagesAndBeforeAdjacentPrefetch() throws {
-        let source = try sourceFile("Ito/Views/Reader/ReaderView.swift")
-        let function = try XCTUnwrap(source.slice(from: "func loadInitialChapter", to: "\n    }\n\n    func prefetchAdjacentChapters"))
+        let source = try sourceFile("Ito/ViewModels/MangaReaderViewModel.swift")
+        let function = try XCTUnwrap(
+            source.slice(from: "private func completeMainLoad", to: "private func failMainLoad")
+        )
 
         assertOrdered(
-            ["pagedPages = sorted", "isLoaded = true", "markChapterRead(currentChapter)", "prefetchAdjacentChapters()"],
+            ["pagedPages = sorted", "loadPhase = .content", "markChapterRead(chapter)", "beginAdjacentChapterPrefetch()"],
             in: function
         )
     }
 
     func testMangaContinuousAndCachedPagedTransitionsPreserveMutationEffectOrder() throws {
-        let source = try sourceFile("Ito/Views/Reader/ReaderView.swift")
-        let continuous = try XCTUnwrap(source.slice(from: "if flatPage.chapter.key != currentChapter.key", to: "prefetchContinuousImages"))
-        assertOrdered(["currentChapter = flatPage.chapter", "markChapterRead(flatPage.chapter)"], in: continuous)
-
-        let paged = try XCTUnwrap(source.slice(from: "func pagedGoToChapter", to: "\n    }\n\n    // MARK: Image Preloading"))
+        let source = try sourceFile("Ito/ViewModels/MangaReaderViewModel.swift")
+        let continuous = try XCTUnwrap(
+            source.slice(from: "func continuousPageAppeared", to: "private func pagedGoToChapter")
+        )
         assertOrdered(
-            ["currentChapter = chapter", "pagedPages = cached", "pagedIndex = 0", "markChapterRead(chapter)", "prefetchAdjacentChapters()"],
+            ["changeCurrentChapter(to: flatPage.chapter)", "markChapterRead(flatPage.chapter)"],
+            in: continuous
+        )
+
+        let paged = try XCTUnwrap(
+            source.slice(from: "private func pagedGoToChapter", to: "private func continuousGoToChapter")
+        )
+        assertOrdered(
+            ["changeCurrentChapter(to: chapter)", "pagedPages = cached", "pagedIndex = 0", "markChapterRead(chapter)", "beginAdjacentChapterPrefetch()"],
             in: paged
         )
 
-        let direct = try XCTUnwrap(source.slice(from: "func continuousGoToChapter", to: "\n    }\n\n    func pagedGoToChapter"))
+        let direct = try XCTUnwrap(
+            source.slice(from: "private func continuousGoToChapter", to: "private func changeCurrentChapter")
+        )
         assertOrdered(
-            ["currentChapter = chapter", "segments = []", "isLoaded = false", "loadInitialChapter()"],
+            ["changeCurrentChapter(to: chapter)", "segments = []", "loadPhase = .loading", "beginMainLoad(for: chapter)"],
             in: direct
         )
     }
@@ -63,20 +76,33 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
     }
 
     func testDiscordInitialChangeAndDisappearTimerSemanticsAreLocked() throws {
-        for path in [
-            "Ito/Views/Reader/ReaderView.swift",
-            "Ito/Views/Reader/NovelReaderView.swift"
-        ] {
-            let source = try sourceFile(path)
-            let onAppear = try XCTUnwrap(source.slice(from: ".onAppear {", to: "\n        .onChange(of: currentChapter.key)"))
-            XCTAssertTrue(onAppear.contains("resetTimer: true"), path)
+        let manga = try sourceFile("Ito/ViewModels/MangaReaderViewModel.swift")
+        let appear = try XCTUnwrap(
+            manga.slice(from: "func appear()", to: "func disappear()")
+        )
+        XCTAssertTrue(appear.contains("resetTimer: true"))
+        let change = try XCTUnwrap(
+            manga.slice(from: "private func changeCurrentChapter", to: "// MARK: - Main chapter loading")
+        )
+        XCTAssertTrue(change.contains("resetTimer: false"))
+        let disappear = try XCTUnwrap(
+            manga.slice(from: "func disappear()", to: "// MARK: - Viewer and settings")
+        )
+        XCTAssertTrue(disappear.contains("clearMangaReaderPresence()"))
 
-            let onChange = try XCTUnwrap(source.slice(from: ".onChange(of: currentChapter.key)", to: "\n        .onDisappear"))
-            XCTAssertTrue(onChange.contains("resetTimer: false"), path)
-
-            let onDisappear = try XCTUnwrap(source.slice(from: ".onDisappear {", to: "\n        }"))
-            XCTAssertTrue(onDisappear.contains("discordRPCManager.clearActivity()"), path)
-        }
+        let novel = try sourceFile("Ito/Views/Reader/NovelReaderView.swift")
+        let onAppear = try XCTUnwrap(
+            novel.slice(from: ".onAppear {", to: "\n        .onChange(of: currentChapter.key)")
+        )
+        XCTAssertTrue(onAppear.contains("resetTimer: true"))
+        let onChange = try XCTUnwrap(
+            novel.slice(from: ".onChange(of: currentChapter.key)", to: "\n        .onDisappear")
+        )
+        XCTAssertTrue(onChange.contains("resetTimer: false"))
+        let onDisappear = try XCTUnwrap(
+            novel.slice(from: ".onDisappear {", to: "\n        }")
+        )
+        XCTAssertTrue(onDisappear.contains("discordRPCManager.clearActivity()"))
     }
 
     func testNovelPagingChangesChapterBeforePrefetchWithoutMovingTrackingIntoPager() throws {
@@ -91,9 +117,13 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
         XCTAssertFalse(callback.contains("ReadProgressManager"))
     }
 
-    func testReaderRenderingOwnersDoNotAdoptViewModelsOrStateObjects() throws {
+    func testOnlyMangaReaderAdoptsScreenOwnedViewModel() throws {
+        let manga = try sourceFile("Ito/Views/Reader/ReaderView.swift")
+        XCTAssertTrue(manga.contains("@StateObject private var viewModel: MangaReaderViewModel"))
+        XCTAssertTrue(manga.contains("StateObject(wrappedValue: viewModel)"))
+        XCTAssertFalse(manga.contains("ReaderViewModel("))
+
         for path in [
-            "Ito/Views/Reader/ReaderView.swift",
             "Ito/Views/Reader/NovelReaderView.swift",
             "Ito/Views/Reader/NovelPagingReaderView.swift",
             "Ito/Views/Reader/VideoPlayerView.swift"

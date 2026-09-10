@@ -129,7 +129,7 @@ struct DurableStateAPIScanTests {
     @Test func everyScopedConsumerConstructsOrForwardsMediaIdentity() throws {
         let consumers = [
             "Ito/ViewModels/ReaderViewModel.swift",
-            "Ito/Views/Reader/ReaderView.swift",
+            "Ito/ViewModels/MangaReaderViewModel.swift",
             "Ito/Views/Reader/NovelReaderView.swift",
             "Ito/Views/Reader/VideoPlayerView.swift",
             "Ito/ViewModels/MediaDetailViewModel.swift",
@@ -138,7 +138,11 @@ struct DurableStateAPIScanTests {
         ]
         let scopedCallPatterns = [
             "Ito/ViewModels/ReaderViewModel.swift": ["markAsRead(", "updateProgress(media:"],
-            "Ito/Views/Reader/ReaderView.swift": ["markAsRead(", "updateProgress(media:"],
+            "Ito/ViewModels/MangaReaderViewModel.swift": [
+                "MediaIdentity(pluginId:pluginID,itemId:manga.key)",
+                "progress.markChapterRead(",
+                "tracker.updateMangaProgress(media:identity"
+            ],
             "Ito/Views/Reader/NovelReaderView.swift": ["markAsRead(", "updateProgress(media:"],
             "Ito/Views/Reader/VideoPlayerView.swift": ["markAsWatched(", "updateProgress(media:"],
             "Ito/ViewModels/MediaDetailViewModel.swift": [
