@@ -4,9 +4,14 @@ import ito_runner
 @MainActor
 struct MediaDetailReaderViewFactory {
     private let mangaReaderDependencies: PreparedMangaReaderDependencies
+    private let novelReaderDependencies: PreparedNovelReaderDependencies
 
-    init(mangaReaderDependencies: PreparedMangaReaderDependencies) {
+    init(
+        mangaReaderDependencies: PreparedMangaReaderDependencies,
+        novelReaderDependencies: PreparedNovelReaderDependencies = .unavailable()
+    ) {
         self.mangaReaderDependencies = mangaReaderDependencies
+        self.novelReaderDependencies = novelReaderDependencies
     }
 
     @ViewBuilder
@@ -30,10 +35,12 @@ struct MediaDetailReaderViewFactory {
             )
         case .novel(_, let runner, let pluginID, let media, let chapter):
             NovelReaderView(
-                runner: runner,
-                pluginId: pluginID,
-                novel: media,
-                currentChapter: chapter
+                viewModel: makeNovelViewModel(
+                    runner: runner,
+                    pluginID: pluginID,
+                    novel: media,
+                    chapter: chapter
+                )
             )
         }
     }
@@ -52,6 +59,21 @@ struct MediaDetailReaderViewFactory {
             dependencies: mangaReaderDependencies
         )
     }
+
+    func makeNovelViewModel(
+        runner: ItoRunner,
+        pluginID: String,
+        novel: Novel,
+        chapter: Novel.Chapter
+    ) -> NovelReaderViewModel {
+        NovelReaderViewModel(
+            chapterLoader: ItoRunnerNovelChapterLoader(runner: runner),
+            pluginID: pluginID,
+            novel: novel,
+            initialChapter: chapter,
+            dependencies: novelReaderDependencies
+        )
+    }
 }
 
 @MainActor
@@ -66,6 +88,7 @@ struct MediaDetailViewFactory {
     init(
         dependencies: PreparedMediaDetailDependencies,
         mangaReaderDependencies: PreparedMangaReaderDependencies,
+        novelReaderDependencies: PreparedNovelReaderDependencies = .unavailable(),
         messagePresenter: any MediaDetailMessagePresenting,
         presentationLogger: any PresentationEventLogging,
         trackingViewFactory: TrackingViewFactory,
@@ -77,7 +100,8 @@ struct MediaDetailViewFactory {
         self.trackingViewFactory = trackingViewFactory
         self.categoryHistoryViewFactory = categoryHistoryViewFactory
         readerViewFactory = MediaDetailReaderViewFactory(
-            mangaReaderDependencies: mangaReaderDependencies
+            mangaReaderDependencies: mangaReaderDependencies,
+            novelReaderDependencies: novelReaderDependencies
         )
     }
 

@@ -31,6 +31,7 @@ struct AppViewFactory {
         trackingMessagePresenter: any TrackingMessagePresenting,
         mediaDetailDependencies: PreparedMediaDetailDependencies?,
         mangaReaderDependencies: PreparedMangaReaderDependencies,
+        novelReaderDependencies: PreparedNovelReaderDependencies = .unavailable(),
         mediaDetailMessagePresenter: any MediaDetailMessagePresenting,
         libraryDependencies: PreparedLibraryDependencies,
         categoryHistoryDependencies: PreparedCategoryHistoryDependencies,
@@ -64,6 +65,7 @@ struct AppViewFactory {
             MediaDetailViewFactory(
                 dependencies: $0,
                 mangaReaderDependencies: mangaReaderDependencies,
+                novelReaderDependencies: novelReaderDependencies,
                 messagePresenter: mediaDetailMessagePresenter,
                 presentationLogger: presentationLogger,
                 trackingViewFactory: trackingViewFactory,

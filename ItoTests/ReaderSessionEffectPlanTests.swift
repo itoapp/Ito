@@ -61,18 +61,44 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
     }
 
     func testNovelReadAndTransitionInvocationOrderIsPreserved() throws {
-        let source = try sourceFile("Ito/Views/Reader/NovelReaderView.swift")
-        let tracking = try XCTUnwrap(source.slice(from: "private func updateTracking", to: "\n    }\n\n    func goToChapter"))
+        let source = try sourceFile("Ito/ViewModels/NovelReaderViewModel.swift")
+        let tracking = try XCTUnwrap(
+            source.slice(from: "func markChapterRead", to: "private func isCurrentEffect")
+        )
         assertOrdered(
-            ["historyManager.addNovel(", "Task {", "progressManager.markAsRead(", "trackerManager.updateProgress("],
+            [
+                "dependencies.history.recordNovel(",
+                "let task = Task {",
+                "progress.markNovelChapterRead(",
+                "tracker.updateNovelProgress("
+            ],
             in: tracking
         )
 
-        let scrolling = try XCTUnwrap(source.slice(from: "if currentChapter.key != loadedChapter.chapter.key", to: "\n                                        }"))
-        assertOrdered(["currentChapter = loadedChapter.chapter", "updateTracking(for: loadedChapter.chapter)"], in: scrolling)
+        let scrolling = try XCTUnwrap(
+            source.slice(from: "func continuousChapterTitleAppeared", to: "func pagedChapterChanged")
+        )
+        assertOrdered(
+            [
+                "changeCurrentChapter(to: loadedChapter.chapter)",
+                "markChapterRead(loadedChapter.chapter)"
+            ],
+            in: scrolling
+        )
 
-        let navigation = try XCTUnwrap(source.slice(from: "func goToChapter", to: "\n    }\n\n    var nextChapter"))
-        assertOrdered(["currentChapter = nextChap", "isLoaded = false", "loadedChapters = []", "loadInitialChapter()"], in: navigation)
+        let navigation = try XCTUnwrap(
+            source.slice(from: "func goToChapter", to: "func retry()")
+        )
+        assertOrdered(
+            [
+                "changeCurrentChapter(to: chapter)",
+                "loadedChapters = []",
+                "loadPhase = .loading",
+                "invalidateContentOperations()",
+                "beginMainLoad(for: chapter)"
+            ],
+            in: navigation
+        )
     }
 
     func testDiscordInitialChangeAndDisappearTimerSemanticsAreLocked() throws {
@@ -90,19 +116,19 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
         )
         XCTAssertTrue(disappear.contains("clearMangaReaderPresence()"))
 
-        let novel = try sourceFile("Ito/Views/Reader/NovelReaderView.swift")
-        let onAppear = try XCTUnwrap(
-            novel.slice(from: ".onAppear {", to: "\n        .onChange(of: currentChapter.key)")
+        let novel = try sourceFile("Ito/ViewModels/NovelReaderViewModel.swift")
+        let novelAppear = try XCTUnwrap(
+            novel.slice(from: "func appear()", to: "func disappear()")
         )
-        XCTAssertTrue(onAppear.contains("resetTimer: true"))
-        let onChange = try XCTUnwrap(
-            novel.slice(from: ".onChange(of: currentChapter.key)", to: "\n        .onDisappear")
+        XCTAssertTrue(novelAppear.contains("resetTimer: true"))
+        let novelChange = try XCTUnwrap(
+            novel.slice(from: "private func changeCurrentChapter", to: "// MARK: - Main chapter load")
         )
-        XCTAssertTrue(onChange.contains("resetTimer: false"))
-        let onDisappear = try XCTUnwrap(
-            novel.slice(from: ".onDisappear {", to: "\n        }")
+        XCTAssertTrue(novelChange.contains("resetTimer: false"))
+        let novelDisappear = try XCTUnwrap(
+            novel.slice(from: "func disappear()", to: "// MARK: - Chapter navigation")
         )
-        XCTAssertTrue(onDisappear.contains("discordRPCManager.clearActivity()"))
+        XCTAssertTrue(novelDisappear.contains("clearNovelReaderPresence()"))
     }
 
     func testNovelPagingChangesChapterBeforePrefetchWithoutMovingTrackingIntoPager() throws {
@@ -117,14 +143,18 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
         XCTAssertFalse(callback.contains("ReadProgressManager"))
     }
 
-    func testOnlyMangaReaderAdoptsScreenOwnedViewModel() throws {
+    func testMangaAndNovelReadersAdoptScreenOwnedViewModels() throws {
         let manga = try sourceFile("Ito/Views/Reader/ReaderView.swift")
         XCTAssertTrue(manga.contains("@StateObject private var viewModel: MangaReaderViewModel"))
         XCTAssertTrue(manga.contains("StateObject(wrappedValue: viewModel)"))
         XCTAssertFalse(manga.contains("ReaderViewModel("))
 
+        let novel = try sourceFile("Ito/Views/Reader/NovelReaderView.swift")
+        XCTAssertTrue(novel.contains("@StateObject private var viewModel: NovelReaderViewModel"))
+        XCTAssertTrue(novel.contains("StateObject(wrappedValue: viewModel)"))
+        XCTAssertFalse(novel.contains("ReaderViewModel("))
+
         for path in [
-            "Ito/Views/Reader/NovelReaderView.swift",
             "Ito/Views/Reader/NovelPagingReaderView.swift",
             "Ito/Views/Reader/VideoPlayerView.swift"
         ] {

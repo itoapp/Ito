@@ -1,65 +1,48 @@
 import SwiftUI
-import os
 import ito_runner
 
 struct NovelReaderView: View {
-    let runner: ItoRunner
-    let pluginId: String
-    let novel: Novel
-    @State var currentChapter: Novel.Chapter
-
-    @EnvironmentObject var progressManager: ReadProgressManager
-    @EnvironmentObject var trackerManager: TrackerManager
-    @EnvironmentObject var settingsStore: AppSettingsStore
-    @EnvironmentObject var discordRPCManager: DiscordRPCManager
-    @EnvironmentObject var historyManager: HistoryManager
-    @EnvironmentObject var pluginManager: PluginManager
-
-    private var mediaIdentity: MediaIdentity {
-        MediaIdentity(pluginId: pluginId, itemId: novel.key)
-    }
-
-    struct LoadedChapter: Identifiable, Equatable {
-        let id = UUID()
-        let chapter: Novel.Chapter
-        let pages: [Page]
-
-        static func == (lhs: LoadedChapter, rhs: LoadedChapter) -> Bool {
-            lhs.id == rhs.id
-        }
-    }
-
-    @State private var loadedChapters: [LoadedChapter] = []
-    @State private var isLoaded = false
-    @State private var isLoadingNext = false
-    @State private var errorMessage: String?
-
-    private var fontSize: Double { settingsStore.novelFontSize }
-    private var lineSpacing: Double { settingsStore.novelLineSpacing }
-    private var fontFamily: NovelFont {
-        NovelFont(rawValue: settingsStore.novelFontFamily.rawValue) ?? .system
-    }
-    private var theme: NovelTheme {
-        NovelTheme(rawValue: settingsStore.novelTheme.rawValue) ?? .system
-    }
-    private var isPaging: Bool { settingsStore.novelIsPaging }
-    private var prefetchChapters: Bool { settingsStore.novelPrefetchChapters }
-
+    @StateObject private var viewModel: NovelReaderViewModel
     @State private var showUI = true
     @State private var showSettings = false
 
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.dismiss) private var dismiss
+
+    init(viewModel: NovelReaderViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
-        ZStack {
-            // Background
-            theme.backgroundColor.edgesIgnoringSafeArea(.all)
+        GeometryReader { geometry in
+            readerBody(
+                safeAreaTop: geometry.safeAreaInsets.top > 0
+                    ? geometry.safeAreaInsets.top
+                    : 44,
+                safeAreaBottom: geometry.safeAreaInsets.bottom > 0
+                    ? geometry.safeAreaInsets.bottom
+                    : 34
+            )
+        }
+        .navigationBarHidden(true)
+        .statusBarHidden(!showUI)
+        .task { viewModel.start() }
+        .onAppear { viewModel.appear() }
+        .onDisappear { viewModel.disappear() }
+    }
 
-            if !isLoaded && errorMessage == nil {
+    private func readerBody(
+        safeAreaTop: CGFloat,
+        safeAreaBottom: CGFloat
+    ) -> some View {
+        ZStack {
+            viewModel.theme.backgroundColor.edgesIgnoringSafeArea(.all)
+
+            switch viewModel.loadPhase {
+            case .idle, .loading:
                 VStack {
                     ProgressView("Loading Chapter...")
                 }
-            } else if let error = errorMessage {
+            case .failure(let error):
                 VStack {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundColor(.red)
@@ -72,106 +55,18 @@ struct NovelReaderView: View {
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .padding()
-                    Button("Try Again") {
-                        isLoaded = false
-                        errorMessage = nil
-                        Task { await loadInitialChapter() }
-                    }
-                    .padding()
+                    Button("Try Again") { viewModel.retry() }
+                        .padding()
                 }
-            } else {
-                if isPaging {
-                    NovelPagingReaderView(
-                        loadedChapters: loadedChapters,
-                        fontSize: fontSize,
-                        fontFamily: fontFamily,
-                        lineSpacing: lineSpacing,
-                        theme: theme,
-                        prefetchChapters: prefetchChapters,
-                        onLoadNextChapter: {
-                            Task { await loadNextChapter() }
-                        },
-                        currentChapter: $currentChapter
-                    )
-                    .simultaneousGesture(TapGesture().onEnded {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showUI.toggle()
-                        }
-                    })
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: CGFloat(lineSpacing)) {
-                            ForEach(loadedChapters) { loadedChapter in
-                                let chapterTitleText = {
-                                    if let num = loadedChapter.chapter.chapter {
-                                        if let title = loadedChapter.chapter.title, !title.isEmpty {
-                                            return "Chapter \(num.formatted()) - \(title)"
-                                        }
-                                        return "Chapter \(num.formatted())"
-                                    }
-                                    return loadedChapter.chapter.title ?? "Unknown Chapter"
-                                }()
-
-                                Text(chapterTitleText)
-                                    .font(fontFamily.swiftUIFont(size: CGFloat(fontSize) + 6, weight: .bold))
-                                    .foregroundColor(theme.textColor)
-                                    .padding(.vertical)
-                                    .padding(.horizontal)
-                                    .onAppear {
-                                        // Update HUD & History when scrolling to this chapter's title
-                                        if currentChapter.key != loadedChapter.chapter.key {
-                                            currentChapter = loadedChapter.chapter
-                                            updateTracking(for: loadedChapter.chapter)
-                                        }
-                                    }
-
-                                let pagesArray = loadedChapter.pages
-                                ForEach(Array(pagesArray.enumerated()), id: \.element.index) { idx, page in
-                                    pageText(for: page)
-                                        .onAppear {
-                                            // Seamless reading trigger (fetch when within 5 paragraphs of the end)
-                                            if prefetchChapters,
-                                               loadedChapter.id == loadedChapters.last?.id,
-                                               idx >= pagesArray.count - 5 {
-                                                Task { await loadNextChapter() }
-                                            }
-                                        }
-                                }
-                            }
-
-                            if isLoadingNext {
-                                HStack {
-                                    Spacer()
-                                    ProgressView()
-                                        .padding()
-                                    Spacer()
-                                }
-                            }
-
-                            Color.clear.frame(height: safeAreaBottom + 80)
-                        }
-                    }
-                    .simultaneousGesture(TapGesture().onEnded {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showUI.toggle()
-                        }
-                    })
-                }
+            case .content:
+                readerContent(safeAreaBottom: safeAreaBottom)
             }
 
             if showUI {
                 VStack {
                     NovelReaderHeaderView(
-                        title: novel.title,
-                        chapterTitle: {
-                            if let num = currentChapter.chapter {
-                                if let title = currentChapter.title, !title.isEmpty {
-                                    return "Chapter \(num.formatted()) - \(title)"
-                                }
-                                return "Chapter \(num.formatted())"
-                            }
-                            return currentChapter.title ?? "Unknown Chapter"
-                        }(),
+                        title: viewModel.novel.title,
+                        chapterTitle: chapterTitle(viewModel.currentChapter),
                         safeAreaTop: safeAreaTop,
                         onDismiss: { dismiss() }
                     )
@@ -179,11 +74,11 @@ struct NovelReaderView: View {
                     Spacer()
 
                     NovelReaderFooterView(
-                        hasPrev: previousChapter != nil,
-                        hasNext: nextChapter != nil,
+                        hasPrev: viewModel.previousChapter != nil,
+                        hasNext: viewModel.nextChapter != nil,
                         safeAreaBottom: safeAreaBottom,
-                        onPrevChapter: { if let prev = previousChapter { goToChapter(prev) } },
-                        onNextChapter: { if let next = nextChapter { goToChapter(next) } },
+                        onPrevChapter: { viewModel.goToPreviousChapter() },
+                        onNextChapter: { viewModel.goToNextChapter() },
                         onSettings: {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                                 showSettings = true
@@ -196,124 +91,133 @@ struct NovelReaderView: View {
             }
 
             if showSettings {
-                Color.black.opacity(0.4)
-                    .edgesIgnoringSafeArea(.all)
-                    .onTapGesture {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            showSettings = false
-                        }
-                    }
-                    .transition(.opacity)
-                    .zIndex(10)
-
-                VStack(spacing: 0) {
-                    Spacer()
-
-                    NovelReaderSettingsView(
-                        fontSize: binding(
-                            settingsStore.novelFontSize,
-                            key: AppPreferenceCatalog.novelFontSize
-                        ),
-                        lineSpacing: binding(
-                            settingsStore.novelLineSpacing,
-                            key: AppPreferenceCatalog.novelLineSpacing
-                        ),
-                        fontFamily: Binding(
-                            get: { fontFamily },
-                            set: { value in
-                                guard let preference = NovelFontPreference(rawValue: value.rawValue) else { return }
-                                Task {
-                                    try? await settingsStore.set(
-                                        preference,
-                                        for: AppPreferenceCatalog.novelFontFamily
-                                    )
-                                }
-                            }
-                        ),
-                        theme: Binding(
-                            get: { theme },
-                            set: { value in
-                                guard let preference = NovelThemePreference(rawValue: value.rawValue) else { return }
-                                Task {
-                                    try? await settingsStore.set(
-                                        preference,
-                                        for: AppPreferenceCatalog.novelTheme
-                                    )
-                                }
-                            }
-                        ),
-                        isPaging: binding(
-                            settingsStore.novelIsPaging,
-                            key: AppPreferenceCatalog.novelIsPaging
-                        ),
-                        prefetchChapters: binding(
-                            settingsStore.novelPrefetchChapters,
-                            key: AppPreferenceCatalog.novelPrefetchChapters
-                        )
-                    )
-                    .frame(height: 280)
-                    .padding(.bottom, safeAreaBottom)
-                    .background(Color(UIColor.systemBackground))
-                    .cornerRadius(24)
-                    .environment(\.colorScheme, .dark)
-                }
-                .edgesIgnoringSafeArea(.bottom)
-                .transition(.move(edge: .bottom))
-                .zIndex(11)
+                settingsOverlay(safeAreaBottom: safeAreaBottom)
             }
-        }
-        .navigationBarHidden(true)
-        .statusBarHidden(!showUI)
-        .task {
-            await loadInitialChapter()
-        }
-        .onAppear {
-            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
-            let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
-            let scanlator = currentChapter.scanlator ?? "Official"
-
-            discordRPCManager.setActivity(
-                details: novel.title,
-                state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)")",
-                activityType: 3,
-                detailsUrl: url,
-                largeImageText: "Reading from \(scanlator) at \(pluginName)",
-                imageUrl: novel.cover,
-                resetTimer: true
-            )
-        }
-        .onChange(of: currentChapter.key) { _ in
-            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
-            let url = anilistId.flatMap { "https://anilist.co/manga/\($0)" }
-            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
-            let scanlator = currentChapter.scanlator ?? "Official"
-
-            discordRPCManager.setActivity(
-                details: novel.title,
-                state: "Reading \(currentChapter.title ?? "Chapter \(currentChapter.chapter ?? 0)")",
-                activityType: 3,
-                detailsUrl: url,
-                largeImageText: "Reading from \(scanlator) at \(pluginName)",
-                imageUrl: novel.cover,
-                resetTimer: false
-            )
-        }
-        .onDisappear {
-            discordRPCManager.clearActivity()
         }
     }
 
-    private func binding<Value: Codable & Sendable>(
-        _ value: Value,
-        key: AppPreferenceKey<Value>
-    ) -> Binding<Value> {
-        Binding(
-            get: { value },
-            set: { newValue in
-                Task { try? await settingsStore.set(newValue, for: key) }
+    @ViewBuilder
+    private func readerContent(safeAreaBottom: CGFloat) -> some View {
+        if viewModel.isPaging {
+            NovelPagingReaderView(
+                loadedChapters: viewModel.loadedChapters,
+                fontSize: viewModel.fontSize,
+                fontFamily: viewModel.fontFamily,
+                lineSpacing: viewModel.lineSpacing,
+                theme: viewModel.theme,
+                prefetchChapters: viewModel.prefetchChapters,
+                onLoadNextChapter: { viewModel.loadNextChapter() },
+                currentChapter: Binding(
+                    get: { viewModel.currentChapter },
+                    set: { viewModel.pagedChapterChanged($0) }
+                )
+            )
+            .simultaneousGesture(toggleUIGesture)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: CGFloat(viewModel.lineSpacing)) {
+                    ForEach(viewModel.loadedChapters) { loadedChapter in
+                        Text(chapterTitle(loadedChapter.chapter))
+                            .font(
+                                viewModel.fontFamily.swiftUIFont(
+                                    size: CGFloat(viewModel.fontSize) + 6,
+                                    weight: .bold
+                                )
+                            )
+                            .foregroundColor(viewModel.theme.textColor)
+                            .padding(.vertical)
+                            .padding(.horizontal)
+                            .onAppear {
+                                viewModel.continuousChapterTitleAppeared(loadedChapter)
+                            }
+
+                        let pages = loadedChapter.pages
+                        ForEach(Array(pages.enumerated()), id: \.element.index) { index, page in
+                            pageText(for: page)
+                                .onAppear {
+                                    viewModel.continuousPageAppeared(
+                                        chapterID: loadedChapter.id,
+                                        pageIndex: index
+                                    )
+                                }
+                        }
+                    }
+
+                    if viewModel.isLoadingNext {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .padding()
+                            Spacer()
+                        }
+                    }
+
+                    Color.clear.frame(height: safeAreaBottom + 80)
+                }
             }
-        )
+            .simultaneousGesture(toggleUIGesture)
+        }
+    }
+
+    private var toggleUIGesture: some Gesture {
+        TapGesture().onEnded {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showUI.toggle()
+            }
+        }
+    }
+
+    private func settingsOverlay(safeAreaBottom: CGFloat) -> some View {
+        ZStack {
+            Color.black.opacity(0.4)
+                .edgesIgnoringSafeArea(.all)
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showSettings = false
+                    }
+                }
+                .transition(.opacity)
+                .zIndex(10)
+
+            VStack(spacing: 0) {
+                Spacer()
+
+                NovelReaderSettingsView(
+                    fontSize: Binding(
+                        get: { viewModel.fontSize },
+                        set: { viewModel.setFontSize($0) }
+                    ),
+                    lineSpacing: Binding(
+                        get: { viewModel.lineSpacing },
+                        set: { viewModel.setLineSpacing($0) }
+                    ),
+                    fontFamily: Binding(
+                        get: { viewModel.fontFamily },
+                        set: { viewModel.setFontFamily($0) }
+                    ),
+                    theme: Binding(
+                        get: { viewModel.theme },
+                        set: { viewModel.setTheme($0) }
+                    ),
+                    isPaging: Binding(
+                        get: { viewModel.isPaging },
+                        set: { viewModel.setIsPaging($0) }
+                    ),
+                    prefetchChapters: Binding(
+                        get: { viewModel.prefetchChapters },
+                        set: { viewModel.setPrefetchChapters($0) }
+                    )
+                )
+                .frame(height: 280)
+                .padding(.bottom, safeAreaBottom)
+                .background(Color(UIColor.systemBackground))
+                .cornerRadius(24)
+                .environment(\.colorScheme, .dark)
+            }
+            .edgesIgnoringSafeArea(.bottom)
+            .transition(.move(edge: .bottom))
+            .zIndex(11)
+        }
     }
 
     @ViewBuilder
@@ -322,144 +226,25 @@ struct NovelReaderView: View {
         case .text(let text):
             SelectableTextView(
                 text: text,
-                font: fontFamily.uiFont(size: CGFloat(fontSize)),
-                textColor: UIColor(theme.textColor)
+                font: viewModel.fontFamily.uiFont(size: CGFloat(viewModel.fontSize)),
+                textColor: UIColor(viewModel.theme.textColor)
             )
             .padding(.horizontal)
             .padding(.vertical, 4)
-        case .url(let urlStr):
-            // Fallback if a novel plugin returns an image inline
-            MangaImage(urlStr: urlStr, headers: page.headers)
+        case .url(let urlString):
+            MangaImage(urlStr: urlString, headers: page.headers)
                 .padding(.horizontal)
         }
     }
-}
 
-// MARK: - Helpers & Actions
-extension NovelReaderView {
-    func loadInitialChapter() async {
-        guard !isLoaded else { return }
-        do {
-            let pageResult = try await runner.getChapterContent(novel: novel, chapter: currentChapter)
-            await MainActor.run {
-                self.loadedChapters = [LoadedChapter(
-                    chapter: currentChapter,
-                    pages: ReaderPageOrdering.ascending(pageResult)
-                )]
-                self.isLoaded = true
-                self.updateTracking(for: currentChapter)
+    private func chapterTitle(_ chapter: Novel.Chapter) -> String {
+        if let number = chapter.chapter {
+            if let title = chapter.title, !title.isEmpty {
+                return "Chapter \(number.formatted()) - \(title)"
             }
-        } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-                self.isLoaded = true
-            }
+            return "Chapter \(number.formatted())"
         }
-    }
-
-    func loadNextChapter() async {
-        guard let lastLoaded = loadedChapters.last?.chapter else { return }
-        guard let next = getNextChapter(after: lastLoaded) else {
-            AppLogger.ui.debug("[NovelReaderView] loadNextChapter: nextChapter is nil (end of novel?)")
-            return
-        }
-        guard !isLoadingNext else {
-            return
-        }
-        AppLogger.ui.debug("[NovelReaderView] loadNextChapter: triggering fetch for \(next.title ?? next.key)")
-        isLoadingNext = true
-        do {
-            let pageResult = try await runner.getChapterContent(novel: novel, chapter: next)
-            await MainActor.run {
-                AppLogger.ui.debug("[NovelReaderView] loadNextChapter: success, appending \(pageResult.count) pages.")
-                let newChapter = LoadedChapter(
-                    chapter: next,
-                    pages: ReaderPageOrdering.ascending(pageResult)
-                )
-                self.loadedChapters.append(newChapter)
-
-                self.isLoadingNext = false
-            }
-        } catch {
-            await MainActor.run {
-                AppLogger.ui.debug("[NovelReaderView] loadNextChapter: failed with error: \(error.localizedDescription)")
-                self.isLoadingNext = false
-            }
-        }
-    }
-
-    private func updateTracking(for chap: Novel.Chapter) {
-        let chapterTitleStr = chap.title ?? chap.key
-        let plan = ReaderSessionEffectPlan.chapterRead(
-            chapterNumber: chap.chapter,
-            titleOrKey: chapterTitleStr,
-            alreadyMarked: false
-        )
-
-        for effect in plan.synchronousEffects {
-            if case .recordHistory = effect {
-                historyManager.addNovel(
-                    novel,
-                    chapterKey: chap.key,
-                    chapterTitle: chapterTitleStr,
-                    pluginId: pluginId
-                )
-            }
-        }
-        Task {
-            for effect in plan.asynchronousEffects {
-                switch effect {
-                case .recordHistory:
-                    break
-                case .markLocalProgress:
-                    try await progressManager.markAsRead(
-                        media: mediaIdentity,
-                        chapterId: chap.key,
-                        chapterNum: chap.chapter
-                    )
-                case .updateTracker(let progress):
-                    await trackerManager.updateProgress(
-                        media: mediaIdentity,
-                        progress: progress
-                    )
-                }
-            }
-        }
-    }
-
-    func goToChapter(_ nextChap: Novel.Chapter) {
-        currentChapter = nextChap
-        isLoaded = false
-        loadedChapters = []
-        Task {
-            await loadInitialChapter()
-        }
-    }
-
-    var nextChapter: Novel.Chapter? {
-        getNextChapter(after: currentChapter)
-    }
-
-    var previousChapter: Novel.Chapter? {
-        getPreviousChapter(before: currentChapter)
-    }
-
-    func getNextChapter(after chap: Novel.Chapter) -> Novel.Chapter? {
-        ReaderChapterOrdering.novelChapter(after: chap, in: novel.chapters)
-    }
-
-    func getPreviousChapter(before chap: Novel.Chapter) -> Novel.Chapter? {
-        ReaderChapterOrdering.novelChapter(before: chap, in: novel.chapters)
-    }
-
-    var safeAreaTop: CGFloat {
-        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        return windowScene?.windows.first?.safeAreaInsets.top ?? 44
-    }
-
-    var safeAreaBottom: CGFloat {
-        let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        return windowScene?.windows.first?.safeAreaInsets.bottom ?? 34
+        return chapter.title ?? "Unknown Chapter"
     }
 }
 

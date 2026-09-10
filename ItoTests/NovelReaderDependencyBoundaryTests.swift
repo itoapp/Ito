@@ -3,10 +3,10 @@ import ito_runner
 @testable import Ito
 
 @MainActor
-final class MangaReaderDependencyBoundaryTests: XCTestCase {
-    func testReaderPresentationHasNoDirectManagerEnvironmentOrGlobalAccess() throws {
-        let view = try source("Ito/Views/Reader/ReaderView.swift")
-        let viewModel = try source("Ito/ViewModels/MangaReaderViewModel.swift")
+final class NovelReaderDependencyBoundaryTests: XCTestCase {
+    func testNovelReaderPresentationHasNoBusinessEnvironmentOrDirectGlobals() throws {
+        let view = try source("Ito/Views/Reader/NovelReaderView.swift")
+        let viewModel = try source("Ito/ViewModels/NovelReaderViewModel.swift")
         let forbidden = [
             "@EnvironmentObject",
             "ReadProgressManager",
@@ -15,90 +15,94 @@ final class MangaReaderDependencyBoundaryTests: XCTestCase {
             "DiscordRPCManager",
             "HistoryManager",
             "PluginManager",
-            "ImagePipeline.shared",
             "AppDatabase.shared",
             "UserDefaults.standard",
             "URLSession.shared",
             "UIApplication.shared",
             "FileManager.default",
+            "SnackBarManager.shared",
             "AppLogger",
             "AnyView",
-            ".configure("
+            ".configure(",
+            "getRunner"
         ]
 
         for text in forbidden {
-            XCTAssertFalse(view.contains(text), "ReaderView contains \(text)")
-            XCTAssertFalse(viewModel.contains(text), "MangaReaderViewModel contains \(text)")
+            XCTAssertFalse(view.contains(text), "NovelReaderView contains \(text)")
+            XCTAssertFalse(viewModel.contains(text), "NovelReaderViewModel contains \(text)")
         }
     }
 
-    func testReaderViewOwnsExactlyOneInjectedStateObject() throws {
-        let view = try source("Ito/Views/Reader/ReaderView.swift")
+    func testNovelReaderViewOwnsExactlyOneInjectedStateObjectAndRetainsRendering() throws {
+        let view = try source("Ito/Views/Reader/NovelReaderView.swift")
 
         XCTAssertEqual(view.components(separatedBy: "@StateObject").count - 1, 1)
-        XCTAssertTrue(
-            view.contains("@StateObject private var viewModel: MangaReaderViewModel")
-        )
+        XCTAssertTrue(view.contains("@StateObject private var viewModel: NovelReaderViewModel"))
         XCTAssertTrue(view.contains("StateObject(wrappedValue: viewModel)"))
+        XCTAssertTrue(view.contains("GeometryReader"))
+        XCTAssertTrue(view.contains("ScrollView"))
+        XCTAssertTrue(view.contains("LazyVStack"))
+        XCTAssertTrue(view.contains("SelectableTextView("))
         XCTAssertTrue(view.contains("MangaImage("))
-        XCTAssertTrue(view.contains("ReaderHeaderView("))
-        XCTAssertTrue(view.contains("ReaderFooterView("))
-        XCTAssertTrue(view.contains("ReaderSettingsView("))
+        XCTAssertTrue(view.contains("NovelReaderHeaderView("))
+        XCTAssertTrue(view.contains("NovelReaderFooterView("))
+        XCTAssertTrue(view.contains("NovelReaderSettingsView("))
     }
 
     func testFactoryWrapsExactRouteRunnerOnceAndCreatesFreshScreenModels() {
-        let chapter = Manga.Chapter(key: "chapter", chapter: 1)
-        let manga = Manga(key: "manga", title: "Manga", chapters: [chapter])
-        let subject = makeMangaReaderSubject(manga: manga, initialChapter: chapter)
-        let dependencies = PreparedMangaReaderDependencies(
+        let chapter = Novel.Chapter(key: "chapter", chapter: 1)
+        let novel = Novel(key: "novel", title: "Novel", chapters: [chapter])
+        let subject = makeNovelReaderSubject(novel: novel, initialChapter: chapter)
+        let dependencies = PreparedNovelReaderDependencies(
             progress: subject.progress,
             history: subject.history,
             tracker: subject.tracker,
             settings: subject.settings,
             presence: subject.presence,
             pluginMetadata: subject.metadata,
-            makeImagePrefetcher: { subject.imagePrefetcher },
             presentationLogger: subject.logger
         )
         let factory = MediaDetailReaderViewFactory(
-            mangaReaderDependencies: dependencies
+            mangaReaderDependencies: .unavailable(),
+            novelReaderDependencies: dependencies
         )
         let runner = ItoRunner()
 
-        let first = factory.makeMangaViewModel(
+        let first = factory.makeNovelViewModel(
             runner: runner,
             pluginID: "plugin",
-            manga: manga,
+            novel: novel,
             chapter: chapter
         )
-        let second = factory.makeMangaViewModel(
+        let second = factory.makeNovelViewModel(
             runner: runner,
             pluginID: "plugin",
-            manga: manga,
+            novel: novel,
             chapter: chapter
         )
 
         XCTAssertFalse(first === second)
         XCTAssertEqual(first.pluginID, "plugin")
-        XCTAssertEqual(first.manga.key, "manga")
+        XCTAssertEqual(first.novel.key, "novel")
         XCTAssertEqual(first.currentChapter.key, "chapter")
-        XCTAssertTrue((first.pageLoader as? ItoRunnerMangaPageLoader)?.runner === runner)
-        XCTAssertTrue((second.pageLoader as? ItoRunnerMangaPageLoader)?.runner === runner)
+        XCTAssertTrue((first.chapterLoader as? ItoRunnerNovelChapterLoader)?.runner === runner)
+        XCTAssertTrue((second.chapterLoader as? ItoRunnerNovelChapterLoader)?.runner === runner)
     }
 
-    func testReaderFactoryContainsNoSecondRunnerLookupAndLeavesOtherRoutesTyped() throws {
+    func testReaderFactoryHasNoSecondLookupAndLeavesMangaAndAnimeOwnershipStable() throws {
         let factory = try source("Ito/Views/Browse/MediaDetailViewFactory.swift")
 
+        XCTAssertTrue(factory.contains("ItoRunnerNovelChapterLoader(runner: runner)"))
         XCTAssertTrue(factory.contains("ItoRunnerMangaPageLoader(runner: runner)"))
         XCTAssertFalse(factory.contains("getRunner"))
         XCTAssertFalse(factory.contains("PluginManager"))
+        XCTAssertTrue(factory.contains("ReaderView("))
         XCTAssertTrue(factory.contains("VideoPlayerView("))
         XCTAssertTrue(factory.contains("NovelReaderView("))
-        XCTAssertTrue(factory.contains("NovelReaderViewModel"))
         XCTAssertFalse(factory.contains("VideoPlayerViewModel"))
     }
 
-    func testMangaReaderIsPreparedButNotStoredInRootModelStore() throws {
+    func testNovelReaderIsPreparedButNotStoredInRootModelStore() throws {
         let appScope = try source("Ito/AppScope.swift")
         let rootStart = try XCTUnwrap(appScope.range(of: "final class RootModelStore"))
         let scopeStart = try XCTUnwrap(
@@ -109,16 +113,17 @@ final class MangaReaderDependencyBoundaryTests: XCTestCase {
         )
         let rootStore = String(appScope[rootStart.lowerBound..<scopeStart.lowerBound])
 
-        XCTAssertTrue(appScope.contains("let mangaReader: PreparedMangaReaderDependencies"))
-        XCTAssertTrue(appScope.contains("mangaReader: .production("))
-        XCTAssertFalse(rootStore.contains("MangaReaderViewModel"))
-        XCTAssertFalse(rootStore.contains("storedMangaReader"))
+        XCTAssertTrue(appScope.contains("let novelReader: PreparedNovelReaderDependencies"))
+        XCTAssertTrue(appScope.contains("novelReader: .production("))
+        XCTAssertFalse(rootStore.contains("NovelReaderViewModel"))
+        XCTAssertFalse(rootStore.contains("storedNovelReader"))
+        XCTAssertFalse(rootStore.contains("makeNovelReader"))
     }
 
     func testProductionBundleReusesCanonicalManagerInstances() throws {
         let database = try TestDatabase()
         defer { database.cleanup() }
-        let defaultsName = "MangaReaderDependencyBoundaryTests.\(UUID().uuidString)"
+        let defaultsName = "NovelReaderDependencyBoundaryTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
         defer { defaults.removePersistentDomain(forName: defaultsName) }
         let library = LibraryManager(dbPool: database.dbPool)
@@ -137,7 +142,7 @@ final class MangaReaderDependencyBoundaryTests: XCTestCase {
         )
         let logger = PresentationEventCaptureSpy()
 
-        let dependencies = PreparedMangaReaderDependencies.production(
+        let dependencies = PreparedNovelReaderDependencies.production(
             readProgressManager: progress,
             historyManager: history,
             trackerManager: tracker,
@@ -154,31 +159,57 @@ final class MangaReaderDependencyBoundaryTests: XCTestCase {
         XCTAssertTrue(dependencies.presence as AnyObject === discord)
         XCTAssertTrue(dependencies.pluginMetadata as AnyObject === plugin)
         XCTAssertTrue(dependencies.presentationLogger as AnyObject === logger)
-        XCTAssertFalse(
-            dependencies.makeImagePrefetcher() === dependencies.makeImagePrefetcher()
-        )
     }
 
-    func testPR12HelpersRemainTheOnlyOrderingAndEffectAlgorithms() throws {
-        let viewModel = try source("Ito/ViewModels/MangaReaderViewModel.swift")
+    func testPR12HelpersRemainOnlyNovelOrderingAndEffectAlgorithms() throws {
+        let viewModel = try source("Ito/ViewModels/NovelReaderViewModel.swift")
         let behavior = try source("Ito/Views/Reader/ReaderBehavior.swift")
 
-        XCTAssertTrue(viewModel.contains("ReaderChapterOrdering.mangaChapter("))
+        XCTAssertTrue(viewModel.contains("ReaderChapterOrdering.novelChapter("))
         XCTAssertTrue(viewModel.contains("ReaderPageOrdering.ascending("))
         XCTAssertTrue(viewModel.contains("ReaderSessionEffectPlan.chapterRead("))
+        XCTAssertTrue(viewModel.contains("alreadyMarked: false"))
+        XCTAssertFalse(viewModel.contains("markedChapterKeys"))
         XCTAssertFalse(viewModel.contains("chapterNumberEpsilon"))
         XCTAssertFalse(viewModel.contains("missingChapterNumber"))
         XCTAssertTrue(behavior.contains("static let chapterNumberEpsilon: Float32 = 0.0001"))
     }
 
-    func testLegacyGenericReaderModelRemainsUnusedByMangaPresentation() throws {
+    func testPaginationUIKitAndPageStateRemainInPagingView() throws {
+        let paging = try source("Ito/Views/Reader/NovelPagingReaderView.swift")
+        let viewModel = try source("Ito/ViewModels/NovelReaderViewModel.swift")
+
+        for required in [
+            "@State private var paginatedCache",
+            "@State private var flattenedPages",
+            "@State private var currentPageIndex",
+            "@State private var pageSize",
+            "NovelPaginationEngine.paginate(",
+            "UIPageViewController",
+            "PageContentViewController",
+            "BatteryIndicator("
+        ] {
+            XCTAssertTrue(paging.contains(required), "Paging view missing \(required)")
+            XCTAssertFalse(viewModel.contains(required), "ViewModel contains \(required)")
+        }
+    }
+
+    func testLegacyGenericReaderAndPR15PlusModelsRemainOutsideNovelMigration() throws {
         let legacy = try source("Ito/ViewModels/ReaderViewModel.swift")
-        let view = try source("Ito/Views/Reader/ReaderView.swift")
-        let viewModel = try source("Ito/ViewModels/MangaReaderViewModel.swift")
+        let novelView = try source("Ito/Views/Reader/NovelReaderView.swift")
+        let novelViewModel = try source("Ito/ViewModels/NovelReaderViewModel.swift")
 
         XCTAssertTrue(legacy.contains("public final class ReaderViewModel"))
-        XCTAssertFalse(view.contains("ReaderViewModel("))
-        XCTAssertFalse(viewModel.contains("ReaderViewModel<"))
+        XCTAssertFalse(novelView.contains("ReaderViewModel("))
+        XCTAssertFalse(novelViewModel.contains("ReaderViewModel<"))
+        for excluded in [
+            "VideoPlayerViewModel",
+            "BackupSettingsViewModel",
+            "MigrationReportViewModel"
+        ] {
+            XCTAssertFalse(novelView.contains(excluded))
+            XCTAssertFalse(novelViewModel.contains(excluded))
+        }
     }
 
     private func source(_ path: String) throws -> String {
