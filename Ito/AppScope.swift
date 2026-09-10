@@ -6,6 +6,7 @@ struct PreparedApplicationDependencies {
     let tracking: PreparedTrackingDependencies
     let mediaDetail: PreparedMediaDetailDependencies?
     let mangaReader: PreparedMangaReaderDependencies
+    let novelReader: PreparedNovelReaderDependencies
     let library: PreparedLibraryDependencies
     let categoryHistory: PreparedCategoryHistoryDependencies
     let searchExecutor: any SearchPluginExecuting
@@ -28,6 +29,7 @@ struct PreparedApplicationDependencies {
         tracking: PreparedTrackingDependencies? = nil,
         mediaDetail: PreparedMediaDetailDependencies? = nil,
         mangaReader: PreparedMangaReaderDependencies? = nil,
+        novelReader: PreparedNovelReaderDependencies? = nil,
         library: PreparedLibraryDependencies? = nil,
         categoryHistory: PreparedCategoryHistoryDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
@@ -49,6 +51,7 @@ struct PreparedApplicationDependencies {
         self.tracking = tracking ?? .unavailable()
         self.mediaDetail = mediaDetail
         self.mangaReader = mangaReader ?? .unavailable()
+        self.novelReader = novelReader ?? .unavailable()
         self.library = library ?? .unavailable()
         self.categoryHistory = categoryHistory ?? .unavailable()
         self.searchExecutor = searchExecutor
@@ -120,6 +123,15 @@ struct PreparedApplicationDependencies {
                 discordRPCManager: discordRPCManager
             ),
             mangaReader: .production(
+                readProgressManager: readProgressManager,
+                historyManager: historyManager,
+                trackerManager: trackerManager,
+                settingsStore: settingsStore,
+                discordRPCManager: discordRPCManager,
+                pluginManager: pluginManager,
+                presentationLogger: presentationLogger
+            ),
+            novelReader: .production(
                 readProgressManager: readProgressManager,
                 historyManager: historyManager,
                 trackerManager: trackerManager,
@@ -433,6 +445,7 @@ final class AppScope {
             trackingMessagePresenter: trackingMessagePresenter,
             mediaDetailDependencies: preparedDependencies.mediaDetail,
             mangaReaderDependencies: preparedDependencies.mangaReader,
+            novelReaderDependencies: preparedDependencies.novelReader,
             mediaDetailMessagePresenter: mediaDetailMessagePresenter,
             libraryDependencies: preparedDependencies.library,
             categoryHistoryDependencies: preparedDependencies.categoryHistory,

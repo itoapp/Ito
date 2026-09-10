@@ -43,7 +43,7 @@ final class NovelPaginationTests: XCTestCase {
     }
 
     func testShortChapterFormatsTitleAndBodyAndIgnoresURLPages() throws {
-        let loaded = NovelReaderView.LoadedChapter(
+        let loaded = NovelLoadedChapter(
             chapter: Novel.Chapter(key: "one", title: "Opening", chapter: 1),
             pages: [
                 Page(index: 0, content: .text("First paragraph.")),
@@ -298,7 +298,7 @@ final class NovelPaginationTests: XCTestCase {
         ]
         let chapterBefore = NovelChapterFixtureSnapshot(chapter)
         let pagesBefore = pages.map(PageFixtureSnapshot.init)
-        let loaded = NovelReaderView.LoadedChapter(chapter: chapter, pages: pages)
+        let loaded = NovelLoadedChapter(chapter: chapter, pages: pages)
 
         _ = enginePaginate([loaded], size: CGSize(width: 320, height: 480))
 
@@ -386,7 +386,7 @@ final class NovelPaginationTests: XCTestCase {
     }
 
     private func enginePaginate(
-        _ loadedChapters: [NovelReaderView.LoadedChapter],
+        _ loadedChapters: [NovelLoadedChapter],
         size: CGSize,
         fontSize: Double = 16,
         lineSpacing: Double = 4,
@@ -407,7 +407,7 @@ final class NovelPaginationTests: XCTestCase {
     }
 
     private func legacyPaginate(
-        _ loadedChapters: [NovelReaderView.LoadedChapter],
+        _ loadedChapters: [NovelLoadedChapter],
         size: CGSize,
         fontSize: Double,
         lineSpacing: Double
@@ -487,15 +487,15 @@ final class NovelPaginationTests: XCTestCase {
         number: Float32?,
         title: String? = "Title",
         body: String
-    ) -> NovelReaderView.LoadedChapter {
-        NovelReaderView.LoadedChapter(
+    ) -> NovelLoadedChapter {
+        NovelLoadedChapter(
             chapter: Novel.Chapter(key: key, title: title, chapter: number),
             pages: [Page(index: 0, content: .text(body))]
         )
     }
 
     private func expectedFormattedText(
-        _ chapters: [NovelReaderView.LoadedChapter]
+        _ chapters: [NovelLoadedChapter]
     ) -> String {
         chapters.map { loadedChapter in
             let body = loadedChapter.pages.compactMap { page -> String? in

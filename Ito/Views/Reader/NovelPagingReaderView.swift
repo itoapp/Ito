@@ -4,7 +4,7 @@ import os
 import ito_runner
 
 struct NovelPagingReaderView: View {
-    let loadedChapters: [NovelReaderView.LoadedChapter]
+    let loadedChapters: [NovelLoadedChapter]
     let fontSize: Double
     let fontFamily: NovelFont
     let lineSpacing: Double

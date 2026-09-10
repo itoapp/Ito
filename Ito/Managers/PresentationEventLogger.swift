@@ -13,6 +13,7 @@ public enum PresentationFeature: String, Equatable, Sendable {
     case categoryAssignment = "category_assignment"
     case history
     case mangaReader = "manga_reader"
+    case novelReader = "novel_reader"
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {

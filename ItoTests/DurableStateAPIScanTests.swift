@@ -130,7 +130,7 @@ struct DurableStateAPIScanTests {
         let consumers = [
             "Ito/ViewModels/ReaderViewModel.swift",
             "Ito/ViewModels/MangaReaderViewModel.swift",
-            "Ito/Views/Reader/NovelReaderView.swift",
+            "Ito/ViewModels/NovelReaderViewModel.swift",
             "Ito/Views/Reader/VideoPlayerView.swift",
             "Ito/ViewModels/MediaDetailViewModel.swift",
             "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift",
@@ -143,7 +143,11 @@ struct DurableStateAPIScanTests {
                 "progress.markChapterRead(",
                 "tracker.updateMangaProgress(media:identity"
             ],
-            "Ito/Views/Reader/NovelReaderView.swift": ["markAsRead(", "updateProgress(media:"],
+            "Ito/ViewModels/NovelReaderViewModel.swift": [
+                "MediaIdentity(pluginId:pluginID,itemId:novel.key)",
+                "progress.markNovelChapterRead(",
+                "tracker.updateNovelProgress(media:identity"
+            ],
             "Ito/Views/Reader/VideoPlayerView.swift": ["markAsWatched(", "updateProgress(media:"],
             "Ito/ViewModels/MediaDetailViewModel.swift": [
                 "dependencies.progress.isRead(",
