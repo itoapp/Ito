@@ -139,22 +139,19 @@ final class LibraryDependencyBoundaryTests: XCTestCase {
         XCTAssertEqual(loader.requests, [first.id, replacement.id])
     }
 
-    func testPR14ReadersExistWithoutLaterVideoOrSettingsViewModels() throws {
+    func testPR15ReadersExistWithoutLaterSettingsViewModels() throws {
         let viewModelsURL = repositoryRoot.appendingPathComponent("Ito/ViewModels")
         let names = try FileManager.default.contentsOfDirectory(
             at: viewModelsURL,
             includingPropertiesForKeys: nil
         ).map(\.lastPathComponent)
 
-        for excluded in [
-            "VideoPlayerViewModel.swift",
-            "BackupSettingsViewModel.swift",
-            "MigrationReportViewModel.swift"
-        ] {
+        for excluded in ["BackupSettingsViewModel.swift", "MigrationReportViewModel.swift"] {
             XCTAssertFalse(names.contains(excluded), "Out-of-scope ViewModel: \(excluded)")
         }
         XCTAssertTrue(names.contains("MangaReaderViewModel.swift"))
         XCTAssertTrue(names.contains("NovelReaderViewModel.swift"))
+        XCTAssertTrue(names.contains("VideoPlayerViewModel.swift"))
     }
 
     private var repositoryRoot: URL {

@@ -99,7 +99,7 @@ final class NovelReaderDependencyBoundaryTests: XCTestCase {
         XCTAssertTrue(factory.contains("ReaderView("))
         XCTAssertTrue(factory.contains("VideoPlayerView("))
         XCTAssertTrue(factory.contains("NovelReaderView("))
-        XCTAssertFalse(factory.contains("VideoPlayerViewModel"))
+        XCTAssertTrue(factory.contains("VideoPlayerViewModel"))
     }
 
     func testNovelReaderIsPreparedButNotStoredInRootModelStore() throws {

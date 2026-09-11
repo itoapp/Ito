@@ -5,13 +5,16 @@ import ito_runner
 struct MediaDetailReaderViewFactory {
     private let mangaReaderDependencies: PreparedMangaReaderDependencies
     private let novelReaderDependencies: PreparedNovelReaderDependencies
+    private let videoPlayerDependencies: PreparedVideoPlayerDependencies
 
     init(
         mangaReaderDependencies: PreparedMangaReaderDependencies,
-        novelReaderDependencies: PreparedNovelReaderDependencies = .unavailable()
+        novelReaderDependencies: PreparedNovelReaderDependencies = .unavailable(),
+        videoPlayerDependencies: PreparedVideoPlayerDependencies = .unavailable()
     ) {
         self.mangaReaderDependencies = mangaReaderDependencies
         self.novelReaderDependencies = novelReaderDependencies
+        self.videoPlayerDependencies = videoPlayerDependencies
     }
 
     @ViewBuilder
@@ -28,10 +31,12 @@ struct MediaDetailReaderViewFactory {
             )
         case .anime(_, let runner, let pluginID, let media, let episode):
             VideoPlayerView(
-                runner: runner,
-                pluginId: pluginID,
-                anime: media,
-                episode: episode
+                viewModel: makeVideoPlayerViewModel(
+                    runner: runner,
+                    pluginID: pluginID,
+                    anime: media,
+                    episode: episode
+                )
             )
         case .novel(_, let runner, let pluginID, let media, let chapter):
             NovelReaderView(
@@ -74,6 +79,21 @@ struct MediaDetailReaderViewFactory {
             dependencies: novelReaderDependencies
         )
     }
+
+    func makeVideoPlayerViewModel(
+        runner: ItoRunner,
+        pluginID: String,
+        anime: Anime,
+        episode: Anime.Episode
+    ) -> VideoPlayerViewModel {
+        VideoPlayerViewModel(
+            streamLoader: ItoRunnerVideoStreamLoader(runner: runner),
+            pluginID: pluginID,
+            anime: anime,
+            episode: episode,
+            dependencies: videoPlayerDependencies
+        )
+    }
 }
 
 @MainActor
@@ -89,6 +109,7 @@ struct MediaDetailViewFactory {
         dependencies: PreparedMediaDetailDependencies,
         mangaReaderDependencies: PreparedMangaReaderDependencies,
         novelReaderDependencies: PreparedNovelReaderDependencies = .unavailable(),
+        videoPlayerDependencies: PreparedVideoPlayerDependencies = .unavailable(),
         messagePresenter: any MediaDetailMessagePresenting,
         presentationLogger: any PresentationEventLogging,
         trackingViewFactory: TrackingViewFactory,
@@ -101,7 +122,8 @@ struct MediaDetailViewFactory {
         self.categoryHistoryViewFactory = categoryHistoryViewFactory
         readerViewFactory = MediaDetailReaderViewFactory(
             mangaReaderDependencies: mangaReaderDependencies,
-            novelReaderDependencies: novelReaderDependencies
+            novelReaderDependencies: novelReaderDependencies,
+            videoPlayerDependencies: videoPlayerDependencies
         )
     }
 

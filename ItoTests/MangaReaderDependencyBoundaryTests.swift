@@ -95,7 +95,7 @@ final class MangaReaderDependencyBoundaryTests: XCTestCase {
         XCTAssertTrue(factory.contains("VideoPlayerView("))
         XCTAssertTrue(factory.contains("NovelReaderView("))
         XCTAssertTrue(factory.contains("NovelReaderViewModel"))
-        XCTAssertFalse(factory.contains("VideoPlayerViewModel"))
+        XCTAssertTrue(factory.contains("VideoPlayerViewModel"))
     }
 
     func testMangaReaderIsPreparedButNotStoredInRootModelStore() throws {
