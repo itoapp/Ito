@@ -131,7 +131,7 @@ struct DurableStateAPIScanTests {
             "Ito/ViewModels/ReaderViewModel.swift",
             "Ito/ViewModels/MangaReaderViewModel.swift",
             "Ito/ViewModels/NovelReaderViewModel.swift",
-            "Ito/Views/Reader/VideoPlayerView.swift",
+            "Ito/ViewModels/VideoPlayerViewModel.swift",
             "Ito/ViewModels/MediaDetailViewModel.swift",
             "Ito/ViewModels/Tracking/TrackerDetailsViewModel.swift",
             "Ito/ViewModels/LibraryViewModel.swift"
@@ -148,7 +148,11 @@ struct DurableStateAPIScanTests {
                 "progress.markNovelChapterRead(",
                 "tracker.updateNovelProgress(media:identity"
             ],
-            "Ito/Views/Reader/VideoPlayerView.swift": ["markAsWatched(", "updateProgress(media:"],
+            "Ito/ViewModels/VideoPlayerViewModel.swift": [
+                "MediaIdentity(pluginId:pluginID,itemId:anime.key)",
+                "progress.markEpisodeWatched(",
+                "tracker.updateVideoProgress(media:mediaIdentity"
+            ],
             "Ito/ViewModels/MediaDetailViewModel.swift": [
                 "dependencies.progress.isRead(",
                 "dependencies.tracker.state(for:mediaIdentity)"

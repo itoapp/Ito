@@ -14,6 +14,7 @@ public enum PresentationFeature: String, Equatable, Sendable {
     case history
     case mangaReader = "manga_reader"
     case novelReader = "novel_reader"
+    case videoPlayer = "video_player"
 }
 
 public enum PresentationEventKind: String, Equatable, Sendable {
@@ -49,6 +50,10 @@ public enum PresentationEventKind: String, Equatable, Sendable {
     case chapterAppend = "chapter_append"
     case chapterPrepend = "chapter_prepend"
     case chapterEffects = "chapter_effects"
+    case streamLoad = "stream_load"
+    case subtitleLoad = "subtitle_load"
+    case playerPreparation = "player_preparation"
+    case playbackProgress = "playback_progress"
 }
 
 public enum PresentationEventPhase: String, Equatable, Sendable {

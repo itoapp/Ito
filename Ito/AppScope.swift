@@ -7,6 +7,7 @@ struct PreparedApplicationDependencies {
     let mediaDetail: PreparedMediaDetailDependencies?
     let mangaReader: PreparedMangaReaderDependencies
     let novelReader: PreparedNovelReaderDependencies
+    let videoPlayer: PreparedVideoPlayerDependencies
     let library: PreparedLibraryDependencies
     let categoryHistory: PreparedCategoryHistoryDependencies
     let searchExecutor: any SearchPluginExecuting
@@ -30,6 +31,7 @@ struct PreparedApplicationDependencies {
         mediaDetail: PreparedMediaDetailDependencies? = nil,
         mangaReader: PreparedMangaReaderDependencies? = nil,
         novelReader: PreparedNovelReaderDependencies? = nil,
+        videoPlayer: PreparedVideoPlayerDependencies? = nil,
         library: PreparedLibraryDependencies? = nil,
         categoryHistory: PreparedCategoryHistoryDependencies? = nil,
         searchExecutor: any SearchPluginExecuting,
@@ -52,6 +54,7 @@ struct PreparedApplicationDependencies {
         self.mediaDetail = mediaDetail
         self.mangaReader = mangaReader ?? .unavailable()
         self.novelReader = novelReader ?? .unavailable()
+        self.videoPlayer = videoPlayer ?? .unavailable()
         self.library = library ?? .unavailable()
         self.categoryHistory = categoryHistory ?? .unavailable()
         self.searchExecutor = searchExecutor
@@ -136,6 +139,14 @@ struct PreparedApplicationDependencies {
                 historyManager: historyManager,
                 trackerManager: trackerManager,
                 settingsStore: settingsStore,
+                discordRPCManager: discordRPCManager,
+                pluginManager: pluginManager,
+                presentationLogger: presentationLogger
+            ),
+            videoPlayer: .production(
+                readProgressManager: readProgressManager,
+                historyManager: historyManager,
+                trackerManager: trackerManager,
                 discordRPCManager: discordRPCManager,
                 pluginManager: pluginManager,
                 presentationLogger: presentationLogger
@@ -446,6 +457,7 @@ final class AppScope {
             mediaDetailDependencies: preparedDependencies.mediaDetail,
             mangaReaderDependencies: preparedDependencies.mangaReader,
             novelReaderDependencies: preparedDependencies.novelReader,
+            videoPlayerDependencies: preparedDependencies.videoPlayer,
             mediaDetailMessagePresenter: mediaDetailMessagePresenter,
             libraryDependencies: preparedDependencies.library,
             categoryHistoryDependencies: preparedDependencies.categoryHistory,

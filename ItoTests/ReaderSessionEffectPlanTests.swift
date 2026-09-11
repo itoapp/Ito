@@ -143,7 +143,7 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
         XCTAssertFalse(callback.contains("ReadProgressManager"))
     }
 
-    func testMangaAndNovelReadersAdoptScreenOwnedViewModels() throws {
+    func testMangaNovelAndVideoReadersAdoptScreenOwnedViewModels() throws {
         let manga = try sourceFile("Ito/Views/Reader/ReaderView.swift")
         XCTAssertTrue(manga.contains("@StateObject private var viewModel: MangaReaderViewModel"))
         XCTAssertTrue(manga.contains("StateObject(wrappedValue: viewModel)"))
@@ -154,14 +154,14 @@ final class ReaderSessionEffectPlanTests: XCTestCase {
         XCTAssertTrue(novel.contains("StateObject(wrappedValue: viewModel)"))
         XCTAssertFalse(novel.contains("ReaderViewModel("))
 
-        for path in [
-            "Ito/Views/Reader/NovelPagingReaderView.swift",
-            "Ito/Views/Reader/VideoPlayerView.swift"
-        ] {
-            let source = try sourceFile(path)
-            XCTAssertFalse(source.contains("ReaderViewModel("), path)
-            XCTAssertFalse(source.contains("@StateObject"), path)
-        }
+        let video = try sourceFile("Ito/Views/Reader/VideoPlayerView.swift")
+        XCTAssertTrue(video.contains("@StateObject private var viewModel: VideoPlayerViewModel"))
+        XCTAssertTrue(video.contains("StateObject(wrappedValue: viewModel)"))
+        XCTAssertFalse(video.contains("ReaderViewModel("))
+
+        let paging = try sourceFile("Ito/Views/Reader/NovelPagingReaderView.swift")
+        XCTAssertFalse(paging.contains("ReaderViewModel("))
+        XCTAssertFalse(paging.contains("@StateObject"))
 
         let legacy = try sourceFile("Ito/ViewModels/ReaderViewModel.swift")
         XCTAssertTrue(legacy.contains("public final class ReaderViewModel"))

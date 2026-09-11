@@ -1,189 +1,46 @@
-import OSLog
 import AVKit
 import SwiftUI
 import ito_runner
 
 struct VideoPlayerView: View {
-    let runner: ItoRunner
-    let pluginId: String
-    let anime: Anime
-    let episode: Anime.Episode
-
-    @EnvironmentObject private var progressManager: ReadProgressManager
-    @EnvironmentObject private var trackerManager: TrackerManager
-    @EnvironmentObject private var discordRPCManager: DiscordRPCManager
-    @EnvironmentObject private var historyManager: HistoryManager
-    @EnvironmentObject private var pluginManager: PluginManager
-
-    private var mediaIdentity: MediaIdentity {
-        MediaIdentity(pluginId: pluginId, itemId: anime.key)
-    }
-
-    @State private var videos: [Anime.Video] = []
-    @State private var isLoaded = false
-    @State private var errorMessage: String?
-
-    @State private var selectedVideo: Anime.Video?
-    @State private var selectedAudioTrack: Anime.AudioTrack?
-    @State private var selectedSubtitle: Anime.Subtitle?
-
-    @State private var player: AVPlayer?
+    @StateObject private var viewModel: VideoPlayerViewModel
 
     @State private var showQualitySelector = false
     @State private var showAudioSelector = false
     @State private var showSubtitleSelector = false
 
-    @State private var showCustomControls = true
+    @Environment(\.dismiss) private var dismiss
 
-    // Custom Subtitle State
-    @State private var parsedSubtitles: [VTTCue] = []
-    @State private var currentSubtitleText: String?
-
-    @Environment(\.dismiss) var dismiss
+    init(viewModel: VideoPlayerViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if !isLoaded && errorMessage == nil {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .scaleEffect(1.5)
-                    Text("Extracting Video Streams...")
-                        .foregroundColor(.white)
-                }
-            } else if let error = errorMessage {
-                VStack(spacing: 24) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 60))
-                        .foregroundColor(.yellow)
-                    Text("Error Loading Video")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    Text(error)
-                        .foregroundColor(.gray)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
-                    Button("Close") {
-                        dismiss()
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.white.opacity(0.2))
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-                }
-            } else if let player = player, let video = selectedVideo {
-                VideoPlayer(player: player)
-                    .ignoresSafeArea()
-                    .overlay(
-                        VStack {
-                            Spacer()
-                            if let subText = currentSubtitleText {
-                                Text(subText)
-                                    .font(.title2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(Color.black.opacity(0.75))
-                                    .cornerRadius(8)
-                                    .padding(.bottom, 60)
-                            }
-                        }
-                    )
-                    .overlay(
-                        VStack {
-                            HStack {
-                                // We MUST keep our custom back button, because the native iOS 16/17 AVPlayer full-screen dismiss 
-                                // often fails to trigger the SwiftUI `@Environment(\.dismiss)` when not presented via a standard sheet.
-                                Button(action: {
-                                    player.pause()
-                                    dismiss()
-                                }) {
-                                    Image(systemName: "chevron.left.circle.fill")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.white)
-                                        .padding()
-                                        .background(Circle().fill(Color.black.opacity(0.01))) // increase tap area
-                                }
-
-                                Spacer()
-
-                                if let tracks = video.audioTracks, tracks.count > 1 {
-                                    Button(action: { showAudioSelector = true }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "speaker.wave.2")
-                                            Text(selectedAudioTrack?.language ?? "Audio")
-                                        }
-                                        .font(.caption)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.6))
-                                        .foregroundColor(.white)
-                                        .cornerRadius(6)
-                                    }
-                                }
-
-                                if let subs = video.subtitles, !subs.isEmpty {
-                                    Button(action: { showSubtitleSelector = true }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "captions.bubble")
-                                            Text(selectedSubtitle?.language ?? "Subtitles")
-                                        }
-                                        .font(.caption)
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Color.black.opacity(0.6))
-                                        .foregroundColor(selectedSubtitle != nil ? .blue : .white)
-                                        .cornerRadius(6)
-                                    }
-                                }
-
-                                if videos.count > 1 {
-                                    Button(action: {
-                                        AppLogger.ui.debug("🎬 [DEBUG] Quality selector tapped. videos count: \(videos.count)")
-                                        showQualitySelector = true
-                                    }) {
-                                        Text(video.quality)
-                                            .font(.caption)
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                            .background(Color.black.opacity(0.6))
-                                            .foregroundColor(.white)
-                                            .cornerRadius(6)
-                                    }
-                                }
-                            }
-                            .padding()
-                            // Keep it near the top but below the AVPlayer's native controls if possible,
-                            // or just aligned to top-right.
-                            Spacer()
-                        }
-                    )
-            } else {
-                Text("No playable streams found.")
-                    .foregroundColor(.white)
+            switch viewModel.loadPhase {
+            case .idle, .loading:
+                loadingView
+            case .failure(let error):
+                errorView(error)
+            case .content:
+                contentView
             }
         }
         .confirmationDialog("Select Quality", isPresented: $showQualitySelector) {
-            ForEach(Array(videos.enumerated()), id: \.offset) { _, vid in
-                Button(vid.quality) {
-                    AppLogger.ui.debug("🎬 [DEBUG] Selected new quality: \(vid.quality)")
-                    self.selectedVideo = vid
-                    self.setupPlayer(for: vid)
+            ForEach(Array(viewModel.videos.enumerated()), id: \.offset) { _, video in
+                Button(video.quality) {
+                    viewModel.selectVideo(video)
                 }
             }
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Select Audio Track", isPresented: $showAudioSelector) {
-            if let tracks = selectedVideo?.audioTracks {
+            if let tracks = viewModel.selectedVideo?.audioTracks {
                 ForEach(Array(tracks.enumerated()), id: \.offset) { _, track in
                     Button(track.language) {
-                        self.selectedAudioTrack = track
+                        viewModel.selectAudioTrack(track)
                     }
                 }
             }
@@ -191,240 +48,162 @@ struct VideoPlayerView: View {
         }
         .confirmationDialog("Select Subtitles", isPresented: $showSubtitleSelector) {
             Button("Off") {
-                self.selectedSubtitle = nil
-                self.parsedSubtitles = []
-                self.currentSubtitleText = nil
+                viewModel.selectSubtitle(nil)
             }
-            if let subs = selectedVideo?.subtitles {
-                ForEach(Array(subs.enumerated()), id: \.offset) { _, sub in
-                    let type = sub.isHardsub ? "(Hardsub)" : "(Softsub)"
-                    Button("\(sub.language) \(type)") {
-                        self.selectedSubtitle = sub
-                        Task { await loadSubtitleFile(sub) }
+            if let subtitles = viewModel.selectedVideo?.subtitles {
+                ForEach(Array(subtitles.enumerated()), id: \.offset) { _, subtitle in
+                    let type = subtitle.isHardsub ? "(Hardsub)" : "(Softsub)"
+                    Button("\(subtitle.language) \(type)") {
+                        viewModel.selectSubtitle(subtitle)
                     }
                 }
             }
             Button("Cancel", role: .cancel) {}
         }
         .task {
-            await loadVideoStreams()
+            viewModel.start()
         }
         .onAppear {
-            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
-            let url = anilistId.flatMap { "https://anilist.co/anime/\($0)" }
-            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
-            let subGroup = episode.lang?.uppercased() ?? "Original"
-
-            discordRPCManager.setActivity(
-                details: anime.title,
-                state: "Watching \(episode.title ?? "Episode \(episode.chapterNumber ?? 0)")",
-                activityType: 3,
-                detailsUrl: url,
-                largeImageText: "Watching from \(subGroup) at \(pluginName)",
-                imageUrl: anime.cover,
-                resetTimer: true
-            )
+            viewModel.appear()
         }
-        .onChange(of: episode.key) { _ in
-            let anilistId = trackerManager.trackerId(for: mediaIdentity, providerId: "anilist")
-            let url = anilistId.flatMap { "https://anilist.co/anime/\($0)" }
-            let pluginName = pluginManager.installedPlugins[pluginId]?.info.name ?? "Unknown Plugin"
-            let subGroup = episode.lang?.uppercased() ?? "Original"
-
-            discordRPCManager.setActivity(
-                details: anime.title,
-                state: "Watching \(episode.title ?? "Episode \(episode.chapterNumber ?? 0)")",
-                activityType: 3,
-                detailsUrl: url,
-                largeImageText: "Watching from \(subGroup) at \(pluginName)",
-                imageUrl: anime.cover,
-                resetTimer: false
-            )
+        .onChange(of: viewModel.episode.key) { _ in
+            viewModel.episodeDidChange()
         }
         .onDisappear {
-            discordRPCManager.clearActivity()
-            player?.pause()
+            viewModel.disappear()
         }
     }
 
-    private func loadVideoStreams() async {
-        guard !isLoaded else { return }
-
-        // Record history right away so it shows up even if it fails to load
-        let episodeTitleStr = episode.title ?? episode.key
-        historyManager.addAnime(
-            anime,
-            episodeKey: episode.key,
-            episodeTitle: episodeTitleStr,
-            pluginId: pluginId
-        )
-
-        do {
-            AppLogger.ui.debug("🎬 [DEBUG] Fetching video list for episode: \(episode.key)")
-            let fetchedVideos = try await runner.getVideoList(anime: anime, episode: episode)
-
-            await MainActor.run {
-                self.videos = fetchedVideos
-                if let first = fetchedVideos.first {
-                    AppLogger.ui.debug("🎬 [DEBUG] Selected video URL: \(first.url)")
-                    self.selectedVideo = first
-                    self.selectedAudioTrack = first.audioTracks?.first
-                    self.selectedSubtitle =
-                        first.subtitles?.first(where: { !$0.isHardsub }) ?? first.subtitles?.first
-
-                    self.setupPlayer(for: first)
-                } else {
-                    AppLogger.ui.debug("🎬 [DEBUG] Video list returned empty!")
-                }
-                self.isLoaded = true
-            }
-        } catch {
-            AppLogger.ui.error("🎬 [DEBUG] Error fetching video list: \(error)")
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-                self.isLoaded = true
-            }
+    private var loadingView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                .scaleEffect(1.5)
+            Text("Extracting Video Streams...")
+                .foregroundColor(.white)
         }
     }
 
-    private func setupPlayer(for video: Anime.Video) {
-        guard let url = URL(string: video.url) else {
-            AppLogger.ui.debug("🎬 [DEBUG] Invalid URL string: \(video.url)")
-            return
-        }
+    private func errorView(_ error: String) -> some View {
+        VStack(spacing: 24) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.yellow)
+            Text("Error Loading Video")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            Text(error)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
 
-        var options: [String: Any] = [:]
-
-        if let headers = video.headers, !headers.isEmpty {
-            AppLogger.ui.debug("🎬 [DEBUG] Injecting AVPlayer Headers from plugin: \(headers)")
-            options["AVURLAssetHTTPHeaderFieldsKey"] = headers
-
-            Task {
-                await diagnoseStreamBlocked(url: url, headers: headers)
+            Button("Close") {
+                close()
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .background(Color.white.opacity(0.2))
+            .foregroundColor(.white)
+            .cornerRadius(8)
         }
+    }
 
-        let asset = AVURLAsset(url: url, options: options)
-        let playerItem = AVPlayerItem(asset: asset)
-
-        if self.player == nil {
-            self.player = AVPlayer(playerItem: playerItem)
-
-            // Setup periodic time observer for custom subtitles
-            self.player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
-                Task { @MainActor in
-                    self.updateSubtitles(for: time.seconds)
-                }
-            }
+    @ViewBuilder
+    private var contentView: some View {
+        if let surface = viewModel.playbackSurface as? AVPlayerVideoPlaybackSurface,
+           let video = viewModel.selectedVideo {
+            VideoPlayer(player: surface.player)
+                .ignoresSafeArea()
+                .overlay(subtitleOverlay)
+                .overlay(controlsOverlay(video: video))
         } else {
-            self.player?.replaceCurrentItem(with: playerItem)
+            Text("No playable streams found.")
+                .foregroundColor(.white)
         }
+    }
 
-        self.player?.play()
-
-        // If we have selected a subtitle, load it
-        if let sub = self.selectedSubtitle {
-            Task {
-                await loadSubtitleFile(sub)
+    private var subtitleOverlay: some View {
+        VStack {
+            Spacer()
+            if let subtitleText = viewModel.currentSubtitleText {
+                Text(subtitleText)
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.75))
+                    .cornerRadius(8)
+                    .padding(.bottom, 60)
             }
         }
     }
 
-    /// Bypasses AVPlayer's black box to see exactly what the server is returning
-    private func diagnoseStreamBlocked(url: URL, headers: [String: String]) async {
-        AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] Running diagnostic fetch on: \(url.absoluteString)")
-        var request = URLRequest(url: url)
-
-        // Apply the exact same headers
-        for (key, value) in headers {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] HTTP Status Code: \(httpResponse.statusCode)")
-            }
-
-            if let responseString = String(data: data, encoding: .utf8) {
-                AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] First 500 chars of response payload:")
-                AppLogger.ui.debug("\(String(responseString.prefix(500)))")
-            } else {
-                AppLogger.ui.debug("🕵️‍♂️ [DEBUG-NET] Could not decode response payload as UTF-8 string. Byte count: \(data.count)")
-            }
-        } catch {
-            AppLogger.ui.error("🕵️‍♂️ [DEBUG-NET] Diagnostic fetch failed completely: \(error.localizedDescription)")
-        }
-    }
-
-    private func loadSubtitleFile(_ subtitle: Anime.Subtitle) async {
-        guard let url = URL(string: subtitle.url) else { return }
-        AppLogger.ui.debug("🎬 [DEBUG-SUB] Downloading VTT: \(url)")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            if let httpResponse = response as? HTTPURLResponse {
-                AppLogger.ui.debug("🎬 [DEBUG-SUB] HTTP Status for VTT: \(httpResponse.statusCode)")
-            }
-            if let vttString = String(data: data, encoding: .utf8) {
-                AppLogger.ui.debug("🎬 [DEBUG-SUB] VTT downloaded, first 200 chars: \(String(vttString.prefix(200)))")
-                let parsed = VTTParser.parse(vttString)
-                await MainActor.run {
-                    self.parsedSubtitles = parsed
-                    AppLogger.ui.debug("\("🎬 [DEBUG-SUB] Successfully parsed \(parsed.count)") subtitle blocks.")
-                    if let first = parsed.first {
-                        AppLogger.ui.debug("\("🎬 [DEBUG-SUB] First Subtitle Block: Start: \(first.start)"), End: \(first.end), Text: \(first.text)")
-                    }
+    private func controlsOverlay(video: Anime.Video) -> some View {
+        VStack {
+            HStack {
+                // The custom back button is required because native AVPlayer fullscreen dismissal
+                // does not reliably drive SwiftUI dismissal for this presentation route.
+                Button(action: close) {
+                    Image(systemName: "chevron.left.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(Circle().fill(Color.black.opacity(0.01)))
                 }
-            } else {
-                AppLogger.ui.error("🎬 [DEBUG-SUB] Failed to decode VTT data as UTF-8.")
-            }
-        } catch {
-            AppLogger.ui.error("🎬 [DEBUG-SUB] Failed to load VTT: \(error)")
-        }
-    }
 
-    @State private var hasTrackedProgress = false
+                Spacer()
 
-    private func updateSubtitles(for currentTime: Double) {
-        // Track Progress
-        if !hasTrackedProgress, let duration = player?.currentItem?.duration.seconds, duration > 0 {
-            if currentTime / duration >= 0.8 {
-                hasTrackedProgress = true
-
-                // Mark as watched locally immediately
-                Task {
-                    try await progressManager.markAsWatched(
-                        media: mediaIdentity,
-                        episodeId: episode.key,
-                        episodeNum: episode.episode
-                    )
-                    if let episodeFloat = episode.episode {
-                        await trackerManager.updateProgress(media: mediaIdentity, progress: Int(episodeFloat))
-                    } else {
-                        let titleOrFallback = episode.title ?? episode.key
-                        let words = titleOrFallback.components(separatedBy: .whitespacesAndNewlines)
-                        if let numberWord = words.first(where: { $0.rangeOfCharacter(from: .decimalDigits) != nil }) {
-                            let numbersOnly = numberWord.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
-                            if let episodeNum = Int(numbersOnly) {
-                                await trackerManager.updateProgress(media: mediaIdentity, progress: episodeNum)
-                            }
+                if let tracks = video.audioTracks, tracks.count > 1 {
+                    Button(action: { showAudioSelector = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "speaker.wave.2")
+                            Text(viewModel.selectedAudioTrack?.language ?? "Audio")
                         }
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.6))
+                        .foregroundColor(.white)
+                        .cornerRadius(6)
+                    }
+                }
+
+                if let subtitles = video.subtitles, !subtitles.isEmpty {
+                    Button(action: { showSubtitleSelector = true }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "captions.bubble")
+                            Text(viewModel.selectedSubtitle?.language ?? "Subtitles")
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.6))
+                        .foregroundColor(viewModel.selectedSubtitle != nil ? .blue : .white)
+                        .cornerRadius(6)
+                    }
+                }
+
+                if viewModel.videos.count > 1 {
+                    Button(action: { showQualitySelector = true }) {
+                        Text(video.quality)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(6)
                     }
                 }
             }
+            .padding()
+            Spacer()
         }
+    }
 
-        if let current = parsedSubtitles.first(where: { currentTime >= $0.start && currentTime <= $0.end }) {
-            if self.currentSubtitleText != current.text {
-                AppLogger.ui.debug("\("🎬 [DEBUG-SUB-TIME] MATCH @ \(currentTime)")s: '\(current.text)'")
-                self.currentSubtitleText = current.text
-            }
-        } else {
-            if self.currentSubtitleText != nil {
-                AppLogger.ui.debug("\("🎬 [DEBUG-SUB-TIME] CLEAR @ \(currentTime)")s")
-                self.currentSubtitleText = nil
-            }
-        }
+    private func close() {
+        viewModel.close()
+        dismiss()
     }
 }
