@@ -23,6 +23,15 @@
       },
       "versions": [
         {
+          "version": "1.0.0-nightly.20260913.58",
+          "buildVersion": "58",
+          "date": "2026-09-13T14:07:09Z",
+          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260913-58/Ito-1.0.0-nightly.20260913.58-unsigned.ipa",
+          "size": 10264510,
+          "localizedDescription": "Automated unsigned nightly from main at 02a33df. This build may be unstable.",
+          "minOSVersion": "15.4"
+        },
+        {
           "version": "1.0.0-nightly.20260912.57",
           "buildVersion": "57",
           "date": "2026-09-12T13:08:15Z",
@@ -138,22 +147,13 @@
           "size": 10058929,
           "localizedDescription": "Automated unsigned nightly from main at fb8e8e0. This build may be unstable.",
           "minOSVersion": "15.4"
-        },
-        {
-          "version": "1.0.0-nightly.20260829.43",
-          "buildVersion": "43",
-          "date": "2026-08-29T14:40:32Z",
-          "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260829-43/Ito-1.0.0-nightly.20260829.43-unsigned.ipa",
-          "size": 10058888,
-          "localizedDescription": "Automated unsigned nightly from main at fb8e8e0. This build may be unstable.",
-          "minOSVersion": "15.4"
         }
       ],
-      "version": "1.0.0-nightly.20260912.57",
-      "buildVersion": "57",
-      "date": "2026-09-12T13:08:15Z",
-      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260912-57/Ito-1.0.0-nightly.20260912.57-unsigned.ipa",
-      "size": 10264445,
+      "version": "1.0.0-nightly.20260913.58",
+      "buildVersion": "58",
+      "date": "2026-09-13T14:07:09Z",
+      "downloadURL": "https://github.com/itoapp/Ito/releases/download/nightly-20260913-58/Ito-1.0.0-nightly.20260913.58-unsigned.ipa",
+      "size": 10264510,
       "minOSVersion": "15.4",
       "versionDescription": "Automated unsigned nightly from main at 02a33df. This build may be unstable."
     }
